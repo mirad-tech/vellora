@@ -93,7 +93,7 @@ input {
   --kbd-color: #495057;
 
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr) 28px;
+  grid-template-rows: minmax(0, 1fr) 28px;
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
@@ -125,36 +125,8 @@ input {
 }
 
 /* ========================================================================= */
-/* Header / Toolbar */
+/* Native-menu-driven actions */
 /* ========================================================================= */
-
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-width: 0;
-  gap: 12px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
-  backdrop-filter: blur(12px);
-  z-index: 10;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.01);
-}
-
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-}
-
-.toolbar-separator {
-  width: 1px;
-  height: 18px;
-  background: var(--border);
-  margin: 0 4px;
-}
 
 /* Base actions */
 .primary-action,
@@ -213,32 +185,23 @@ input {
   color: var(--text);
 }
 
-.toolbar-right-actions {
+/* Floating find bar */
+.find-bar {
+  position: fixed;
+  right: 16px;
+  top: 12px;
+  z-index: 50;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow-overlay);
+  backdrop-filter: blur(12px);
 }
 
-.toolbar-right-actions .theme-action span {
-  display: none; /* Hide '深色/浅色' text on modern layout, keep just icon */
-}
-
-/* Status summary in header */
-.toolbar-status {
-  min-width: 0;
-  flex: 0 1 220px;
-  max-width: 220px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  opacity: 0.85;
-  pointer-events: none;
-}
-
-/* Search bar cluster */
 .search-cluster {
   display: grid;
   grid-template-columns: 14px 100px minmax(30px, max-content) 24px 24px;
@@ -297,6 +260,19 @@ input {
 .search-step:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+.find-close {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.find-close:hover {
+  background: var(--surface-strong);
+  color: var(--text);
 }
 
 /* ========================================================================= */
@@ -635,7 +611,7 @@ input {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - 76px);
+  min-height: calc(100vh - 28px);
   padding: 40px 20px;
 }
 
@@ -749,7 +725,7 @@ input {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - 76px);
+  min-height: calc(100vh - 28px);
   padding: 24px;
   text-align: center;
 }
@@ -1462,8 +1438,7 @@ input {
 
 /* 3. File Info & Link Confirmation Modals */
 .file-info-modal-card,
-.link-confirm-modal-card,
-.print-preview-modal-card {
+.link-confirm-modal-card {
   width: 100%;
   max-width: 440px;
   background: var(--surface);
@@ -1623,39 +1598,7 @@ input {
   background: color-mix(in srgb, var(--danger) 80%, black);
 }
 
-/* 5. Print Preview dialog style */
-.print-preview-body {
-  font-size: 13px;
-  color: var(--muted);
-  line-height: 1.4;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 18px;
-}
-
-.print-config-tip {
-  font-size: 11px;
-  color: var(--faint);
-  background: var(--surface-subtle);
-  padding: 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-}
-
-.print-preview-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.print-preview-actions button {
-  height: 32px;
-  padding: 0 14px;
-  font-size: 12px;
-}
-
-/* 6. Image Lightbox overlay styles */
+/* 5. Image Lightbox overlay styles */
 .lightbox-overlay {
   background: rgba(0, 0, 0, 0.85) !important;
 }
@@ -1705,7 +1648,7 @@ input {
     color: #000000 !important;
   }
 
-  .toolbar,
+  .find-bar,
   .outline-panel,
   .status-bar,
   .empty-state,
@@ -1759,26 +1702,13 @@ input {
 /* ========================================================================= */
 
 @media (max-width: 768px) {
-  .toolbar {
-    flex-wrap: wrap;
-    height: auto;
-    padding: 8px 12px;
-    gap: 8px;
-  }
-
-  .toolbar-status,
-  .icon-action span,
-  .primary-action span {
-    display: none;
-  }
-
-  .toolbar-left {
-    flex: 1 1 auto;
+  .find-bar {
+    left: 12px;
+    right: 12px;
   }
 
   .search-cluster {
-    order: 2;
-    flex: 1 0 100%;
+    flex: 1;
     grid-template-columns: 14px minmax(0, 1fr) minmax(30px, max-content) 24px 24px;
   }
 
@@ -1787,7 +1717,7 @@ input {
   }
 
   .app-shell {
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   .workspace,
@@ -1829,23 +1759,5 @@ input {
   .status-bar span:nth-child(2),
   .status-bar span:nth-child(3) {
     display: none;
-  }
-}
-
-@media (max-width: 1440px) {
-  .toolbar-status {
-    display: none !important;
-  }
-}
-
-@media (max-width: 1200px) {
-  .toolbar-left .icon-action {
-    width: 30px;
-    height: 30px;
-    padding: 0;
-  }
-
-  .toolbar-left .icon-action span {
-    display: none !important;
   }
 }

@@ -66,14 +66,36 @@ async function launchWithSelectedFile(fixture: EditFixture): Promise<ElectronApp
 }
 
 async function openFixture(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开 Markdown 文件' }).click();
+  await page.getByRole('button', { name: '打开文件' }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 
-async function enterSourceEditMode(page: Page): Promise<void> {
-  await page.getByTestId('source-edit-toggle').click();
+async function clickNativeMenuItem(
+  electronApp: ElectronApplication,
+  topLevelLabel: string,
+  itemLabel: string
+): Promise<void> {
+  await electronApp.evaluate(
+    ({ BrowserWindow, Menu }, labels) => {
+      const normalize = (value: string) => value.replaceAll('&', '');
+      const menu = Menu.getApplicationMenu();
+      const topLevel = menu?.items.find((item) => normalize(item.label) === labels.topLevelLabel);
+      const target = topLevel?.submenu?.items.find((item) => normalize(item.label) === labels.itemLabel);
+      if (!target) throw new Error(`Missing menu item: ${labels.topLevelLabel} -> ${labels.itemLabel}`);
+      (target.click as (...args: unknown[]) => void)(target, BrowserWindow.getFocusedWindow(), undefined);
+    },
+    { topLevelLabel, itemLabel }
+  );
+}
+
+async function enterSourceEditMode(electronApp: ElectronApplication, page: Page): Promise<void> {
+  await clickNativeMenuItem(electronApp, 'View', 'Source Edit');
   await expect(page.getByTestId('source-editor')).toBeVisible();
   await expect(page.getByTestId('editor-preview')).toBeVisible();
+}
+
+async function saveFromNativeMenu(electronApp: ElectronApplication): Promise<void> {
+  await clickNativeMenuItem(electronApp, 'File', 'Save');
 }
 
 async function closeAppDiscardingDrafts(electronApp: ElectronApplication): Promise<void> {
@@ -95,12 +117,10 @@ test('quick edits rendered text blocks and saves the same file', async () => {
 
   await page.locator('[data-edit-block-kind="heading"]').first().fill('更新标题');
   await page.locator('[data-edit-block-kind="paragraph"]').first().fill('更新正文');
-  await expect(page.getByTestId('save-document')).toBeEnabled();
 
-  await page.getByTestId('save-document').click();
+  await saveFromNativeMenu(electronApp);
 
-  await expect(page.getByTestId('save-document')).toBeDisabled();
-  await expect(await readFile(fixture.filePath, 'utf8')).toBe('# 更新标题\n\n更新正文');
+  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 更新标题\n\n更新正文');
 
   await closeAppDiscardingDrafts(electronApp);
 });
@@ -121,11 +141,9 @@ test('quick edit multiline paragraph does not leave stale lines when input chang
     editableElement.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
   });
 
-  await expect(page.getByTestId('save-document')).toBeEnabled();
-  await page.getByTestId('save-document').click();
+  await saveFromNativeMenu(electronApp);
 
-  await expect(page.getByTestId('save-document')).toBeDisabled();
-  await expect(await readFile(fixture.filePath, 'utf8')).toBe('# 原始\n\n第一行\n第二行\n第三行');
+  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 原始\n\n第一行\n第二行\n第三行');
 
   await closeAppDiscardingDrafts(electronApp);
 });
@@ -136,15 +154,13 @@ test('edits Markdown source with split preview and saves the same file', async (
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await enterSourceEditMode(page);
+  await enterSourceEditMode(electronApp, page);
 
   await page.getByTestId('source-editor').fill('# 更新\n\n- 一项');
-  await expect(page.getByTestId('save-document')).toBeEnabled();
   await expect(page.getByTestId('editor-preview').locator('h1')).toHaveText('更新');
 
-  await page.getByTestId('save-document').click();
-  await expect(page.getByTestId('save-document')).toBeDisabled();
-  await expect(await readFile(fixture.filePath, 'utf8')).toBe('# 更新\n\n- 一项');
+  await saveFromNativeMenu(electronApp);
+  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 更新\n\n- 一项');
 
   await closeAppDiscardingDrafts(electronApp);
 });
@@ -155,15 +171,14 @@ test('keeps the draft visible when save fails', async () => {
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await enterSourceEditMode(page);
+  await enterSourceEditMode(electronApp, page);
   await page.getByTestId('source-editor').fill('# 草稿');
   await rm(fixture.filePath);
 
-  await page.getByTestId('save-document').click();
+  await saveFromNativeMenu(electronApp);
 
   await expect(page.getByRole('alert')).toContainText('文件不存在或已被移动。');
   await expect(page.getByTestId('source-editor')).toHaveValue('# 草稿');
-  await expect(page.getByTestId('save-document')).toBeEnabled();
 
   await closeAppDiscardingDrafts(electronApp);
 });
@@ -174,7 +189,7 @@ test('asks before closing with unsaved changes and can cancel the close', async 
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await enterSourceEditMode(page);
+  await enterSourceEditMode(electronApp, page);
   await page.getByTestId('source-editor').fill('# 未保存');
 
   await electronApp.evaluate(({ BrowserWindow }) => {
@@ -207,7 +222,7 @@ test('opens the current file in the default editor from main process', async () 
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await page.getByTestId('open-default-editor').click();
+  await clickNativeMenuItem(electronApp, 'File', 'Open in Default Editor');
 
   await expect
     .poll(() =>

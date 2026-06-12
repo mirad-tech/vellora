@@ -67,8 +67,26 @@ async function setWindowSize(electronApp: ElectronApplication, width: number, he
   );
 }
 
+async function clickNativeMenuItem(
+  electronApp: ElectronApplication,
+  topLevelLabel: string,
+  itemLabel: string
+): Promise<void> {
+  await electronApp.evaluate(
+    ({ BrowserWindow, Menu }, labels) => {
+      const normalize = (value: string) => value.replaceAll('&', '');
+      const menu = Menu.getApplicationMenu();
+      const topLevel = menu?.items.find((item) => normalize(item.label) === labels.topLevelLabel);
+      const target = topLevel?.submenu?.items.find((item) => normalize(item.label) === labels.itemLabel);
+      if (!target) throw new Error(`Missing menu item: ${labels.topLevelLabel} -> ${labels.itemLabel}`);
+      (target.click as (...args: unknown[]) => void)(target, BrowserWindow.getFocusedWindow(), undefined);
+    },
+    { topLevelLabel, itemLabel }
+  );
+}
+
 async function openFixture(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开 Markdown 文件' }).click();
+  await page.getByRole('button', { name: '打开文件' }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 
@@ -78,19 +96,18 @@ test('desktop reading interface keeps sidebar closed until requested', async () 
   await setWindowSize(electronApp, 1366, 768);
   const page = await electronApp.firstWindow();
 
-  await expect(page.getByRole('button', { name: '打开文件夹' })).toHaveCount(1);
+  const topLevelMenu = await electronApp.evaluate(({ Menu }) =>
+    Menu.getApplicationMenu()?.items.map((item) => item.label.replaceAll('&', '')) ?? []
+  );
+  expect(topLevelMenu).toEqual(['File', 'Edit', 'View', 'Window']);
   await expect(page.locator('.app-logo-group')).toHaveCount(0);
   await expect(page.locator('.command-palette-card')).toBeHidden();
 
   await openFixture(page);
 
   await expect(page.locator('.app-name-label')).toHaveCount(0);
-  await expect(page.locator('[data-testid="top-toolbar"] .toolbar-left button').first()).toHaveAttribute(
-    'data-testid',
-    'sidebar-toggle'
-  );
   await expect(page.getByTestId('app-shell')).toBeVisible();
-  await expect(page.getByTestId('top-toolbar')).toBeVisible();
+  await expect(page.getByTestId('top-toolbar')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-panel')).toBeHidden();
   await expect(page.getByTestId('reader-main')).toBeVisible();
   await expect(page.getByTestId('status-bar')).toBeVisible();
@@ -101,29 +118,16 @@ test('desktop reading interface keeps sidebar closed until requested', async () 
   await expect(page.locator('.document-meta')).toHaveCount(0);
   await expect(page.getByTestId('read-mode-toggle')).toHaveCount(0);
   await expect(page.getByTestId('quick-edit-toggle')).toHaveCount(0);
-  await expect(page.getByTestId('source-edit-toggle')).toBeVisible();
 
-  const buttonsMissingTitles = await page
-    .locator('[data-testid="top-toolbar"] button')
-    .evaluateAll((buttons) =>
-      buttons
-        .map((button) => ({
-          label: button.getAttribute('aria-label') ?? button.textContent ?? '',
-          title: button.getAttribute('title') ?? ''
-        }))
-        .filter((button) => button.title.trim().length === 0)
-    );
-  expect(buttonsMissingTitles).toEqual([]);
-
-  await page.getByTestId('sidebar-toggle').click();
+  await clickNativeMenuItem(electronApp, 'View', 'Toggle Sidebar');
   await expect(page.getByTestId('sidebar-panel')).toBeVisible();
   await expect(page.getByTestId('sidebar-tab-outline')).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('sidebar-panel')).toContainText('项目记录');
   await expect(page.getByTestId('sidebar-panel')).toContainText('背景');
 
-  await page.getByTestId('theme-toggle').click();
+  await clickNativeMenuItem(electronApp, 'View', 'Toggle Theme');
   await expect(page.getByTestId('app-shell')).toHaveAttribute('data-theme', 'dark');
-  await page.getByTestId('theme-toggle').click();
+  await clickNativeMenuItem(electronApp, 'View', 'Toggle Theme');
   await expect(page.getByTestId('app-shell')).toHaveAttribute('data-theme', 'light');
 
   await electronApp.close();
@@ -136,9 +140,9 @@ test('sidebar can toggle without hiding the document', async () => {
 
   await openFixture(page);
   await expect(page.getByTestId('sidebar-panel')).toBeHidden();
-  await page.getByTestId('sidebar-toggle').click();
+  await clickNativeMenuItem(electronApp, 'View', 'Toggle Sidebar');
   await expect(page.getByTestId('sidebar-panel')).toBeVisible();
-  await page.getByTestId('sidebar-toggle').click();
+  await clickNativeMenuItem(electronApp, 'View', 'Toggle Sidebar');
 
   await expect(page.getByTestId('sidebar-panel')).toBeHidden();
   await expect(page.getByTestId('reader-main')).toBeVisible();

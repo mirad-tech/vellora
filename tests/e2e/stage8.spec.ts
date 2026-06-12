@@ -44,7 +44,7 @@ test('packaged Windows app starts securely and opens Markdown without dev server
   );
 
   const page = await electronApp.firstWindow();
-  await page.getByRole('button', { name: '打开 Markdown 文件' }).click();
+  await page.getByRole('button', { name: '打开文件' }).click();
   await expect(page.locator('.markdown-body h1')).toHaveText('打包验证');
 
   const boundary = await page.evaluate(async () => ({

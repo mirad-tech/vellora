@@ -29,7 +29,7 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
     consoleMessages.push(message.text());
   });
 
-  await page.getByRole('button', { name: '打开 Markdown 文件' }).waitFor();
+  await page.getByRole('button', { name: '打开文件' }).waitFor();
   await expect(page.getByRole('heading', { name: '未打开文件' })).toBeVisible();
 
   const boundary = await page.evaluate(async () => {

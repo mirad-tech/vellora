@@ -79,7 +79,7 @@ async function launchWithSelectedFile(filePath: string): Promise<ElectronApplica
 }
 
 async function openFixture(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开 Markdown 文件' }).click();
+  await page.getByRole('button', { name: '打开文件' }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 

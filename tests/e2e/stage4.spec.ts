@@ -76,13 +76,31 @@ async function setWindowSize(electronApp: ElectronApplication, width: number, he
   );
 }
 
+async function clickNativeMenuItem(
+  electronApp: ElectronApplication,
+  topLevelLabel: string,
+  itemLabel: string
+): Promise<void> {
+  await electronApp.evaluate(
+    ({ BrowserWindow, Menu }, labels) => {
+      const normalize = (value: string) => value.replaceAll('&', '');
+      const menu = Menu.getApplicationMenu();
+      const topLevel = menu?.items.find((item) => normalize(item.label) === labels.topLevelLabel);
+      const target = topLevel?.submenu?.items.find((item) => normalize(item.label) === labels.itemLabel);
+      if (!target) throw new Error(`Missing menu item: ${labels.topLevelLabel} -> ${labels.itemLabel}`);
+      (target.click as (...args: unknown[]) => void)(target, BrowserWindow.getFocusedWindow(), undefined);
+    },
+    { topLevelLabel, itemLabel }
+  );
+}
+
 async function openFixture(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开 Markdown 文件' }).click();
+  await page.getByRole('button', { name: '打开文件' }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 
-async function openOutline(page: Page): Promise<void> {
-  await page.getByTestId('sidebar-toggle').click();
+async function openOutline(electronApp: ElectronApplication, page: Page): Promise<void> {
+  await clickNativeMenuItem(electronApp, 'View', 'Toggle Sidebar');
   await page.getByTestId('sidebar-tab-outline').click();
   await expect(page.getByTestId('sidebar-panel')).toBeVisible();
 }
@@ -93,7 +111,7 @@ test('outline hierarchy is accurate and clicking a heading scrolls to it', async
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await openOutline(page);
+  await openOutline(electronApp, page);
 
   const levels = await page.getByTestId('outline-item').evaluateAll((items) =>
     items.map((item) => ({
@@ -132,8 +150,9 @@ test('document search highlights English and Chinese results with previous and n
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await openOutline(page);
+  await openOutline(electronApp, page);
 
+  await clickNativeMenuItem(electronApp, 'Edit', 'Find');
   await page.getByTestId('document-search').fill('alpha');
   await expect(page.getByTestId('search-status')).toContainText('1/');
   await expect(page.locator('mark.search-hit')).toHaveCount(75);
@@ -162,18 +181,19 @@ test('narrow window keeps search controls from covering the document', async () 
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
+  await clickNativeMenuItem(electronApp, 'Edit', 'Find');
   await page.getByTestId('document-search').fill('中文关键字');
 
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
-    searchBottom: document.querySelector('[data-testid="document-search"]')?.getBoundingClientRect().bottom,
+    findWidth: document.querySelector('[data-testid="find-bar"]')?.getBoundingClientRect().width,
     readerTop: document.querySelector('[data-testid="reader-main"]')?.getBoundingClientRect().top
   }));
 
   expect(layout.clientWidth).toBeLessThanOrEqual(540);
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
-  expect(layout.searchBottom ?? 0).toBeLessThanOrEqual(layout.readerTop ?? 0);
+  expect(layout.findWidth ?? 0).toBeLessThanOrEqual(layout.clientWidth);
   await expect(page.getByTestId('markdown-body')).toContainText('中文关键字');
   await expect(page.locator('mark.search-hit')).toHaveCount(2);
 

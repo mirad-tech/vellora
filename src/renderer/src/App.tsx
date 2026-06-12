@@ -20,8 +20,6 @@ import {
   FolderTree,
   ListTree,
   Moon,
-  PanelLeftClose,
-  PanelLeftOpen,
   Save,
   Search,
   SquarePen,
@@ -30,11 +28,9 @@ import {
   Info,
   History,
   Printer,
-  ExternalLink,
   AlertTriangle,
   X,
   Command,
-  Loader2
 } from 'lucide-react';
 
 import {
@@ -202,6 +198,8 @@ export function App() {
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [imageResolutions, setImageResolutions] = useState<ImageResolutionMap>({});
   const readerRef = useRef<HTMLElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const menuActionHandlerRef = useRef<(action: string) => void>(() => {});
   const quickEditPendingContentRef = useRef<string | null>(null);
   const quickEditSessionRef = useRef<QuickEditSession | null>(null);
 
@@ -210,11 +208,11 @@ export function App() {
   const [isRecentOpen, setIsRecentOpen] = useState(false);
   const [isFileInfoOpen, setIsFileInfoOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isFindOpen, setIsFindOpen] = useState(false);
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0);
   const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
   const [pendingExternalUrl, setPendingExternalUrl] = useState<string | null>(null);
-  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
   const [securityDiagnostics, setSecurityDiagnostics] = useState<SecurityDiagnostics | null>(null);
   const [sidebarTab, setSidebarTab] = useState<'workspace' | 'outline'>('workspace');
 
@@ -324,12 +322,6 @@ export function App() {
 
     await openMarkdownByPath(item.path);
   }
-
-  const statusText = useMemo(() => {
-    if (viewState.status !== 'ready') return '未打开文件';
-    const dirtyText = hasUnsavedChanges ? ' · 未保存' : '';
-    return `${viewState.document.name} · ${byteCountLabel(viewState.document.size)} · ${documentWordCount(draftContent)} 字${dirtyText}`;
-  }, [draftContent, hasUnsavedChanges, viewState]);
 
   const fileStatus = useMemo(() => {
     if (viewState.status !== 'ready') {
@@ -689,76 +681,116 @@ export function App() {
     setSecurityDiagnostics(result);
   }
 
-  // Keyboard shortcuts listener
+  function openCommandPalette(): void {
+    setCommandPaletteQuery('');
+    setCommandPaletteIndex(0);
+    setIsCommandPaletteOpen(true);
+  }
+
+  function openSettingsDrawer(): void {
+    void loadSecurityDiagnostics();
+    setIsSettingsOpen(true);
+  }
+
+  function openFindBar(): void {
+    setIsFindOpen(true);
+    window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+  }
+
+  async function closeCurrentDocument(): Promise<void> {
+    if (viewState.status !== 'ready') return;
+    if (await confirmBeforeReplacingDocument()) {
+      resetDocumentState();
+      setViewState({ status: 'empty' });
+    }
+  }
+
+  async function exportCurrentDocumentToPdf(): Promise<void> {
+    if (viewState.status !== 'ready') return;
+    commitActiveQuickEditBlock();
+    const result = await window.mdViewer.exportToPdf();
+    if (!result.ok && result.message !== '已取消导出。') {
+      setSaveState({ status: 'error', message: result.message ?? 'PDF 导出失败。' });
+    }
+  }
+
+  menuActionHandlerRef.current = (action) => {
+    switch (action) {
+      case 'open-file':
+        void openMarkdownFile();
+        break;
+      case 'open-folder':
+        void openWorkspaceFolder();
+        break;
+      case 'save-document':
+        void saveCurrentDocument();
+        break;
+      case 'export-pdf':
+        void exportCurrentDocumentToPdf();
+        break;
+      case 'open-default-editor':
+        void openCurrentInDefaultEditor();
+        break;
+      case 'close-document':
+        void closeCurrentDocument();
+        break;
+      case 'focus-search':
+        openFindBar();
+        break;
+      case 'open-command-palette':
+        openCommandPalette();
+        break;
+      case 'toggle-sidebar':
+        toggleSidebar();
+        break;
+      case 'toggle-source-edit':
+        if (viewState.status === 'ready') {
+          setEditorModeSafely(editorMode === 'source-edit' ? 'read' : 'source-edit');
+        }
+        break;
+      case 'toggle-theme':
+        setTheme((value) => (value === 'light' ? 'dark' : 'light'));
+        break;
+      case 'show-file-info':
+        if (viewState.status === 'ready') {
+          setIsFileInfoOpen(true);
+        }
+        break;
+      case 'open-settings':
+        openSettingsDrawer();
+        break;
+      case 'show-recent':
+        setIsRecentOpen(true);
+        break;
+      default:
+        break;
+    }
+  };
+
+  useEffect(() => {
+    return window.mdViewer.onMenuAction((action) => {
+      menuActionHandlerRef.current(action);
+    });
+  }, []);
+
+  // Escape closes transient UI. Command shortcuts are handled by the native menu.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Esc closes all modals
-      if (e.key === 'Escape') {
-        setLightboxImageUrl(null);
-        setPendingExternalUrl(null);
-        setIsSettingsOpen(false);
-        setIsRecentOpen(false);
-        setIsFileInfoOpen(false);
-        setIsCommandPaletteOpen(false);
-        setIsPrintPreviewOpen(false);
-        return;
-      }
-
-      const isCmd = e.ctrlKey || e.metaKey;
-      if (!isCmd) return;
-
-      switch (e.key.toLowerCase()) {
-        case 'k':
-          e.preventDefault();
-          setCommandPaletteQuery('');
-          setCommandPaletteIndex(0);
-          setIsCommandPaletteOpen((prev) => !prev);
-          break;
-        case 's':
-          e.preventDefault();
-          if (viewState.status === 'ready' && hasUnsavedChanges && saveState.status !== 'saving') {
-            void saveCurrentDocument();
-          }
-          break;
-        case 'e':
-          e.preventDefault();
-          if (viewState.status === 'ready') {
-            setEditorModeSafely(editorMode === 'source-edit' ? 'read' : 'source-edit');
-          }
-          break;
-        case 'o':
-          e.preventDefault();
-          if (e.shiftKey) {
-            void openWorkspaceFolder();
-          } else {
-            void openMarkdownFile();
-          }
-          break;
-        case 'p':
-          e.preventDefault();
-          if (viewState.status === 'ready') {
-            setIsPrintPreviewOpen(true);
-          }
-          break;
-        case 'i':
-          e.preventDefault();
-          if (viewState.status === 'ready') {
-            setIsFileInfoOpen(true);
-          }
-          break;
-        case ',':
-          e.preventDefault();
-          void loadSecurityDiagnostics();
-          setIsSettingsOpen(true);
-          break;
-        default:
-          break;
-      }
+      if (e.key !== 'Escape') return;
+      setLightboxImageUrl(null);
+      setPendingExternalUrl(null);
+      setIsSettingsOpen(false);
+      setIsRecentOpen(false);
+      setIsFileInfoOpen(false);
+      setIsCommandPaletteOpen(false);
+      setIsFindOpen(false);
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewState, hasUnsavedChanges, saveState, editorMode, draftContent, editableBlockById]);
+  }, []);
 
   // Command palette options list
   const commandList = useMemo(() => {
@@ -811,21 +843,18 @@ export function App() {
       },
       {
         id: 'print_document',
-        name: '打印与导出 PDF 预览',
+        name: '导出 PDF',
         icon: <Printer size={16} />,
-        shortcut: 'Ctrl+P',
+        shortcut: 'Ctrl+Shift+P',
         disabled: !isDocReady,
-        action: () => setIsPrintPreviewOpen(true)
+        action: () => void exportCurrentDocumentToPdf()
       },
       {
         id: 'security_audit',
         name: '系统安全诊断与设置',
         icon: <Settings size={16} />,
         shortcut: 'Ctrl+,',
-        action: () => {
-          void loadSecurityDiagnostics();
-          setIsSettingsOpen(true);
-        }
+        action: openSettingsDrawer
       },
       {
         id: 'recent_history',
@@ -915,198 +944,6 @@ export function App() {
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
-      {/* 顶部工具栏 */}
-      <header className="toolbar" data-testid="top-toolbar">
-        <div className="toolbar-left">
-          <button
-            aria-pressed={sidebarOpen}
-            aria-label={sidebarOpen ? '收起侧栏' : '显示侧栏'}
-            className="icon-action"
-            data-testid="sidebar-toggle"
-            title={sidebarOpen ? '收起侧栏' : '显示侧栏'}
-            type="button"
-            onClick={toggleSidebar}
-          >
-            {sidebarOpen ? (
-              <PanelLeftClose aria-hidden="true" size={14} />
-            ) : (
-              <PanelLeftOpen aria-hidden="true" size={14} />
-            )}
-            <span>{sidebarOpen ? '收起侧栏' : '显示侧栏'}</span>
-          </button>
-
-          <button className="primary-action" title="打开 Markdown 文件" type="button" onClick={openMarkdownFile}>
-            <FolderOpen aria-hidden="true" size={14} />
-            <span>打开 Markdown 文件</span>
-          </button>
-
-          <button
-            aria-label="打开文件夹"
-            className="icon-action"
-            title="打开文件夹"
-            type="button"
-            onClick={openWorkspaceFolder}
-          >
-            <FolderTree aria-hidden="true" size={14} />
-            <span>打开文件夹</span>
-          </button>
-
-          {viewState.status === 'ready' && (
-            <>
-              <div className="toolbar-separator" />
-              <button
-                aria-pressed={editorMode === 'source-edit'}
-                aria-label={editorMode === 'source-edit' ? '返回阅读' : '源码编辑'}
-                className="icon-action"
-                data-testid="source-edit-toggle"
-                title={editorMode === 'source-edit' ? '返回阅读' : '源码编辑'}
-                type="button"
-                onClick={() => setEditorModeSafely(editorMode === 'source-edit' ? 'read' : 'source-edit')}
-              >
-                <SquarePen aria-hidden="true" size={14} />
-                <span>{editorMode === 'source-edit' ? '阅读' : '源码'}</span>
-              </button>
-              <button
-                className="icon-action"
-                aria-label={saveState.status === 'saving' ? '保存中' : '保存'}
-                data-testid="save-document"
-                disabled={!hasUnsavedChanges || saveState.status === 'saving'}
-                title={saveState.status === 'saving' ? '保存中' : '保存'}
-                type="button"
-                onClick={saveCurrentDocument}
-              >
-                {saveState.status === 'saving' ? <Loader2 className="animate-spin" size={14} /> : <Save aria-hidden="true" size={14} />}
-                <span>{saveState.status === 'saving' ? '保存中' : '保存'}</span>
-              </button>
-              <button
-                className="icon-action"
-                aria-label="默认编辑器"
-                data-testid="open-default-editor"
-                title="默认编辑器"
-                type="button"
-                onClick={openCurrentInDefaultEditor}
-              >
-                <ExternalLink aria-hidden="true" size={14} />
-                <span>默认编辑器</span>
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* 顶部中央文件名静默状态展示 */}
-        <span className="toolbar-status">{statusText}</span>
-
-        {/* 搜索 cluster */}
-        <div className="search-cluster" role="search">
-          <Search aria-hidden="true" size={13} />
-          <input
-            aria-label="搜索当前文档"
-            data-testid="document-search"
-            placeholder="搜索"
-            type="search"
-            value={searchQuery}
-            onChange={(event) => {
-              setSearchQuery(event.target.value);
-              setActiveSearchIndex(0);
-            }}
-          />
-          <span className="search-status" data-testid="search-status">
-            {searchStatus}
-          </span>
-          <button
-            aria-label="上一个结果"
-            className="search-step"
-            data-testid="search-previous"
-            disabled={searchResult.count === 0}
-            title="上一个结果"
-            type="button"
-            onClick={() => moveSearchResult(-1)}
-          >
-            <ChevronUp aria-hidden="true" size={13} />
-          </button>
-          <button
-            aria-label="下一个结果"
-            className="search-step"
-            data-testid="search-next"
-            disabled={searchResult.count === 0}
-            title="下一个结果"
-            type="button"
-            onClick={() => moveSearchResult(1)}
-          >
-            <ChevronDown aria-hidden="true" size={13} />
-          </button>
-        </div>
-
-        {/* 高级工具按钮 */}
-        <div className="toolbar-right-actions">
-          {viewState.status === 'ready' && (
-            <>
-              <button
-                className="icon-action-flat"
-                title="打印与导出 PDF (Ctrl+P)"
-                type="button"
-                onClick={() => setIsPrintPreviewOpen(true)}
-              >
-                <Printer size={15} />
-              </button>
-              <button
-                className="icon-action-flat"
-                title="文件详情元信息 (Ctrl+I)"
-                type="button"
-                onClick={() => setIsFileInfoOpen(true)}
-              >
-                <Info size={15} />
-              </button>
-            </>
-          )}
-          <button
-            className="icon-action-flat"
-            title="最近打开 (History)"
-            aria-label="最近打开"
-            type="button"
-            onClick={() => setIsRecentOpen(true)}
-          >
-            <History size={15} />
-          </button>
-          <button
-            className="icon-action-flat"
-            title="快捷命令面板 (Ctrl+K)"
-            aria-label="快捷命令面板"
-            type="button"
-            onClick={() => {
-              setCommandPaletteQuery('');
-              setCommandPaletteIndex(0);
-              setIsCommandPaletteOpen(true);
-            }}
-          >
-            <Command size={15} />
-          </button>
-          <button
-            className="icon-action-flat"
-            title="设置与系统安全诊断 (Ctrl+,)"
-            aria-label="设置与系统安全诊断"
-            type="button"
-            onClick={() => {
-              void loadSecurityDiagnostics();
-              setIsSettingsOpen(true);
-            }}
-          >
-            <Settings size={15} />
-          </button>
-          <button
-            className="icon-action-flat theme-action"
-            data-testid="theme-toggle"
-            title={theme === 'light' ? '切换到深色' : '切换到浅色'}
-            aria-label={theme === 'light' ? '切换到深色' : '切换到浅色'}
-            type="button"
-            onClick={() => setTheme((value) => (value === 'light' ? 'dark' : 'light'))}
-          >
-            {theme === 'light' ? <Moon aria-hidden="true" size={15} /> : <Sun aria-hidden="true" size={15} />}
-            <span>{theme === 'light' ? '深色' : '浅色'}</span>
-          </button>
-        </div>
-      </header>
-
       {/* 工作区和内容区域 */}
       <div className={`workspace ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
         {/* 侧边栏 */}
@@ -1342,6 +1179,60 @@ export function App() {
           )}
         </section>
       </div>
+
+      {isFindOpen && (
+        <div className="find-bar" data-testid="find-bar">
+          <div className="search-cluster" role="search">
+            <Search aria-hidden="true" size={13} />
+            <input
+              ref={searchInputRef}
+              aria-label="搜索当前文档"
+              data-testid="document-search"
+              placeholder="搜索"
+              type="search"
+              value={searchQuery}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setActiveSearchIndex(0);
+              }}
+            />
+            <span className="search-status" data-testid="search-status">
+              {searchStatus}
+            </span>
+            <button
+              aria-label="上一个结果"
+              className="search-step"
+              data-testid="search-previous"
+              disabled={searchResult.count === 0}
+              title="上一个结果"
+              type="button"
+              onClick={() => moveSearchResult(-1)}
+            >
+              <ChevronUp aria-hidden="true" size={13} />
+            </button>
+            <button
+              aria-label="下一个结果"
+              className="search-step"
+              data-testid="search-next"
+              disabled={searchResult.count === 0}
+              title="下一个结果"
+              type="button"
+              onClick={() => moveSearchResult(1)}
+            >
+              <ChevronDown aria-hidden="true" size={13} />
+            </button>
+          </div>
+          <button
+            aria-label="关闭搜索"
+            className="find-close"
+            title="关闭搜索"
+            type="button"
+            onClick={() => setIsFindOpen(false)}
+          >
+            <X aria-hidden="true" size={13} />
+          </button>
+        </div>
+      )}
 
       {/* 底部只读状态栏 */}
       <footer className="status-bar" data-testid="status-bar">
@@ -1630,43 +1521,6 @@ export function App() {
         </div>
       )}
 
-      {/* 7. 打印与 PDF 预览弹层 (Print Preview Modal) */}
-      {isPrintPreviewOpen && viewState.status === 'ready' && (
-        <div className="modal-overlay" onClick={() => setIsPrintPreviewOpen(false)}>
-          <div className="print-preview-modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title-group">
-                <Printer size={16} />
-                <h2>打印与导出 PDF 预览</h2>
-              </div>
-              <button className="modal-close-btn" type="button" onClick={() => setIsPrintPreviewOpen(false)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="print-preview-body">
-              <p>系统已配置标准打印排版。点击下方按钮后，将唤出系统内置打印预览，您可以直接打印文件或存为 PDF 格式电子书。</p>
-              <div className="print-config-tip">
-                <span>提示：打印范围仅包含文档排版区 (页眉/状态栏/左侧栏会自动隐藏)</span>
-              </div>
-            </div>
-            <div className="print-preview-actions">
-              <button className="secondary-flat-btn" type="button" onClick={() => setIsPrintPreviewOpen(false)}>
-                取消
-              </button>
-              <button
-                className="primary-accent-btn"
-                type="button"
-                onClick={() => {
-                  setIsPrintPreviewOpen(false);
-                  window.print();
-                }}
-              >
-                开始打印/导出
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </main>
   );
 }

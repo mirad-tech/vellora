@@ -70,8 +70,27 @@ async function launchApp(fixture: WorkspaceFixture, fileLimit?: number): Promise
   return electronApp;
 }
 
-async function openWorkspace(page: Page): Promise<void> {
-  await page.getByTestId('top-toolbar').getByRole('button', { name: '打开文件夹' }).click();
+async function clickNativeMenuItem(
+  electronApp: ElectronApplication,
+  topLevelLabel: string,
+  itemLabel: string
+): Promise<void> {
+  await electronApp.evaluate(
+    ({ BrowserWindow, Menu }, labels) => {
+      const normalize = (value: string) => value.replaceAll('&', '');
+      const menu = Menu.getApplicationMenu();
+      const topLevel = menu?.items.find((item) => normalize(item.label) === labels.topLevelLabel);
+      const target = topLevel?.submenu?.items.find((item) => normalize(item.label) === labels.itemLabel);
+      if (!target) throw new Error(`Missing menu item: ${labels.topLevelLabel} -> ${labels.itemLabel}`);
+      (target.click as (...args: unknown[]) => void)(target, BrowserWindow.getFocusedWindow(), undefined);
+    },
+    { topLevelLabel, itemLabel }
+  );
+}
+
+async function openWorkspace(electronApp: ElectronApplication, page: Page): Promise<void> {
+  await page.getByRole('button', { name: '打开文件' }).waitFor();
+  await clickNativeMenuItem(electronApp, 'File', 'Open Folder');
   await expect(page.getByTestId('sidebar-panel')).toBeVisible();
   await expect(page.getByTestId('sidebar-tab-workspace')).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('workspace-panel')).toBeVisible();
@@ -82,7 +101,7 @@ test('opens a folder, browses nested Markdown files, filters the tree, and switc
   const electronApp = await launchApp(fixture);
   const page = await electronApp.firstWindow();
 
-  await openWorkspace(page);
+  await openWorkspace(electronApp, page);
 
   await expect(page.getByTestId('workspace-file').filter({ hasText: 'README.md' })).toBeVisible();
   await expect(page.getByTestId('workspace-file').filter({ hasText: 'API.markdown' })).toBeVisible();
@@ -103,7 +122,7 @@ test('keeps recent files and folders after restart and opens them safely', async
   let electronApp = await launchApp(fixture);
   let page = await electronApp.firstWindow();
 
-  await openWorkspace(page);
+  await openWorkspace(electronApp, page);
   await page.getByTestId('workspace-file').filter({ hasText: 'README.md' }).click();
   await expect(page.locator('.markdown-body h1')).toHaveText('README');
   await electronApp.close();
@@ -124,7 +143,7 @@ test('shows a recoverable error when a workspace file disappears', async () => {
   const electronApp = await launchApp(fixture);
   const page = await electronApp.firstWindow();
 
-  await openWorkspace(page);
+  await openWorkspace(electronApp, page);
   await rm(fixture.deletedPath);
   await page.getByTestId('workspace-file').filter({ hasText: '待删除.md' }).click();
 
@@ -140,7 +159,7 @@ test('shows a workspace limit state for large folders', async () => {
   const electronApp = await launchApp(fixture, 2);
   const page = await electronApp.firstWindow();
 
-  await openWorkspace(page);
+  await openWorkspace(electronApp, page);
 
   await expect(page.getByTestId('workspace-limit')).toContainText('2');
   await expect(page.getByTestId('workspace-file')).toHaveCount(2);
