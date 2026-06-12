@@ -12,7 +12,6 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "dist": "npm run build && electron-builder",
-    "dist:win:portable": "npm run build && electron-builder --win portable",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src tests/stage8",
@@ -47,11 +46,34 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        "portable"
+        "nsis"
       ]
     },
-    "portable": {
-      "artifactName": "Markdown-viewer-${version}-portable.${ext}"
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown File",
+        "role": "Editor"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown File",
+        "role": "Editor"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "multiLanguageInstaller": true,
+      "displayLanguageSelector": true,
+      "installerLanguages": [
+        "en_US",
+        "zh_CN"
+      ],
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "include": "build/installer.nsh"
     }
   },
   "dependencies": {

@@ -18,13 +18,23 @@ async function readPackageJson() {
       directories?: { output?: string };
       files?: string[];
       win?: { icon?: string; target?: Array<string | { target?: string }> };
-      portable?: { artifactName?: string };
+      fileAssociations?: Array<{ ext?: string; name?: string; role?: string }>;
+      nsis?: {
+        oneClick?: boolean;
+        allowToChangeInstallationDirectory?: boolean;
+        multiLanguageInstaller?: boolean;
+        displayLanguageSelector?: boolean;
+        createDesktopShortcut?: boolean;
+        createStartMenuShortcut?: boolean;
+        runAfterFinish?: boolean;
+        include?: string;
+      };
     };
   };
 }
 
 describe('stage 8 packaging configuration', () => {
-  test('defines Windows portable packaging metadata and scripts', async () => {
+  test('defines Windows NSIS packaging metadata and scripts', async () => {
     const pkg = await readPackageJson();
 
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
@@ -32,23 +42,44 @@ describe('stage 8 packaging configuration', () => {
     expect(pkg.devDependencies).toHaveProperty('electron-builder');
     expect(pkg.scripts).toMatchObject({
       dist: 'npm run build && electron-builder',
-      'dist:win:portable': 'npm run build && electron-builder --win portable',
       'test:stage8': 'vitest run tests/stage8/packaging.test.ts',
       'test:e2e:stage8': 'playwright test tests/e2e/stage8.spec.ts'
     });
+    expect(pkg.scripts).not.toHaveProperty('dist:win:portable');
     expect(pkg.build).toMatchObject({
       appId: 'app.markdown-viewer.desktop',
       productName: 'Markdown viewer',
       directories: {
         output: 'release'
-      },
-      portable: {
-        artifactName: 'Markdown-viewer-${version}-portable.${ext}'
       }
     });
     expect(pkg.build?.files).toEqual(expect.arrayContaining(['out/**', 'package.json']));
     expect(pkg.build?.win?.icon).toBe('build/icon.ico');
-    expect(pkg.build?.win?.target).toEqual(['portable']);
+    expect(pkg.build?.win?.target).toEqual(['nsis']);
+    expect(pkg.build?.fileAssociations).toEqual([
+      { ext: 'md', name: 'Markdown File', role: 'Editor' },
+      { ext: 'markdown', name: 'Markdown File', role: 'Editor' }
+    ]);
+    expect(pkg.build?.nsis).toMatchObject({
+      oneClick: false,
+      allowToChangeInstallationDirectory: true,
+      multiLanguageInstaller: true,
+      displayLanguageSelector: true,
+      createDesktopShortcut: true,
+      createStartMenuShortcut: true,
+      runAfterFinish: true,
+      include: 'build/installer.nsh'
+    });
+  });
+
+  test('includes a custom NSIS page for optional Markdown file association', async () => {
+    const installerScript = await readFile(join(root, 'build', 'installer.nsh'), 'utf8');
+
+    expect(installerScript).toContain('customPageAfterChangeDir');
+    expect(installerScript).toContain('MarkdownAssociationPageCreate');
+    expect(installerScript).toContain('RegisterMarkdownAssociation');
+    expect(installerScript).toContain('APP_UNASSOCIATE "md" "Markdown File"');
+    expect(installerScript).toContain('APP_UNASSOCIATE "markdown" "Markdown File"');
   });
 
   test('includes an app icon and concise user guide', async () => {
@@ -60,6 +91,9 @@ describe('stage 8 packaging configuration', () => {
     expect(guide).toContain('Markdown viewer');
     expect(guide).toContain('打开 Markdown 文件');
     expect(guide).toContain('打开文件夹');
+    expect(guide).toContain('NSIS 安装包');
+    expect(guide).toContain('可选择安装路径');
+    expect(guide).toContain('关联 .md');
     expect(guide).toContain('不会删除用户文档');
   });
 });
