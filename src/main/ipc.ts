@@ -1,11 +1,13 @@
-import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 
 import { openDefaultEditor, saveMarkdownFile } from './documentWrite';
 import { isMarkdownPath, readMarkdownFile } from './fileAccess';
 import { resolveMarkdownImage } from './imageAccess';
+import { exportWindowToPdf } from './pdfExport';
 import { openMarkdownLink } from './linkAccess';
 import {
   MARKDOWN_DIALOG_OPTIONS,
@@ -376,6 +378,15 @@ export function registerIpcHandlers(window: BrowserWindow): void {
       };
     }
     return openDefaultEditor(filePath, (pathToOpen) => shell.openPath(pathToOpen));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.EXPORT_TO_PDF, async () => {
+    const targetWindow = BrowserWindow.getFocusedWindow() ?? window;
+    return exportWindowToPdf(targetWindow, {
+      showSaveDialog: (dialogWindow, options) =>
+        dialog.showSaveDialog(dialogWindow as BrowserWindow, options),
+      writeFile
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.SET_UNSAVED_CHANGES, (_event, value: unknown) => {

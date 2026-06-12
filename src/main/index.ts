@@ -1,10 +1,11 @@
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, Menu, session } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { registerIpcHandlers } from './ipc';
 import { findMarkdownPathInArgs } from './launchArguments';
+import { installNativeApplicationMenu } from './nativeMenu';
 import { getPreloadPath, getRendererIndexPath } from './paths';
 import { createWebPreferences } from './security';
 import { IPC_CHANNELS } from '../shared/ipcChannels';
@@ -62,6 +63,7 @@ async function createMainWindow(): Promise<void> {
   });
 
   registerIpcHandlers(mainWindow);
+  installNativeApplicationMenu(mainWindow, Menu);
   configureAppSecurity(mainWindow);
 
   mainWindow.webContents.once('did-finish-load', () => {
