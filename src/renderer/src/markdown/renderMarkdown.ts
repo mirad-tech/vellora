@@ -1,4 +1,4 @@
-import DOMPurify from 'dompurify';
+import DOMPurify, { type ElementHook, type UponSanitizeAttributeHook } from 'dompurify';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import css from 'highlight.js/lib/languages/css';
@@ -88,6 +88,7 @@ const ALLOWED_ATTR = [
   'colspan',
   'data-edit-block-id',
   'data-edit-block-kind',
+  'data-edit-origin-token',
   'data-heading-id',
   'data-local-image-token',
   'data-local-src',
@@ -98,6 +99,7 @@ const ALLOWED_ATTR = [
 ];
 
 type MarkdownRenderEnvironment = {
+  editableBlockToken?: string;
   localImageToken?: string;
 };
 
@@ -169,6 +171,7 @@ const defaultParser = createMarkdownParser();
 
 const EDITABLE_BLOCK_ID_ATTR = 'data-edit-block-id';
 const EDITABLE_BLOCK_KIND_ATTR = 'data-edit-block-kind';
+const EDITABLE_BLOCK_TOKEN_ATTR = 'data-edit-origin-token';
 const MAX_EDITABLE_BLOCKS = 500;
 
 function slugifyHeading(text: string): string {
@@ -229,9 +232,10 @@ function tokenLineRange(token: Token): [number, number] | null {
   return [startLine, endLine];
 }
 
-function setEditableBlockAttrs(token: Token, block: EditableMarkdownBlock): void {
+function setEditableBlockAttrs(token: Token, block: EditableMarkdownBlock, editableBlockToken: string): void {
   token.attrSet(EDITABLE_BLOCK_ID_ATTR, block.id);
   token.attrSet(EDITABLE_BLOCK_KIND_ATTR, block.kind);
+  token.attrSet(EDITABLE_BLOCK_TOKEN_ATTR, editableBlockToken);
 }
 
 function nextEditableBlockId(blocks: EditableMarkdownBlock[]): string {
@@ -266,7 +270,11 @@ function isPlainListItemLine(line: string): boolean {
   return /^\s*(?:[-+*]|\d+[.)])\s+\S/.test(line) && !/^\s*(?:[-+*]|\d+[.)])\s+\[[ xX]\]\s+/.test(line);
 }
 
-function applyEditableBlockAttrs(tokens: Token[], content: string): EditableMarkdownBlock[] {
+function applyEditableBlockAttrs(
+  tokens: Token[],
+  content: string,
+  editableBlockToken: string
+): EditableMarkdownBlock[] {
   const blocks: EditableMarkdownBlock[] = [];
   const lines = content.split(/\r?\n/);
   let listItemDepth = 0;
@@ -295,7 +303,7 @@ function applyEditableBlockAttrs(tokens: Token[], content: string): EditableMark
           text: inlineToken.content.trim()
         };
         blocks.push(block);
-        setEditableBlockAttrs(token, block);
+        setEditableBlockAttrs(token, block, editableBlockToken);
       }
       listItemDepth += 1;
       continue;
@@ -320,7 +328,7 @@ function applyEditableBlockAttrs(tokens: Token[], content: string): EditableMark
           level
         };
         blocks.push(block);
-        setEditableBlockAttrs(token, block);
+        setEditableBlockAttrs(token, block, editableBlockToken);
       }
       continue;
     }
@@ -337,7 +345,7 @@ function applyEditableBlockAttrs(tokens: Token[], content: string): EditableMark
           text: inlineToken.content.trim()
         };
         blocks.push(block);
-        setEditableBlockAttrs(token, block);
+        setEditableBlockAttrs(token, block, editableBlockToken);
       }
     }
   }
@@ -350,17 +358,19 @@ function createLocalImageToken(): string {
 }
 
 function renderWithOutline(content: string, parser: MarkdownIt): ReadyMarkdownRenderResult {
+  const editableBlockToken = createLocalImageToken();
   const env: MarkdownRenderEnvironment = {
+    editableBlockToken,
     localImageToken: createLocalImageToken()
   };
   const tokens = parser.parse(content, env);
   const outline = applyHeadingIds(tokens);
-  const editableBlocks = applyEditableBlockAttrs(tokens, content);
+  const editableBlocks = applyEditableBlockAttrs(tokens, content, editableBlockToken);
   const unsafeHtml = parser.renderer.render(tokens, parser.options, env);
 
   return {
     status: 'ready',
-    html: sanitizeHtml(unsafeHtml, env.localImageToken),
+    html: sanitizeHtml(unsafeHtml, env.localImageToken, editableBlockToken),
     outline,
     editableBlocks
   };
@@ -437,30 +447,58 @@ function removeUntrustedImages(html: string, localImageToken?: string): string {
   return template.innerHTML;
 }
 
-function sanitizeHtml(html: string, localImageToken?: string): string {
-  const sanitized = DOMPurify.sanitize(html, {
-    ALLOWED_TAGS,
-    ALLOWED_ATTR,
-    FORBID_TAGS: [
-      'base',
-      'button',
-      'embed',
-      'form',
-      'iframe',
-      'input',
-      'link',
-      'math',
-      'meta',
-      'object',
-      'script',
-      'select',
-      'style',
-      'svg',
-      'textarea'
-    ]
-  });
+function sanitizeHtml(html: string, localImageToken?: string, editableBlockToken?: string): string {
+  const editableAttrs = new Set([EDITABLE_BLOCK_ID_ATTR, EDITABLE_BLOCK_KIND_ATTR, EDITABLE_BLOCK_TOKEN_ATTR]);
+  const keepTrustedEditableAttr: UponSanitizeAttributeHook = (node, hookEvent) => {
+    if (!editableAttrs.has(hookEvent.attrName)) return;
 
-  return removeUntrustedImages(sanitized, localImageToken);
+    const isTrustedEditableBlock =
+      editableBlockToken &&
+      node.getAttribute(EDITABLE_BLOCK_TOKEN_ATTR) === editableBlockToken &&
+      node.hasAttribute(EDITABLE_BLOCK_ID_ATTR) &&
+      node.hasAttribute(EDITABLE_BLOCK_KIND_ATTR);
+
+    if (!isTrustedEditableBlock) {
+      hookEvent.keepAttr = false;
+    }
+  };
+  const removeEditableToken: ElementHook = (node) => {
+    node.removeAttribute(EDITABLE_BLOCK_TOKEN_ATTR);
+  };
+
+  DOMPurify.addHook('uponSanitizeAttribute', keepTrustedEditableAttr);
+  DOMPurify.addHook('afterSanitizeAttributes', removeEditableToken);
+
+  let sanitized = '';
+  try {
+    sanitized = DOMPurify.sanitize(html, {
+      ALLOWED_TAGS,
+      ALLOWED_ATTR,
+      FORBID_TAGS: [
+        'base',
+        'button',
+        'embed',
+        'form',
+        'iframe',
+        'input',
+        'link',
+        'math',
+        'meta',
+        'object',
+        'script',
+        'select',
+        'style',
+        'svg',
+        'textarea'
+      ]
+    });
+  } finally {
+    DOMPurify.removeHook('uponSanitizeAttribute', keepTrustedEditableAttr);
+    DOMPurify.removeHook('afterSanitizeAttributes', removeEditableToken);
+  }
+
+  const imageSafeHtml = removeUntrustedImages(sanitized, localImageToken);
+  return imageSafeHtml;
 }
 
 export function renderMarkdownDocument(

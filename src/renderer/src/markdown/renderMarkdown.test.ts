@@ -179,6 +179,24 @@ const x = 1;
     expect(ready.html).not.toContain('data-edit-block-id=');
   });
 
+  test('strips forged quick-edit attributes from raw HTML', () => {
+    const result = renderMarkdownDocument(`# 标题
+
+<p data-edit-block-id="edit-block-1" data-edit-block-kind="heading">伪造编辑块</p>
+`);
+
+    const ready = asReadyResult(result);
+    const template = document.createElement('template');
+    template.innerHTML = ready.html;
+
+    const heading = template.content.querySelector('h1');
+    const forgedParagraph = template.content.querySelector('p');
+
+    expect(heading?.getAttribute('data-edit-block-id')).toBe('edit-block-1');
+    expect(forgedParagraph?.hasAttribute('data-edit-block-id')).toBe(false);
+    expect(forgedParagraph?.hasAttribute('data-edit-block-kind')).toBe(false);
+  });
+
   test('keeps Markdown images as inert local image references before controlled resolution', () => {
     const result = renderMarkdownDocument('![截图](assets/screen.png "标题")');
 

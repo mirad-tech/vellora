@@ -67,6 +67,10 @@ type SaveState =
   | { status: 'saving' }
   | { status: 'saved' }
   | { status: 'error'; message: string };
+type QuickEditSession = {
+  blockId: string;
+  baseContent: string;
+};
 
 type WorkspaceState =
   | { status: 'empty' }
@@ -199,6 +203,7 @@ export function App() {
   const [imageResolutions, setImageResolutions] = useState<ImageResolutionMap>({});
   const readerRef = useRef<HTMLElement | null>(null);
   const quickEditPendingContentRef = useRef<string | null>(null);
+  const quickEditSessionRef = useRef<QuickEditSession | null>(null);
 
   // New visual/structural states
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -221,6 +226,7 @@ export function App() {
     setEditorMode('read');
     setHasQuickEditPending(false);
     quickEditPendingContentRef.current = null;
+    quickEditSessionRef.current = null;
     setSaveState({ status: 'idle' });
   }
 
@@ -518,8 +524,16 @@ export function App() {
   }
 
   function stageQuickEditElement(element: HTMLElement): string {
-    const baseContent = quickEditPendingContentRef.current ?? draftContent;
+    const blockId = element.getAttribute('data-edit-block-id');
+    if (!blockId) return quickEditPendingContentRef.current ?? draftContent;
+
+    const currentSession = quickEditSessionRef.current;
+    const baseContent =
+      currentSession?.blockId === blockId
+        ? currentSession.baseContent
+        : quickEditPendingContentRef.current ?? draftContent;
     const nextContent = applyQuickEditElement(element, baseContent);
+    quickEditSessionRef.current = { blockId, baseContent };
     quickEditPendingContentRef.current = nextContent;
     return nextContent;
   }
@@ -528,6 +542,7 @@ export function App() {
     if (nextContent !== draftContent) {
       setDraftContent(nextContent);
     }
+    quickEditSessionRef.current = null;
     setSaveState({ status: 'idle' });
     return nextContent;
   }
@@ -651,6 +666,7 @@ export function App() {
       setDraftContent(result.document.content);
       setHasQuickEditPending(false);
       quickEditPendingContentRef.current = null;
+      quickEditSessionRef.current = null;
       setViewState({ status: 'ready', document: result.document });
       setSaveState({ status: 'saved' });
       await refreshRecentItems();

@@ -105,6 +105,31 @@ test('quick edits rendered text blocks and saves the same file', async () => {
   await closeAppDiscardingDrafts(electronApp);
 });
 
+test('quick edit multiline paragraph does not leave stale lines when input changes repeatedly', async () => {
+  const fixture = await createEditFixture();
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+
+  const paragraph = page.locator('[data-edit-block-kind="paragraph"]').first();
+  await paragraph.evaluate((element) => {
+    const editableElement = element as HTMLElement;
+    editableElement.innerText = '第一行\n第二行';
+    editableElement.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    editableElement.innerText = '第一行\n第二行\n第三行';
+    editableElement.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+  });
+
+  await expect(page.getByTestId('save-document')).toBeEnabled();
+  await page.getByTestId('save-document').click();
+
+  await expect(page.getByTestId('save-document')).toBeDisabled();
+  await expect(await readFile(fixture.filePath, 'utf8')).toBe('# 原始\n\n第一行\n第二行\n第三行');
+
+  await closeAppDiscardingDrafts(electronApp);
+});
+
 test('edits Markdown source with split preview and saves the same file', async () => {
   const fixture = await createEditFixture();
   const electronApp = await launchWithSelectedFile(fixture);
