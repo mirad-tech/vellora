@@ -1643,9 +1643,20 @@ input {
 /* Print media configuration styles */
 /* ========================================================================= */
 @media print {
+  @page {
+    margin: 18mm 16mm;
+  }
+
+  html,
   body {
-    background: transparent !important;
+    width: auto !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
     color: #000000 !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
   }
 
   .find-bar,
@@ -1664,17 +1675,21 @@ input {
   .app-shell {
     display: block !important;
     height: auto !important;
+    min-height: 0 !important;
     overflow: visible !important;
-    background: transparent !important;
+    background: #ffffff !important;
+    color: #000000 !important;
   }
 
   .workspace {
     display: block !important;
+    min-height: 0 !important;
   }
 
   .content-surface {
     overflow: visible !important;
     padding: 0 !important;
+    background: #ffffff !important;
   }
 
   .document-view {
@@ -1689,11 +1704,42 @@ input {
     padding: 0 !important;
     overflow: visible !important;
     color: #000000 !important;
+    background: #ffffff !important;
+    font-size: 12pt !important;
+    line-height: 1.65 !important;
   }
 
   .markdown-body a {
     color: #000000 !important;
     text-decoration: underline !important;
+  }
+
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+    color: #000000 !important;
+  }
+
+  .markdown-body blockquote,
+  .markdown-body img,
+  .markdown-body pre,
+  .markdown-body table {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .markdown-body pre {
+    white-space: pre-wrap !important;
+  }
+
+  .markdown-body img {
+    max-height: 240mm;
+    border: 0;
   }
 }
 
