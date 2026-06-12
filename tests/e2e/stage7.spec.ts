@@ -70,8 +70,8 @@ async function openFixture(page: Page): Promise<void> {
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 
-async function enterEditMode(page: Page): Promise<void> {
-  await page.getByTestId('edit-mode-toggle').click();
+async function enterSourceEditMode(page: Page): Promise<void> {
+  await page.getByTestId('source-edit-toggle').click();
   await expect(page.getByTestId('source-editor')).toBeVisible();
   await expect(page.getByTestId('editor-preview')).toBeVisible();
 }
@@ -84,20 +84,41 @@ async function closeAppDiscardingDrafts(electronApp: ElectronApplication): Promi
   await electronApp.close();
 }
 
+test('quick edits rendered text blocks and saves the same file', async () => {
+  const fixture = await createEditFixture();
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  await expect(page.getByTestId('quick-edit-toggle')).toHaveCount(0);
+  await expect(page.getByTestId('markdown-body')).toBeVisible();
+
+  await page.locator('[data-edit-block-kind="heading"]').first().fill('更新标题');
+  await page.locator('[data-edit-block-kind="paragraph"]').first().fill('更新正文');
+  await expect(page.getByTestId('save-document')).toBeEnabled();
+
+  await page.getByTestId('save-document').click();
+
+  await expect(page.getByTestId('save-document')).toBeDisabled();
+  await expect(await readFile(fixture.filePath, 'utf8')).toBe('# 更新标题\n\n更新正文');
+
+  await closeAppDiscardingDrafts(electronApp);
+});
+
 test('edits Markdown source with split preview and saves the same file', async () => {
   const fixture = await createEditFixture();
   const electronApp = await launchWithSelectedFile(fixture);
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await enterEditMode(page);
+  await enterSourceEditMode(page);
 
   await page.getByTestId('source-editor').fill('# 更新\n\n- 一项');
-  await expect(page.getByTestId('dirty-indicator')).toHaveText('未保存');
+  await expect(page.getByTestId('save-document')).toBeEnabled();
   await expect(page.getByTestId('editor-preview').locator('h1')).toHaveText('更新');
 
   await page.getByTestId('save-document').click();
-  await expect(page.getByTestId('dirty-indicator')).toHaveText('已保存');
+  await expect(page.getByTestId('save-document')).toBeDisabled();
   await expect(await readFile(fixture.filePath, 'utf8')).toBe('# 更新\n\n- 一项');
 
   await closeAppDiscardingDrafts(electronApp);
@@ -109,7 +130,7 @@ test('keeps the draft visible when save fails', async () => {
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await enterEditMode(page);
+  await enterSourceEditMode(page);
   await page.getByTestId('source-editor').fill('# 草稿');
   await rm(fixture.filePath);
 
@@ -117,7 +138,7 @@ test('keeps the draft visible when save fails', async () => {
 
   await expect(page.getByRole('alert')).toContainText('文件不存在或已被移动。');
   await expect(page.getByTestId('source-editor')).toHaveValue('# 草稿');
-  await expect(page.getByTestId('dirty-indicator')).toHaveText('未保存');
+  await expect(page.getByTestId('save-document')).toBeEnabled();
 
   await closeAppDiscardingDrafts(electronApp);
 });
@@ -128,7 +149,7 @@ test('asks before closing with unsaved changes and can cancel the close', async 
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await enterEditMode(page);
+  await enterSourceEditMode(page);
   await page.getByTestId('source-editor').fill('# 未保存');
 
   await electronApp.evaluate(({ BrowserWindow }) => {
@@ -148,14 +169,11 @@ test('asks before closing with unsaved changes and can cancel the close', async 
     const state = globalThis as typeof globalThis & { __stage7MessageBoxResponse?: number };
     state.__stage7MessageBoxResponse = 1;
   });
+  const pageClosed = page.waitForEvent('close');
   await electronApp.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].close();
   });
-  await expect
-    .poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
-    .toBe(0);
-
-  await closeAppDiscardingDrafts(electronApp);
+  await pageClosed;
 });
 
 test('opens the current file in the default editor from main process', async () => {

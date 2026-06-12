@@ -5,6 +5,9 @@ import {
   useState,
   type CSSProperties,
   type DragEvent,
+  type FocusEvent,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent
 } from 'react';
 import {
@@ -31,13 +34,14 @@ import {
   AlertTriangle,
   X,
   Command,
-  Loader2,
-  FileCode,
-  Layout,
-  BookOpen
+  Loader2
 } from 'lucide-react';
 
-import { renderMarkdownDocument } from './markdown/renderMarkdown';
+import {
+  applyEditableBlockChange,
+  renderMarkdownDocument,
+  type EditableMarkdownBlock
+} from './markdown/renderMarkdown';
 import { applyImageResolutions, type ImageResolutionMap } from './markdown/resolveImages';
 import { applySearchHighlights } from './markdown/searchHtml';
 import type {
@@ -57,7 +61,7 @@ type ViewState =
   | { status: 'error'; message: string };
 
 type ThemeMode = 'light' | 'dark';
-type EditorMode = 'read' | 'edit';
+type EditorMode = 'read' | 'source-edit';
 type SaveState =
   | { status: 'idle' }
   | { status: 'saving' }
@@ -89,6 +93,32 @@ function documentWordCount(content: string): number {
   const latinWords = trimmed.match(/[A-Za-z0-9_]+/g) ?? [];
   const cjkChars = trimmed.match(/[\u3400-\u9FFF]/g) ?? [];
   return latinWords.length + cjkChars.length;
+}
+
+function enableQuickEditHtml(html: string): string {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+
+  const editableElements = template.content.querySelectorAll<HTMLElement>('[data-edit-block-id]');
+  for (const element of editableElements) {
+    element.setAttribute('contenteditable', 'plaintext-only');
+    element.setAttribute('spellcheck', 'true');
+    element.setAttribute('tabindex', '0');
+    element.setAttribute('role', 'textbox');
+    element.setAttribute('aria-label', '快速编辑');
+  }
+
+  return template.innerHTML;
+}
+
+function getQuickEditElement(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof Element)) return null;
+  const element = target.closest('[data-edit-block-id]');
+  return element instanceof HTMLElement ? element : null;
+}
+
+function quickEditElementText(element: HTMLElement): string {
+  return element.innerText.replace(/\u00a0/g, ' ');
 }
 
 function toViewState(result: MarkdownOpenResult): ViewState {
@@ -160,6 +190,7 @@ export function App() {
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [editorMode, setEditorMode] = useState<EditorMode>('read');
   const [draftContent, setDraftContent] = useState('');
+  const [hasQuickEditPending, setHasQuickEditPending] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeHeadingId, setActiveHeadingId] = useState<string>('');
@@ -167,6 +198,7 @@ export function App() {
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [imageResolutions, setImageResolutions] = useState<ImageResolutionMap>({});
   const readerRef = useRef<HTMLElement | null>(null);
+  const quickEditPendingContentRef = useRef<string | null>(null);
 
   // New visual/structural states
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -187,6 +219,8 @@ export function App() {
     setActiveHeadingId('');
     setImageResolutions({});
     setEditorMode('read');
+    setHasQuickEditPending(false);
+    quickEditPendingContentRef.current = null;
     setSaveState({ status: 'idle' });
   }
 
@@ -199,9 +233,12 @@ export function App() {
   }
 
   const isDirty = viewState.status === 'ready' && draftContent !== viewState.document.content;
+  const hasUnsavedChanges = isDirty || hasQuickEditPending;
 
   async function confirmBeforeReplacingDocument(): Promise<boolean> {
-    if (!isDirty) return true;
+    const currentContent = commitActiveQuickEditBlock();
+    const dirty = viewState.status === 'ready' && currentContent !== viewState.document.content;
+    if (!dirty && !hasQuickEditPending) return true;
     const result = await window.mdViewer.confirmDiscardChanges();
     return result.action === 'discard';
   }
@@ -284,9 +321,9 @@ export function App() {
 
   const statusText = useMemo(() => {
     if (viewState.status !== 'ready') return '未打开文件';
-    const dirtyText = isDirty ? ' · 未保存' : '';
+    const dirtyText = hasUnsavedChanges ? ' · 未保存' : '';
     return `${viewState.document.name} · ${byteCountLabel(viewState.document.size)} · ${documentWordCount(draftContent)} 字${dirtyText}`;
-  }, [draftContent, isDirty, viewState]);
+  }, [draftContent, hasUnsavedChanges, viewState]);
 
   const fileStatus = useMemo(() => {
     if (viewState.status !== 'ready') {
@@ -308,8 +345,8 @@ export function App() {
 
   const renderedMarkdown = useMemo(() => {
     if (viewState.status !== 'ready') return null;
-    return renderMarkdownDocument(editorMode === 'edit' ? draftContent : viewState.document.content);
-  }, [draftContent, editorMode, viewState]);
+    return renderMarkdownDocument(draftContent);
+  }, [draftContent, viewState]);
 
   const outline = renderedMarkdown?.status === 'ready' ? renderedMarkdown.outline : [];
   const filteredWorkspaceNodes = useMemo(() => {
@@ -332,6 +369,21 @@ export function App() {
     }
     return applySearchHighlights(resolvedMarkdownHtml, searchQuery, activeSearchIndex);
   }, [activeSearchIndex, renderedMarkdown, resolvedMarkdownHtml, searchQuery]);
+
+  const editableBlockById = useMemo(() => {
+    const entries =
+      renderedMarkdown?.status === 'ready'
+        ? renderedMarkdown.editableBlocks.map((block) => [block.id, block] as const)
+        : [];
+    return new Map<string, EditableMarkdownBlock>(entries);
+  }, [renderedMarkdown]);
+
+  const quickEditHtml = useMemo(() => {
+    if (editorMode !== 'read' || renderedMarkdown?.status !== 'ready') {
+      return searchResult.html;
+    }
+    return enableQuickEditHtml(searchResult.html);
+  }, [editorMode, renderedMarkdown, searchResult.html]);
 
   const searchStatus = useMemo(() => {
     if (!searchQuery.trim()) return '';
@@ -397,8 +449,14 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void window.mdViewer.setUnsavedChanges(isDirty);
-  }, [isDirty]);
+    void window.mdViewer.setUnsavedChanges(hasUnsavedChanges);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (quickEditPendingContentRef.current === draftContent) {
+      quickEditPendingContentRef.current = null;
+    }
+  }, [draftContent]);
 
   function scrollElementIntoReader(element: HTMLElement, block: 'start' | 'center' = 'start'): void {
     const reader = readerRef.current;
@@ -449,6 +507,76 @@ export function App() {
       if (next >= searchResult.count) return 0;
       return next;
     });
+  }
+
+  function applyQuickEditElement(element: HTMLElement, content: string): string {
+    const blockId = element.getAttribute('data-edit-block-id');
+    if (!blockId) return content;
+    const block = editableBlockById.get(blockId);
+    if (!block) return content;
+    return applyEditableBlockChange(content, block, quickEditElementText(element));
+  }
+
+  function stageQuickEditElement(element: HTMLElement): string {
+    const baseContent = quickEditPendingContentRef.current ?? draftContent;
+    const nextContent = applyQuickEditElement(element, baseContent);
+    quickEditPendingContentRef.current = nextContent;
+    return nextContent;
+  }
+
+  function commitQuickEditContent(nextContent: string): string {
+    if (nextContent !== draftContent) {
+      setDraftContent(nextContent);
+    }
+    setSaveState({ status: 'idle' });
+    return nextContent;
+  }
+
+  function commitQuickEditElement(element: HTMLElement): string {
+    const nextContent = stageQuickEditElement(element);
+    setHasQuickEditPending(false);
+    return commitQuickEditContent(nextContent);
+  }
+
+  function commitActiveQuickEditBlock(): string {
+    if (editorMode !== 'read') return quickEditPendingContentRef.current ?? draftContent;
+    const activeElement = document.activeElement;
+    const editElement = getQuickEditElement(activeElement);
+    if (editElement) return commitQuickEditElement(editElement);
+    const pendingContent = quickEditPendingContentRef.current;
+    return pendingContent ? commitQuickEditContent(pendingContent) : draftContent;
+  }
+
+  function setEditorModeSafely(nextMode: EditorMode): void {
+    if (editorMode === 'read' && nextMode !== 'read') {
+      commitActiveQuickEditBlock();
+    }
+    setEditorMode(nextMode);
+  }
+
+  function handleQuickEditInput(event: FormEvent<HTMLDivElement>): void {
+    const editElement = getQuickEditElement(event.target);
+    if (!editElement) return;
+    stageQuickEditElement(editElement);
+    setHasQuickEditPending(true);
+    setSaveState({ status: 'idle' });
+  }
+
+  function handleQuickEditBlur(event: FocusEvent<HTMLDivElement>): void {
+    const editElement = getQuickEditElement(event.target);
+    if (!editElement) return;
+    commitQuickEditElement(editElement);
+  }
+
+  function handleQuickEditKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    const editElement = getQuickEditElement(event.target);
+    if (!editElement) return;
+
+    const kind = editElement.getAttribute('data-edit-block-kind');
+    if ((kind === 'heading' || kind === 'list-item') && event.key === 'Enter') {
+      event.preventDefault();
+      editElement.blur();
+    }
   }
 
   async function handleMarkdownClick(event: MouseEvent<HTMLDivElement>): Promise<void> {
@@ -507,13 +635,22 @@ export function App() {
   }
 
   async function saveCurrentDocument(): Promise<void> {
-    if (viewState.status !== 'ready' || !isDirty) return;
+    if (viewState.status !== 'ready') return;
+
+    const contentToSave = commitActiveQuickEditBlock();
+    if (contentToSave === viewState.document.content) {
+      setHasQuickEditPending(false);
+      quickEditPendingContentRef.current = null;
+      return;
+    }
 
     setSaveState({ status: 'saving' });
-    const result = await window.mdViewer.saveMarkdownFile(viewState.document.path, draftContent);
+    const result = await window.mdViewer.saveMarkdownFile(viewState.document.path, contentToSave);
 
     if (result.ok) {
       setDraftContent(result.document.content);
+      setHasQuickEditPending(false);
+      quickEditPendingContentRef.current = null;
       setViewState({ status: 'ready', document: result.document });
       setSaveState({ status: 'saved' });
       await refreshRecentItems();
@@ -563,14 +700,14 @@ export function App() {
           break;
         case 's':
           e.preventDefault();
-          if (viewState.status === 'ready' && isDirty && saveState.status !== 'saving') {
+          if (viewState.status === 'ready' && hasUnsavedChanges && saveState.status !== 'saving') {
             void saveCurrentDocument();
           }
           break;
         case 'e':
           e.preventDefault();
           if (viewState.status === 'ready') {
-            setEditorMode((prev) => (prev === 'read' ? 'edit' : 'read'));
+            setEditorModeSafely(editorMode === 'source-edit' ? 'read' : 'source-edit');
           }
           break;
         case 'o':
@@ -605,7 +742,7 @@ export function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewState, isDirty, saveState]);
+  }, [viewState, hasUnsavedChanges, saveState, editorMode, draftContent, editableBlockById]);
 
   // Command palette options list
   const commandList = useMemo(() => {
@@ -630,16 +767,16 @@ export function App() {
         name: '保存当前更改',
         icon: <Save size={16} />,
         shortcut: 'Ctrl+S',
-        disabled: !isDocReady || !isDirty,
+        disabled: !isDocReady || !hasUnsavedChanges,
         action: () => void saveCurrentDocument()
       },
       {
-        id: 'toggle_edit_mode',
-        name: isDocReady && editorMode === 'edit' ? '切换为只读阅读模式' : '进入分栏编辑模式',
+        id: 'source_edit_mode',
+        name: editorMode === 'source-edit' ? '返回阅读模式' : '进入源码编辑',
         icon: <SquarePen size={16} />,
         shortcut: 'Ctrl+E',
         disabled: !isDocReady,
-        action: () => setEditorMode((prev) => (prev === 'read' ? 'edit' : 'read'))
+        action: () => setEditorModeSafely(editorMode === 'source-edit' ? 'read' : 'source-edit')
       },
       {
         id: 'toggle_theme',
@@ -695,7 +832,7 @@ export function App() {
         }
       }
     ];
-  }, [viewState, isDirty, editorMode, theme]);
+  }, [viewState, hasUnsavedChanges, editorMode, theme, draftContent, editableBlockById]);
 
   const filteredCommands = useMemo(() => {
     const q = commandPaletteQuery.trim().toLowerCase();
@@ -765,31 +902,12 @@ export function App() {
       {/* 顶部工具栏 */}
       <header className="toolbar" data-testid="top-toolbar">
         <div className="toolbar-left">
-          <div className="app-logo-group" data-testid="app-logo">
-            <FileCode aria-hidden="true" className="toolbar-mark" size={18} strokeWidth={2.4} />
-            <span className="app-name-label">Markdown查看器</span>
-          </div>
-
-          <button className="primary-action" type="button" onClick={openMarkdownFile}>
-            <FolderOpen aria-hidden="true" size={14} />
-            <span>打开 Markdown 文件</span>
-          </button>
-
-          <button
-            aria-label="打开文件夹"
-            className="icon-action"
-            type="button"
-            onClick={openWorkspaceFolder}
-          >
-            <FolderTree aria-hidden="true" size={14} />
-            <span>打开文件夹</span>
-          </button>
-
           <button
             aria-pressed={sidebarOpen}
             aria-label={sidebarOpen ? '收起侧栏' : '显示侧栏'}
             className="icon-action"
             data-testid="sidebar-toggle"
+            title={sidebarOpen ? '收起侧栏' : '显示侧栏'}
             type="button"
             onClick={toggleSidebar}
           >
@@ -801,25 +919,43 @@ export function App() {
             <span>{sidebarOpen ? '收起侧栏' : '显示侧栏'}</span>
           </button>
 
+          <button className="primary-action" title="打开 Markdown 文件" type="button" onClick={openMarkdownFile}>
+            <FolderOpen aria-hidden="true" size={14} />
+            <span>打开 Markdown 文件</span>
+          </button>
+
+          <button
+            aria-label="打开文件夹"
+            className="icon-action"
+            title="打开文件夹"
+            type="button"
+            onClick={openWorkspaceFolder}
+          >
+            <FolderTree aria-hidden="true" size={14} />
+            <span>打开文件夹</span>
+          </button>
+
           {viewState.status === 'ready' && (
             <>
               <div className="toolbar-separator" />
               <button
-                aria-pressed={editorMode === 'edit'}
-                aria-label={editorMode === 'read' ? '编辑' : '阅读'}
+                aria-pressed={editorMode === 'source-edit'}
+                aria-label={editorMode === 'source-edit' ? '返回阅读' : '源码编辑'}
                 className="icon-action"
-                data-testid="edit-mode-toggle"
+                data-testid="source-edit-toggle"
+                title={editorMode === 'source-edit' ? '返回阅读' : '源码编辑'}
                 type="button"
-                onClick={() => setEditorMode((value) => (value === 'read' ? 'edit' : 'read'))}
+                onClick={() => setEditorModeSafely(editorMode === 'source-edit' ? 'read' : 'source-edit')}
               >
                 <SquarePen aria-hidden="true" size={14} />
-                <span>{editorMode === 'read' ? '编辑' : '阅读'}</span>
+                <span>{editorMode === 'source-edit' ? '阅读' : '源码'}</span>
               </button>
               <button
                 className="icon-action"
                 aria-label={saveState.status === 'saving' ? '保存中' : '保存'}
                 data-testid="save-document"
-                disabled={!isDirty || saveState.status === 'saving'}
+                disabled={!hasUnsavedChanges || saveState.status === 'saving'}
+                title={saveState.status === 'saving' ? '保存中' : '保存'}
                 type="button"
                 onClick={saveCurrentDocument}
               >
@@ -830,10 +966,11 @@ export function App() {
                 className="icon-action"
                 aria-label="默认编辑器"
                 data-testid="open-default-editor"
+                title="默认编辑器"
                 type="button"
                 onClick={openCurrentInDefaultEditor}
               >
-                <FileText aria-hidden="true" size={14} />
+                <ExternalLink aria-hidden="true" size={14} />
                 <span>默认编辑器</span>
               </button>
             </>
@@ -865,6 +1002,7 @@ export function App() {
             className="search-step"
             data-testid="search-previous"
             disabled={searchResult.count === 0}
+            title="上一个结果"
             type="button"
             onClick={() => moveSearchResult(-1)}
           >
@@ -875,6 +1013,7 @@ export function App() {
             className="search-step"
             data-testid="search-next"
             disabled={searchResult.count === 0}
+            title="下一个结果"
             type="button"
             onClick={() => moveSearchResult(1)}
           >
@@ -907,6 +1046,7 @@ export function App() {
           <button
             className="icon-action-flat"
             title="最近打开 (History)"
+            aria-label="最近打开"
             type="button"
             onClick={() => setIsRecentOpen(true)}
           >
@@ -915,6 +1055,7 @@ export function App() {
           <button
             className="icon-action-flat"
             title="快捷命令面板 (Ctrl+K)"
+            aria-label="快捷命令面板"
             type="button"
             onClick={() => {
               setCommandPaletteQuery('');
@@ -927,6 +1068,7 @@ export function App() {
           <button
             className="icon-action-flat"
             title="设置与系统安全诊断 (Ctrl+,)"
+            aria-label="设置与系统安全诊断"
             type="button"
             onClick={() => {
               void loadSecurityDiagnostics();
@@ -938,6 +1080,8 @@ export function App() {
           <button
             className="icon-action-flat theme-action"
             data-testid="theme-toggle"
+            title={theme === 'light' ? '切换到深色' : '切换到浅色'}
+            aria-label={theme === 'light' ? '切换到深色' : '切换到浅色'}
             type="button"
             onClick={() => setTheme((value) => (value === 'light' ? 'dark' : 'light'))}
           >
@@ -1126,15 +1270,6 @@ export function App() {
           {/* 文档载入成功 */}
           {viewState.status === 'ready' && (
             <article className="document-view">
-              <div className="document-meta">
-                <strong>{viewState.document.name}</strong>
-                <span>{viewState.document.path}</span>
-                <span>{fileStatus.modifiedAt}</span>
-                <span data-testid="dirty-indicator">
-                  {isDirty ? '未保存' : '已保存'}
-                </span>
-              </div>
-
               {saveState.status === 'error' && (
                 <div className="document-render-error" data-testid="save-error" role="alert">
                   {saveState.message}
@@ -1155,7 +1290,7 @@ export function App() {
 
               {renderedMarkdown?.status === 'ready' && (
                 <>
-                  {editorMode === 'edit' ? (
+                  {editorMode === 'source-edit' ? (
                     <div className="editor-split" data-testid="editor-split">
                       <textarea
                         className="source-editor"
@@ -1176,10 +1311,13 @@ export function App() {
                     </div>
                   ) : (
                     <div
-                      className="markdown-body"
+                      className="markdown-body quick-edit-body"
                       data-testid="markdown-body"
-                      dangerouslySetInnerHTML={{ __html: searchResult.html }}
+                      dangerouslySetInnerHTML={{ __html: quickEditHtml }}
+                      onBlur={handleQuickEditBlur}
                       onClick={handleMarkdownClick}
+                      onInput={handleQuickEditInput}
+                      onKeyDown={handleQuickEditKeyDown}
                     />
                   )}
                 </>

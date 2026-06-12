@@ -79,12 +79,16 @@ test('desktop reading interface keeps sidebar closed until requested', async () 
   const page = await electronApp.firstWindow();
 
   await expect(page.getByRole('button', { name: '打开文件夹' })).toHaveCount(1);
-  await page.locator('.app-logo-group').click();
+  await expect(page.locator('.app-logo-group')).toHaveCount(0);
   await expect(page.locator('.command-palette-card')).toBeHidden();
 
   await openFixture(page);
 
-  await expect(page.locator('.app-name-label')).toHaveText('Markdown查看器');
+  await expect(page.locator('.app-name-label')).toHaveCount(0);
+  await expect(page.locator('[data-testid="top-toolbar"] .toolbar-left button').first()).toHaveAttribute(
+    'data-testid',
+    'sidebar-toggle'
+  );
   await expect(page.getByTestId('app-shell')).toBeVisible();
   await expect(page.getByTestId('top-toolbar')).toBeVisible();
   await expect(page.getByTestId('sidebar-panel')).toBeHidden();
@@ -94,6 +98,22 @@ test('desktop reading interface keeps sidebar closed until requested', async () 
   await expect(page.getByTestId('status-file-path')).toContainText(filePath);
   await expect(page.getByTestId('status-modified-time')).toContainText('修改');
   await expect(page.getByTestId('status-word-count')).toContainText('字');
+  await expect(page.locator('.document-meta')).toHaveCount(0);
+  await expect(page.getByTestId('read-mode-toggle')).toHaveCount(0);
+  await expect(page.getByTestId('quick-edit-toggle')).toHaveCount(0);
+  await expect(page.getByTestId('source-edit-toggle')).toBeVisible();
+
+  const buttonsMissingTitles = await page
+    .locator('[data-testid="top-toolbar"] button')
+    .evaluateAll((buttons) =>
+      buttons
+        .map((button) => ({
+          label: button.getAttribute('aria-label') ?? button.textContent ?? '',
+          title: button.getAttribute('title') ?? ''
+        }))
+        .filter((button) => button.title.trim().length === 0)
+    );
+  expect(buttonsMissingTitles).toEqual([]);
 
   await page.getByTestId('sidebar-toggle').click();
   await expect(page.getByTestId('sidebar-panel')).toBeVisible();
