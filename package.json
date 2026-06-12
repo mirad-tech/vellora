@@ -1,0 +1,81 @@
+{
+  "name": "local-markdown-viewer",
+  "productName": "Local Markdown Viewer",
+  "version": "1.0.0",
+  "description": "Local-first Electron Markdown viewer",
+  "author": "Local Markdown Viewer Contributors",
+  "main": "out/main/index.js",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "dist": "npm run build && electron-builder",
+    "dist:win:portable": "npm run build && electron-builder --win portable",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run src tests/stage8",
+    "test:stage1": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts",
+    "test:stage2": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/renderer/src/markdown/renderMarkdown.test.ts",
+    "test:stage4": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts",
+    "test:stage5": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/main/imageAccess.test.ts src/main/linkAccess.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts src/renderer/src/markdown/resolveImages.test.ts",
+    "test:stage6": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/main/imageAccess.test.ts src/main/linkAccess.test.ts src/main/workspaceAccess.test.ts src/main/recentStore.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts src/renderer/src/markdown/resolveImages.test.ts",
+    "test:stage7": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/main/imageAccess.test.ts src/main/linkAccess.test.ts src/main/workspaceAccess.test.ts src/main/recentStore.test.ts src/main/documentWrite.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts src/renderer/src/markdown/resolveImages.test.ts",
+    "test:stage8": "vitest run tests/stage8/packaging.test.ts",
+    "test:e2e:stage1": "playwright test tests/e2e/stage1.spec.ts",
+    "test:e2e:stage2": "playwright test tests/e2e/stage2.spec.ts",
+    "test:e2e:stage3": "playwright test tests/e2e/stage3.spec.ts",
+    "test:e2e:stage4": "playwright test tests/e2e/stage4.spec.ts",
+    "test:e2e:stage5": "playwright test tests/e2e/stage5.spec.ts",
+    "test:e2e:stage6": "playwright test tests/e2e/stage6.spec.ts",
+    "test:e2e:stage7": "playwright test tests/e2e/stage7.spec.ts",
+    "test:e2e:stage8": "playwright test tests/e2e/stage8.spec.ts"
+  },
+  "build": {
+    "appId": "app.local-markdown-viewer.desktop",
+    "productName": "Local Markdown Viewer",
+    "asar": true,
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "Local-Markdown-Viewer-${version}-portable.${ext}"
+    }
+  },
+  "dependencies": {
+    "dompurify": "^3.4.9",
+    "highlight.js": "^11.11.1",
+    "lucide-react": "^1.17.0",
+    "markdown-it": "^14.2.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2",
+    "electron-vite": "^4.0.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,1518 @@
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+  type MouseEvent
+} from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  File as FileIcon,
+  FileText,
+  FolderOpen,
+  FolderTree,
+  ListTree,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Save,
+  Search,
+  SquarePen,
+  Sun,
+  Settings,
+  Info,
+  History,
+  Printer,
+  ExternalLink,
+  AlertTriangle,
+  X,
+  Command,
+  Loader2,
+  FileCode,
+  Layout,
+  BookOpen
+} from 'lucide-react';
+
+import { renderMarkdownDocument } from './markdown/renderMarkdown';
+import { applyImageResolutions, type ImageResolutionMap } from './markdown/resolveImages';
+import { applySearchHighlights } from './markdown/searchHtml';
+import type {
+  MarkdownDocument,
+  MarkdownOpenResult,
+  MarkdownWorkspace,
+  RecentItem,
+  WorkspaceOpenResult,
+  WorkspaceTreeNode,
+  SecurityDiagnostics
+} from '../../shared/documentTypes';
+
+type ViewState =
+  | { status: 'empty' }
+  | { status: 'loading' }
+  | { status: 'ready'; document: MarkdownDocument }
+  | { status: 'error'; message: string };
+
+type ThemeMode = 'light' | 'dark';
+type EditorMode = 'read' | 'edit';
+type SaveState =
+  | { status: 'idle' }
+  | { status: 'saving' }
+  | { status: 'saved' }
+  | { status: 'error'; message: string };
+
+type WorkspaceState =
+  | { status: 'empty' }
+  | { status: 'loading' }
+  | { status: 'ready'; workspace: MarkdownWorkspace }
+  | { status: 'error'; message: string };
+
+function formatModifiedTime(value: number): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(new Date(value));
+}
+
+function byteCountLabel(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function documentWordCount(content: string): number {
+  const trimmed = content.trim();
+  if (!trimmed) return 0;
+  const latinWords = trimmed.match(/[A-Za-z0-9_]+/g) ?? [];
+  const cjkChars = trimmed.match(/[\u3400-\u9FFF]/g) ?? [];
+  return latinWords.length + cjkChars.length;
+}
+
+function toViewState(result: MarkdownOpenResult): ViewState {
+  if (result.ok) {
+    return { status: 'ready', document: result.document };
+  }
+
+  if (result.code === 'CANCELED') {
+    return { status: 'empty' };
+  }
+
+  return { status: 'error', message: result.message };
+}
+
+function toWorkspaceState(result: WorkspaceOpenResult): WorkspaceState {
+  if (result.ok) {
+    return { status: 'ready', workspace: result.workspace };
+  }
+
+  if (result.code === 'CANCELED') {
+    return { status: 'empty' };
+  }
+
+  return { status: 'error', message: result.message };
+}
+
+function nodeMatchesFilter(node: WorkspaceTreeNode, normalizedFilter: string): boolean {
+  if (!normalizedFilter) return true;
+  return (
+    node.name.toLocaleLowerCase().includes(normalizedFilter) ||
+    node.relativePath.toLocaleLowerCase().includes(normalizedFilter)
+  );
+}
+
+function filterWorkspaceNodes(
+  nodes: WorkspaceTreeNode[],
+  normalizedFilter: string
+): WorkspaceTreeNode[] {
+  if (!normalizedFilter) return nodes;
+
+  const filteredNodes: WorkspaceTreeNode[] = [];
+
+  for (const node of nodes) {
+    if (node.type === 'file') {
+      if (nodeMatchesFilter(node, normalizedFilter)) {
+        filteredNodes.push(node);
+      }
+      continue;
+    }
+
+    const children = filterWorkspaceNodes(node.children, normalizedFilter);
+    if (children.length > 0 || nodeMatchesFilter(node, normalizedFilter)) {
+      filteredNodes.push({
+        ...node,
+        children
+      });
+    }
+  }
+
+  return filteredNodes;
+}
+
+export function App() {
+  // Original core states
+  const [viewState, setViewState] = useState<ViewState>({ status: 'empty' });
+  const [workspaceState, setWorkspaceState] = useState<WorkspaceState>({ status: 'empty' });
+  const [workspaceFilter, setWorkspaceFilter] = useState('');
+  const [recentItems, setRecentItems] = useState<RecentItem[]>([]);
+  const [theme, setTheme] = useState<ThemeMode>('light');
+  const [editorMode, setEditorMode] = useState<EditorMode>('read');
+  const [draftContent, setDraftContent] = useState('');
+  const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeHeadingId, setActiveHeadingId] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [imageResolutions, setImageResolutions] = useState<ImageResolutionMap>({});
+  const readerRef = useRef<HTMLElement | null>(null);
+
+  // New visual/structural states
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isRecentOpen, setIsRecentOpen] = useState(false);
+  const [isFileInfoOpen, setIsFileInfoOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState('');
+  const [commandPaletteIndex, setCommandPaletteIndex] = useState(0);
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
+  const [pendingExternalUrl, setPendingExternalUrl] = useState<string | null>(null);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
+  const [securityDiagnostics, setSecurityDiagnostics] = useState<SecurityDiagnostics | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<'workspace' | 'outline'>('workspace');
+
+  function resetDocumentState(): void {
+    setSearchQuery('');
+    setActiveSearchIndex(0);
+    setActiveHeadingId('');
+    setImageResolutions({});
+    setEditorMode('read');
+    setSaveState({ status: 'idle' });
+  }
+
+  function applyOpenResult(result: MarkdownOpenResult): void {
+    resetDocumentState();
+    if (result.ok) {
+      setDraftContent(result.document.content);
+    }
+    setViewState(toViewState(result));
+  }
+
+  const isDirty = viewState.status === 'ready' && draftContent !== viewState.document.content;
+
+  async function confirmBeforeReplacingDocument(): Promise<boolean> {
+    if (!isDirty) return true;
+    const result = await window.mdViewer.confirmDiscardChanges();
+    return result.action === 'discard';
+  }
+
+  async function openMarkdownFile(): Promise<void> {
+    if (!(await confirmBeforeReplacingDocument())) return;
+    setViewState({ status: 'loading' });
+    const result = await window.mdViewer.openMarkdownFile();
+    applyOpenResult(result);
+    await refreshRecentItems();
+  }
+
+  async function openDroppedFile(file: File): Promise<void> {
+    if (!(await confirmBeforeReplacingDocument())) return;
+    setViewState({ status: 'loading' });
+    const result = await window.mdViewer.openDroppedMarkdownFile(file);
+    applyOpenResult(result);
+    await refreshRecentItems();
+  }
+
+  async function refreshRecentItems(): Promise<void> {
+    const result = await window.mdViewer.getRecentItems();
+    if (result.ok) {
+      setRecentItems(result.items);
+    }
+  }
+
+  async function openWorkspaceFolder(): Promise<void> {
+    setWorkspaceState({ status: 'loading' });
+    const result = await window.mdViewer.openWorkspaceFolder();
+    setWorkspaceState(toWorkspaceState(result));
+    if (result.ok) {
+      setSidebarTab('workspace');
+      setSidebarOpen(true);
+    }
+    await refreshRecentItems();
+  }
+
+  async function openWorkspaceByPath(folderPath: string): Promise<void> {
+    setWorkspaceState({ status: 'loading' });
+    const result = await window.mdViewer.openWorkspaceByPath(folderPath);
+    setWorkspaceState(toWorkspaceState(result));
+    if (result.ok) {
+      setSidebarTab('workspace');
+      setSidebarOpen(true);
+    }
+    await refreshRecentItems();
+  }
+
+  async function openMarkdownByPath(filePath: string): Promise<void> {
+    if (!(await confirmBeforeReplacingDocument())) return;
+    setViewState({ status: 'loading' });
+    const result = await window.mdViewer.openMarkdownByPath(filePath);
+    applyOpenResult(result);
+    await refreshRecentItems();
+  }
+
+  useEffect(() => {
+    return window.mdViewer.onMarkdownOpenRequested((filePath) => {
+      void openMarkdownByPath(filePath);
+    });
+  });
+
+  function toggleSidebar(): void {
+    if (!sidebarOpen && viewState.status === 'ready' && workspaceState.status !== 'ready') {
+      setSidebarTab('outline');
+    }
+    setSidebarOpen((value) => !value);
+  }
+
+  async function openRecentItem(item: RecentItem): Promise<void> {
+    if (item.type === 'folder') {
+      await openWorkspaceByPath(item.path);
+      setSidebarTab('workspace');
+      return;
+    }
+
+    await openMarkdownByPath(item.path);
+  }
+
+  const statusText = useMemo(() => {
+    if (viewState.status !== 'ready') return '未打开文件';
+    const dirtyText = isDirty ? ' · 未保存' : '';
+    return `${viewState.document.name} · ${byteCountLabel(viewState.document.size)} · ${documentWordCount(draftContent)} 字${dirtyText}`;
+  }, [draftContent, isDirty, viewState]);
+
+  const fileStatus = useMemo(() => {
+    if (viewState.status !== 'ready') {
+      return {
+        name: '未打开文件',
+        path: '',
+        modifiedAt: '',
+        words: '0 字'
+      };
+    }
+
+    return {
+      name: viewState.document.name,
+      path: viewState.document.path,
+      modifiedAt: `修改：${formatModifiedTime(viewState.document.modifiedAt)}`,
+      words: `${documentWordCount(draftContent)} 字`
+    };
+  }, [draftContent, viewState]);
+
+  const renderedMarkdown = useMemo(() => {
+    if (viewState.status !== 'ready') return null;
+    return renderMarkdownDocument(editorMode === 'edit' ? draftContent : viewState.document.content);
+  }, [draftContent, editorMode, viewState]);
+
+  const outline = renderedMarkdown?.status === 'ready' ? renderedMarkdown.outline : [];
+  const filteredWorkspaceNodes = useMemo(() => {
+    if (workspaceState.status !== 'ready') return [];
+    return filterWorkspaceNodes(workspaceState.workspace.children, workspaceFilter.trim().toLocaleLowerCase());
+  }, [workspaceFilter, workspaceState]);
+
+  const resolvedMarkdownHtml = useMemo(() => {
+    if (renderedMarkdown?.status !== 'ready') return '';
+    return applyImageResolutions(renderedMarkdown.html, imageResolutions);
+  }, [imageResolutions, renderedMarkdown]);
+
+  const searchResult = useMemo(() => {
+    if (renderedMarkdown?.status !== 'ready') {
+      return {
+        html: '',
+        count: 0,
+        activeIndex: -1
+      };
+    }
+    return applySearchHighlights(resolvedMarkdownHtml, searchQuery, activeSearchIndex);
+  }, [activeSearchIndex, renderedMarkdown, resolvedMarkdownHtml, searchQuery]);
+
+  const searchStatus = useMemo(() => {
+    if (!searchQuery.trim()) return '';
+    if (searchResult.count === 0) return '无结果';
+    return `${searchResult.activeIndex + 1}/${searchResult.count}`;
+  }, [searchQuery, searchResult]);
+
+  useEffect(() => {
+    if (outline.length === 0) {
+      setActiveHeadingId('');
+      return;
+    }
+    setActiveHeadingId((current) => current || outline[0].id);
+  }, [outline]);
+
+  useEffect(() => {
+    if (searchResult.activeIndex < 0) return;
+    const hit = document.querySelector(`[data-search-hit="${searchResult.activeIndex}"]`);
+    if (hit instanceof HTMLElement) {
+      scrollElementIntoReader(hit, 'center');
+    }
+  }, [searchResult.activeIndex, searchQuery]);
+
+  useEffect(() => {
+    if (viewState.status !== 'ready' || renderedMarkdown?.status !== 'ready') return;
+
+    const template = document.createElement('template');
+    template.innerHTML = renderedMarkdown.html;
+    const imageSources = Array.from(template.content.querySelectorAll<HTMLImageElement>('img[data-local-src]'))
+      .map((image) => image.getAttribute('data-local-src') ?? '')
+      .filter((source) => source.length > 0);
+    const uniqueSources = Array.from(new Set(imageSources));
+    if (uniqueSources.length === 0) {
+      setImageResolutions({});
+      return;
+    }
+
+    const documentPath = viewState.document.path;
+    let canceled = false;
+    setImageResolutions({});
+
+    async function resolveImages(): Promise<void> {
+      const entries = await Promise.all(
+        uniqueSources.map(async (source) => [
+          source,
+          await window.mdViewer.resolveMarkdownImage(documentPath, source)
+        ] as const)
+      );
+      if (!canceled) {
+        setImageResolutions(Object.fromEntries(entries));
+      }
+    }
+
+    void resolveImages();
+
+    return () => {
+      canceled = true;
+    };
+  }, [renderedMarkdown, viewState]);
+
+  useEffect(() => {
+    void refreshRecentItems();
+  }, []);
+
+  useEffect(() => {
+    void window.mdViewer.setUnsavedChanges(isDirty);
+  }, [isDirty]);
+
+  function scrollElementIntoReader(element: HTMLElement, block: 'start' | 'center' = 'start'): void {
+    const reader = readerRef.current;
+    if (!reader) return;
+
+    const readerRect = reader.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const offset = elementRect.top - readerRect.top;
+    const centerOffset = block === 'center' ? reader.clientHeight / 2 - elementRect.height / 2 : 16;
+    reader.scrollTop = reader.scrollTop + offset - centerOffset;
+  }
+
+  function updateActiveHeadingFromScroll(): void {
+    const reader = readerRef.current;
+    if (!reader || outline.length === 0) return;
+
+    const readerTop = reader.getBoundingClientRect().top;
+    let current = outline[0].id;
+
+    for (const entry of outline) {
+      const heading = document.getElementById(entry.id);
+      if (!heading) continue;
+      const relativeTop = heading.getBoundingClientRect().top - readerTop;
+      if (relativeTop <= 96) {
+        current = entry.id;
+      }
+    }
+
+    setActiveHeadingId(current);
+  }
+
+  function scrollToHeading(id: string): void {
+    const heading = document.getElementById(id);
+    if (heading instanceof HTMLElement) {
+      scrollElementIntoReader(heading);
+    }
+    setActiveHeadingId(id);
+    window.requestAnimationFrame(() => {
+      setActiveHeadingId(id);
+    });
+  }
+
+  function moveSearchResult(direction: 1 | -1): void {
+    if (searchResult.count === 0) return;
+    setActiveSearchIndex((current) => {
+      const next = current + direction;
+      if (next < 0) return searchResult.count - 1;
+      if (next >= searchResult.count) return 0;
+      return next;
+    });
+  }
+
+  async function handleMarkdownClick(event: MouseEvent<HTMLDivElement>): Promise<void> {
+    if (viewState.status !== 'ready') return;
+
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    // Check if clicked image for Lightbox
+    const img = target.closest('img');
+    if (img instanceof HTMLImageElement) {
+      const src = img.getAttribute('src');
+      if (src) {
+        setLightboxImageUrl(src);
+        return;
+      }
+    }
+
+    const anchor = target.closest('a[href]');
+    if (!(anchor instanceof HTMLAnchorElement)) return;
+
+    event.preventDefault();
+    const href = anchor.getAttribute('href') ?? '';
+    const isExternal = href.startsWith('http://') || href.startsWith('https://');
+    if (isExternal) {
+      // Intercept and show confirmation dialog
+      setPendingExternalUrl(href);
+    } else {
+      const result = await window.mdViewer.openMarkdownLink(
+        viewState.document.path,
+        href
+      );
+
+      if (result.ok && result.action === 'markdown') {
+        applyOpenResult({ ok: true, document: result.document });
+        await refreshRecentItems();
+      } else if (!result.ok) {
+        setSaveState({ status: 'error', message: result.message });
+      }
+    }
+  }
+
+  async function handleConfirmExternalLink(): Promise<void> {
+    if (!pendingExternalUrl || viewState.status !== 'ready') return;
+    const url = pendingExternalUrl;
+    setPendingExternalUrl(null);
+    await window.mdViewer.openMarkdownLink(viewState.document.path, url);
+  }
+
+  async function handleDrop(event: DragEvent<HTMLElement>): Promise<void> {
+    event.preventDefault();
+    const file = event.dataTransfer.files.item(0);
+    if (file) {
+      await openDroppedFile(file);
+    }
+  }
+
+  async function saveCurrentDocument(): Promise<void> {
+    if (viewState.status !== 'ready' || !isDirty) return;
+
+    setSaveState({ status: 'saving' });
+    const result = await window.mdViewer.saveMarkdownFile(viewState.document.path, draftContent);
+
+    if (result.ok) {
+      setDraftContent(result.document.content);
+      setViewState({ status: 'ready', document: result.document });
+      setSaveState({ status: 'saved' });
+      await refreshRecentItems();
+      return;
+    }
+
+    setSaveState({ status: 'error', message: result.message });
+  }
+
+  async function openCurrentInDefaultEditor(): Promise<void> {
+    if (viewState.status !== 'ready') return;
+    const result = await window.mdViewer.openDefaultEditor(viewState.document.path);
+    if (!result.ok) {
+      setSaveState({ status: 'error', message: result.message });
+    }
+  }
+
+  async function loadSecurityDiagnostics(): Promise<void> {
+    const result = await window.mdViewer.getSecurityDiagnostics();
+    setSecurityDiagnostics(result);
+  }
+
+  // Keyboard shortcuts listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Esc closes all modals
+      if (e.key === 'Escape') {
+        setLightboxImageUrl(null);
+        setPendingExternalUrl(null);
+        setIsSettingsOpen(false);
+        setIsRecentOpen(false);
+        setIsFileInfoOpen(false);
+        setIsCommandPaletteOpen(false);
+        setIsPrintPreviewOpen(false);
+        return;
+      }
+
+      const isCmd = e.ctrlKey || e.metaKey;
+      if (!isCmd) return;
+
+      switch (e.key.toLowerCase()) {
+        case 'k':
+          e.preventDefault();
+          setCommandPaletteQuery('');
+          setCommandPaletteIndex(0);
+          setIsCommandPaletteOpen((prev) => !prev);
+          break;
+        case 's':
+          e.preventDefault();
+          if (viewState.status === 'ready' && isDirty && saveState.status !== 'saving') {
+            void saveCurrentDocument();
+          }
+          break;
+        case 'e':
+          e.preventDefault();
+          if (viewState.status === 'ready') {
+            setEditorMode((prev) => (prev === 'read' ? 'edit' : 'read'));
+          }
+          break;
+        case 'o':
+          e.preventDefault();
+          if (e.shiftKey) {
+            void openWorkspaceFolder();
+          } else {
+            void openMarkdownFile();
+          }
+          break;
+        case 'p':
+          e.preventDefault();
+          if (viewState.status === 'ready') {
+            setIsPrintPreviewOpen(true);
+          }
+          break;
+        case 'i':
+          e.preventDefault();
+          if (viewState.status === 'ready') {
+            setIsFileInfoOpen(true);
+          }
+          break;
+        case ',':
+          e.preventDefault();
+          void loadSecurityDiagnostics();
+          setIsSettingsOpen(true);
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [viewState, isDirty, saveState]);
+
+  // Command palette options list
+  const commandList = useMemo(() => {
+    const isDocReady = viewState.status === 'ready';
+    return [
+      {
+        id: 'open_file',
+        name: '打开 Markdown 文件',
+        icon: <FolderOpen size={16} />,
+        shortcut: 'Ctrl+O',
+        action: () => void openMarkdownFile()
+      },
+      {
+        id: 'open_folder',
+        name: '打开工作区文件夹',
+        icon: <FolderTree size={16} />,
+        shortcut: 'Ctrl+Shift+O',
+        action: () => void openWorkspaceFolder()
+      },
+      {
+        id: 'save_document',
+        name: '保存当前更改',
+        icon: <Save size={16} />,
+        shortcut: 'Ctrl+S',
+        disabled: !isDocReady || !isDirty,
+        action: () => void saveCurrentDocument()
+      },
+      {
+        id: 'toggle_edit_mode',
+        name: isDocReady && editorMode === 'edit' ? '切换为只读阅读模式' : '进入分栏编辑模式',
+        icon: <SquarePen size={16} />,
+        shortcut: 'Ctrl+E',
+        disabled: !isDocReady,
+        action: () => setEditorMode((prev) => (prev === 'read' ? 'edit' : 'read'))
+      },
+      {
+        id: 'toggle_theme',
+        name: theme === 'light' ? '切换到深色夜间主题' : '切换到浅色明亮主题',
+        icon: theme === 'light' ? <Moon size={16} /> : <Sun size={16} />,
+        shortcut: 'Ctrl+D',
+        action: () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))
+      },
+      {
+        id: 'view_file_info',
+        name: '查看文档元数据详情',
+        icon: <Info size={16} />,
+        shortcut: 'Ctrl+I',
+        disabled: !isDocReady,
+        action: () => setIsFileInfoOpen(true)
+      },
+      {
+        id: 'print_document',
+        name: '打印与导出 PDF 预览',
+        icon: <Printer size={16} />,
+        shortcut: 'Ctrl+P',
+        disabled: !isDocReady,
+        action: () => setIsPrintPreviewOpen(true)
+      },
+      {
+        id: 'security_audit',
+        name: '系统安全诊断与设置',
+        icon: <Settings size={16} />,
+        shortcut: 'Ctrl+,',
+        action: () => {
+          void loadSecurityDiagnostics();
+          setIsSettingsOpen(true);
+        }
+      },
+      {
+        id: 'recent_history',
+        name: '浏览最近打开的文件/文件夹',
+        icon: <History size={16} />,
+        shortcut: '',
+        action: () => setIsRecentOpen(true)
+      },
+      {
+        id: 'close_file',
+        name: '关闭当前文档',
+        icon: <X size={16} />,
+        shortcut: 'Esc',
+        disabled: !isDocReady,
+        action: async () => {
+          if (await confirmBeforeReplacingDocument()) {
+            resetDocumentState();
+            setViewState({ status: 'empty' });
+          }
+        }
+      }
+    ];
+  }, [viewState, isDirty, editorMode, theme]);
+
+  const filteredCommands = useMemo(() => {
+    const q = commandPaletteQuery.trim().toLowerCase();
+    if (!q) return commandList;
+    return commandList.filter((c) => c.name.toLowerCase().includes(q));
+  }, [commandPaletteQuery, commandList]);
+
+  // Navigate filtered commands on keydown
+  const handleCommandPaletteKeyDown = (e: KeyboardEvent) => {
+    if (filteredCommands.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setCommandPaletteIndex((prev) => (prev + 1) % filteredCommands.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCommandPaletteIndex((prev) => (prev - 1 + filteredCommands.length) % filteredCommands.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const selected = filteredCommands[commandPaletteIndex];
+      if (selected && !selected.disabled) {
+        setIsCommandPaletteOpen(false);
+        selected.action();
+      }
+    }
+  };
+
+  function renderWorkspaceNodes(nodes: WorkspaceTreeNode[], level = 1) {
+    return (
+      <ol className="workspace-tree" data-level={level}>
+        {nodes.map((node) => (
+          <li key={node.path}>
+            {node.type === 'directory' ? (
+              <div className="workspace-directory">
+                <span className="workspace-directory-label" style={{ '--level': level } as CSSProperties}>
+                  <ChevronRight aria-hidden="true" size={13} />
+                  {node.name}
+                </span>
+                {node.children.length > 0 && renderWorkspaceNodes(node.children, level + 1)}
+              </div>
+            ) : (
+              <button
+                className="workspace-file"
+                data-testid="workspace-file"
+                style={{ '--level': level } as CSSProperties}
+                title={node.relativePath}
+                type="button"
+                onClick={() => openMarkdownByPath(node.path)}
+              >
+                <FileIcon aria-hidden="true" size={13} />
+                <span>{node.name}</span>
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+    );
+  }
+
+  return (
+    <main
+      className="app-shell"
+      data-theme={theme}
+      data-testid="app-shell"
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={handleDrop}
+    >
+      {/* 顶部工具栏 */}
+      <header className="toolbar" data-testid="top-toolbar">
+        <div className="toolbar-left">
+          <div className="app-logo-group" data-testid="app-logo">
+            <FileCode aria-hidden="true" className="toolbar-mark" size={18} strokeWidth={2.4} />
+            <span className="app-name-label">MIRAD</span>
+          </div>
+
+          <button className="primary-action" type="button" onClick={openMarkdownFile}>
+            <FolderOpen aria-hidden="true" size={14} />
+            <span>打开 Markdown 文件</span>
+          </button>
+
+          <button
+            aria-label="打开文件夹"
+            className="icon-action"
+            type="button"
+            onClick={openWorkspaceFolder}
+          >
+            <FolderTree aria-hidden="true" size={14} />
+            <span>打开文件夹</span>
+          </button>
+
+          <button
+            aria-pressed={sidebarOpen}
+            aria-label={sidebarOpen ? '收起侧栏' : '显示侧栏'}
+            className="icon-action"
+            data-testid="sidebar-toggle"
+            type="button"
+            onClick={toggleSidebar}
+          >
+            {sidebarOpen ? (
+              <PanelLeftClose aria-hidden="true" size={14} />
+            ) : (
+              <PanelLeftOpen aria-hidden="true" size={14} />
+            )}
+            <span>{sidebarOpen ? '收起侧栏' : '显示侧栏'}</span>
+          </button>
+
+          {viewState.status === 'ready' && (
+            <>
+              <div className="toolbar-separator" />
+              <button
+                aria-pressed={editorMode === 'edit'}
+                aria-label={editorMode === 'read' ? '编辑' : '阅读'}
+                className="icon-action"
+                data-testid="edit-mode-toggle"
+                type="button"
+                onClick={() => setEditorMode((value) => (value === 'read' ? 'edit' : 'read'))}
+              >
+                <SquarePen aria-hidden="true" size={14} />
+                <span>{editorMode === 'read' ? '编辑' : '阅读'}</span>
+              </button>
+              <button
+                className="icon-action"
+                aria-label={saveState.status === 'saving' ? '保存中' : '保存'}
+                data-testid="save-document"
+                disabled={!isDirty || saveState.status === 'saving'}
+                type="button"
+                onClick={saveCurrentDocument}
+              >
+                {saveState.status === 'saving' ? <Loader2 className="animate-spin" size={14} /> : <Save aria-hidden="true" size={14} />}
+                <span>{saveState.status === 'saving' ? '保存中' : '保存'}</span>
+              </button>
+              <button
+                className="icon-action"
+                aria-label="默认编辑器"
+                data-testid="open-default-editor"
+                type="button"
+                onClick={openCurrentInDefaultEditor}
+              >
+                <FileText aria-hidden="true" size={14} />
+                <span>默认编辑器</span>
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* 顶部中央文件名静默状态展示 */}
+        <span className="toolbar-status">{statusText}</span>
+
+        {/* 搜索 cluster */}
+        <div className="search-cluster" role="search">
+          <Search aria-hidden="true" size={13} />
+          <input
+            aria-label="搜索当前文档"
+            data-testid="document-search"
+            placeholder="搜索"
+            type="search"
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setActiveSearchIndex(0);
+            }}
+          />
+          <span className="search-status" data-testid="search-status">
+            {searchStatus}
+          </span>
+          <button
+            aria-label="上一个结果"
+            className="search-step"
+            data-testid="search-previous"
+            disabled={searchResult.count === 0}
+            type="button"
+            onClick={() => moveSearchResult(-1)}
+          >
+            <ChevronUp aria-hidden="true" size={13} />
+          </button>
+          <button
+            aria-label="下一个结果"
+            className="search-step"
+            data-testid="search-next"
+            disabled={searchResult.count === 0}
+            type="button"
+            onClick={() => moveSearchResult(1)}
+          >
+            <ChevronDown aria-hidden="true" size={13} />
+          </button>
+        </div>
+
+        {/* 高级工具按钮 */}
+        <div className="toolbar-right-actions">
+          {viewState.status === 'ready' && (
+            <>
+              <button
+                className="icon-action-flat"
+                title="打印与导出 PDF (Ctrl+P)"
+                type="button"
+                onClick={() => setIsPrintPreviewOpen(true)}
+              >
+                <Printer size={15} />
+              </button>
+              <button
+                className="icon-action-flat"
+                title="文件详情元信息 (Ctrl+I)"
+                type="button"
+                onClick={() => setIsFileInfoOpen(true)}
+              >
+                <Info size={15} />
+              </button>
+            </>
+          )}
+          <button
+            className="icon-action-flat"
+            title="最近打开 (History)"
+            type="button"
+            onClick={() => setIsRecentOpen(true)}
+          >
+            <History size={15} />
+          </button>
+          <button
+            className="icon-action-flat"
+            title="快捷命令面板 (Ctrl+K)"
+            type="button"
+            onClick={() => {
+              setCommandPaletteQuery('');
+              setCommandPaletteIndex(0);
+              setIsCommandPaletteOpen(true);
+            }}
+          >
+            <Command size={15} />
+          </button>
+          <button
+            className="icon-action-flat"
+            title="设置与系统安全诊断 (Ctrl+,)"
+            type="button"
+            onClick={() => {
+              void loadSecurityDiagnostics();
+              setIsSettingsOpen(true);
+            }}
+          >
+            <Settings size={15} />
+          </button>
+          <button
+            className="icon-action-flat theme-action"
+            data-testid="theme-toggle"
+            type="button"
+            onClick={() => setTheme((value) => (value === 'light' ? 'dark' : 'light'))}
+          >
+            {theme === 'light' ? <Moon aria-hidden="true" size={15} /> : <Sun aria-hidden="true" size={15} />}
+            <span>{theme === 'light' ? '深色' : '浅色'}</span>
+          </button>
+        </div>
+      </header>
+
+      {/* 工作区和内容区域 */}
+      <div className={`workspace ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
+        {/* 侧边栏 */}
+        <aside
+          className="sidebar-panel outline-panel"
+          data-testid="sidebar-panel"
+          hidden={!sidebarOpen}
+          aria-label="侧栏"
+        >
+          <div className="sidebar-tabs-header" role="tablist" aria-label="侧栏视图">
+            <button
+              aria-selected={sidebarTab === 'workspace'}
+              className={`sidebar-tab-btn ${sidebarTab === 'workspace' ? 'active' : ''}`}
+              data-testid="sidebar-tab-workspace"
+              role="tab"
+              type="button"
+              onClick={() => setSidebarTab('workspace')}
+            >
+              <FolderTree aria-hidden="true" size={14} />
+              <span>工作区</span>
+            </button>
+            <button
+              aria-selected={sidebarTab === 'outline'}
+              className={`sidebar-tab-btn ${sidebarTab === 'outline' ? 'active' : ''}`}
+              data-testid="sidebar-tab-outline"
+              role="tab"
+              type="button"
+              onClick={() => setSidebarTab('outline')}
+            >
+              <ListTree aria-hidden="true" size={14} />
+              <span>大纲</span>
+            </button>
+          </div>
+
+          <div className="sidebar-tab-content-wrapper">
+            {sidebarTab === 'workspace' && (
+              <section className="workspace-panel" data-testid="workspace-panel">
+                <div className="outline-heading">
+                  <FolderTree aria-hidden="true" size={15} />
+                  <span>工作区</span>
+                </div>
+                <div className="workspace-controls">
+                  {(workspaceState.status === 'empty' || workspaceState.status === 'error') && (
+                    <button className="sidebar-action" type="button" onClick={openWorkspaceFolder}>
+                      打开文件夹
+                    </button>
+                  )}
+                  {workspaceState.status === 'ready' && (
+                    <div className="workspace-filter-container">
+                      <Search aria-hidden="true" className="filter-icon" size={13} />
+                      <input
+                        aria-label="筛选文件"
+                        data-testid="workspace-filter"
+                        placeholder="筛选文件"
+                        type="search"
+                        value={workspaceFilter}
+                        onChange={(event) => setWorkspaceFilter(event.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+                {workspaceState.status === 'empty' && <div className="sidebar-note">未打开文件夹</div>}
+                {workspaceState.status === 'loading' && <div className="sidebar-note">正在读取文件夹</div>}
+                {workspaceState.status === 'error' && (
+                  <div className="sidebar-error" role="alert">
+                    {workspaceState.message}
+                  </div>
+                )}
+                {workspaceState.status === 'ready' && (
+                  <div className="workspace-content">
+                    <div className="workspace-name" title={workspaceState.workspace.path}>
+                      {workspaceState.workspace.name}
+                    </div>
+                    {workspaceState.workspace.truncated && (
+                      <div className="workspace-limit" data-testid="workspace-limit">
+                        已限制显示 {workspaceState.workspace.limit} 个 Markdown 文件
+                      </div>
+                    )}
+                    {filteredWorkspaceNodes.length > 0 ? (
+                      renderWorkspaceNodes(filteredWorkspaceNodes)
+                    ) : (
+                      <div className="sidebar-note">无匹配文件</div>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {sidebarTab === 'outline' && (
+              <section className="outline-section">
+                <div className="outline-heading">
+                  <ListTree aria-hidden="true" size={15} />
+                  <span>大纲</span>
+                </div>
+                {outline.length > 0 ? (
+                  <ol className="outline-list">
+                    {outline.map((entry) => (
+                      <li key={entry.id} style={{ '--level': entry.level } as CSSProperties}>
+                        <button
+                          aria-current={activeHeadingId === entry.id ? 'true' : undefined}
+                          data-level={entry.level}
+                          data-testid="outline-item"
+                          title={entry.text}
+                          type="button"
+                          onClick={() => scrollToHeading(entry.id)}
+                        >
+                          {entry.text}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <div className="sidebar-note">无大纲</div>
+                )}
+              </section>
+            )}
+          </div>
+        </aside>
+
+        {/* 中央主文档视图 */}
+        <section
+          className="content-surface"
+          data-testid="reader-main"
+          ref={readerRef}
+          aria-live="polite"
+          onScroll={updateActiveHeadingFromScroll}
+        >
+          {/* 空状态视图 */}
+          {viewState.status === 'empty' && (
+            <div className="empty-state">
+              <h1>未打开文件</h1>
+              <p>请选择 .md 或 .markdown 文件。</p>
+
+              <button className="secondary-action" type="button" onClick={openMarkdownFile}>
+                <FolderOpen aria-hidden="true" size={16} />
+                <span>打开文件</span>
+              </button>
+              {recentItems.length > 0 && (
+                <div className="recent-list" data-testid="recent-list">
+                  <strong>最近打开</strong>
+                  {recentItems.slice(0, 5).map((item) => (
+                    <button
+                      className="recent-item"
+                      data-recent-type={item.type}
+                      data-testid="recent-item"
+                      key={`${item.type}:${item.path}`}
+                      title={item.path}
+                      type="button"
+                      onClick={() => openRecentItem(item)}
+                    >
+                      <span>{item.name}</span>
+                      <small>{item.exists ? item.path : '文件不存在'}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 正在加载视图 */}
+          {viewState.status === 'loading' && (
+            <div className="loading-state">正在打开文件</div>
+          )}
+
+          {/* 加载失败视图 */}
+          {viewState.status === 'error' && (
+            <div className="error-state" role="alert">
+              <h1>打开失败</h1>
+              <p>{viewState.message}</p>
+              <button className="secondary-action" type="button" onClick={openMarkdownFile}>
+                <FolderOpen aria-hidden="true" size={16} />
+                <span>重新选择</span>
+              </button>
+            </div>
+          )}
+
+          {/* 文档载入成功 */}
+          {viewState.status === 'ready' && (
+            <article className="document-view">
+              <div className="document-meta">
+                <strong>{viewState.document.name}</strong>
+                <span>{viewState.document.path}</span>
+                <span>{fileStatus.modifiedAt}</span>
+                <span data-testid="dirty-indicator">
+                  {isDirty ? '未保存' : '已保存'}
+                </span>
+              </div>
+
+              {saveState.status === 'error' && (
+                <div className="document-render-error" data-testid="save-error" role="alert">
+                  {saveState.message}
+                </div>
+              )}
+
+              {renderedMarkdown?.status === 'empty' && (
+                <div className="document-empty" data-testid="markdown-empty">
+                  文件为空
+                </div>
+              )}
+
+              {renderedMarkdown?.status === 'error' && (
+                <div className="document-render-error" role="alert">
+                  {renderedMarkdown.message}
+                </div>
+              )}
+
+              {renderedMarkdown?.status === 'ready' && (
+                <>
+                  {editorMode === 'edit' ? (
+                    <div className="editor-split" data-testid="editor-split">
+                      <textarea
+                        className="source-editor"
+                        data-testid="source-editor"
+                        spellCheck={false}
+                        value={draftContent}
+                        onChange={(event) => {
+                          setDraftContent(event.target.value);
+                          setSaveState({ status: 'idle' });
+                        }}
+                      />
+                      <div
+                        className="markdown-body editor-preview"
+                        data-testid="editor-preview"
+                        dangerouslySetInnerHTML={{ __html: searchResult.html }}
+                        onClick={handleMarkdownClick}
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      className="markdown-body"
+                      data-testid="markdown-body"
+                      dangerouslySetInnerHTML={{ __html: searchResult.html }}
+                      onClick={handleMarkdownClick}
+                    />
+                  )}
+                </>
+              )}
+            </article>
+          )}
+        </section>
+      </div>
+
+      {/* 底部只读状态栏 */}
+      <footer className="status-bar" data-testid="status-bar">
+        <span data-testid="status-file-name">{fileStatus.name}</span>
+        <span data-testid="status-file-path">{fileStatus.path}</span>
+        <span data-testid="status-modified-time">{fileStatus.modifiedAt}</span>
+        <span data-testid="status-word-count">{fileStatus.words}</span>
+      </footer>
+
+      {/* ========================================================================= */}
+      {/* 二级悬浮界面 / Modals / Drawers */}
+      {/* ========================================================================= */}
+
+      {/* 1. 快捷命令面板 (Command Palette) */}
+      {isCommandPaletteOpen && (
+        <div className="modal-overlay" onClick={() => setIsCommandPaletteOpen(false)}>
+          <div className="command-palette-card" onClick={(e) => e.stopPropagation()}>
+            <div className="palette-input-wrapper">
+              <Command size={16} className="palette-search-icon" />
+              <input
+                autoFocus
+                placeholder="输入命令快速执行操作..."
+                type="text"
+                value={commandPaletteQuery}
+                onChange={(e) => {
+                  setCommandPaletteQuery(e.target.value);
+                  setCommandPaletteIndex(0);
+                }}
+                onKeyDown={(e) => handleCommandPaletteKeyDown(e.nativeEvent)}
+              />
+              <span className="palette-esc-badge">ESC</span>
+            </div>
+            <div className="palette-results-list">
+              {filteredCommands.length > 0 ? (
+                filteredCommands.map((cmd, idx) => (
+                  <button
+                    className={`palette-item-btn ${commandPaletteIndex === idx ? 'focused' : ''} ${cmd.disabled ? 'disabled' : ''}`}
+                    disabled={cmd.disabled}
+                    key={cmd.id}
+                    type="button"
+                    onClick={() => {
+                      if (!cmd.disabled) {
+                        setIsCommandPaletteOpen(false);
+                        cmd.action();
+                      }
+                    }}
+                  >
+                    <div className="palette-item-left">
+                      {cmd.icon}
+                      <span>{cmd.name}</span>
+                    </div>
+                    {cmd.shortcut && <kbd className="palette-item-kbd">{cmd.shortcut}</kbd>}
+                  </button>
+                ))
+              ) : (
+                <div className="palette-empty-note">未匹配到任何命令。</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. 设置与安全诊断抽屉 (Settings Drawer) */}
+      {isSettingsOpen && (
+        <div className="modal-overlay" onClick={() => setIsSettingsOpen(false)}>
+          <div className="settings-drawer-card" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-header">
+              <div className="drawer-title-group">
+                <Settings size={18} />
+                <h2>设置与安全诊断</h2>
+              </div>
+              <button className="drawer-close-btn" type="button" onClick={() => setIsSettingsOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="drawer-scroll-content">
+              <div className="settings-section">
+                <h3>外观主题</h3>
+                <div className="theme-selector-grid">
+                  <button
+                    className={`theme-pick-btn ${theme === 'light' ? 'selected' : ''}`}
+                    type="button"
+                    onClick={() => setTheme('light')}
+                  >
+                    <Sun size={16} />
+                    <span>浅色</span>
+                  </button>
+                  <button
+                    className={`theme-pick-btn ${theme === 'dark' ? 'selected' : ''}`}
+                    type="button"
+                    onClick={() => setTheme('dark')}
+                  >
+                    <Moon size={16} />
+                    <span>深色</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <h3>安全环境诊断报告</h3>
+                {securityDiagnostics ? (
+                  <div className="security-diagnostics-grid">
+                    <div className="security-diagnostic-item">
+                      <span>上下文隔离 (Context Isolation)</span>
+                      <strong className={securityDiagnostics.contextIsolation ? 'status-safe' : 'status-danger'}>
+                        {securityDiagnostics.contextIsolation ? '已启用' : '未启用'}
+                      </strong>
+                    </div>
+                    <div className="security-diagnostic-item">
+                      <span>Node.js 集成 (Node Integration)</span>
+                      <strong className={!securityDiagnostics.nodeIntegration ? 'status-safe' : 'status-danger'}>
+                        {!securityDiagnostics.nodeIntegration ? '已禁用' : '已启用'}
+                      </strong>
+                    </div>
+                    <div className="security-diagnostic-item">
+                      <span>沙盒化 (Sandbox)</span>
+                      <strong className={securityDiagnostics.sandbox ? 'status-safe' : 'status-danger'}>
+                        {securityDiagnostics.sandbox ? '已启用' : '未启用'}
+                      </strong>
+                    </div>
+                    <div className="security-diagnostic-item">
+                      <span>网页安全限制 (Web Security)</span>
+                      <strong className={securityDiagnostics.webSecurity ? 'status-safe' : 'status-danger'}>
+                        {securityDiagnostics.webSecurity ? '已启用' : '未启用'}
+                      </strong>
+                    </div>
+                    <div className="security-diagnostic-item">
+                      <span>Webview 标签 (Webview Tag)</span>
+                      <strong className={!securityDiagnostics.webviewTag ? 'status-safe' : 'status-danger'}>
+                        {!securityDiagnostics.webviewTag ? '已禁用' : '已启用'}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="diagnostics-loading">
+                    <span>获取诊断报告中...</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="settings-section">
+                <h3>IPC 信道白名单</h3>
+                {securityDiagnostics?.allowedIpcChannels ? (
+                  <div className="ipc-whitelist-list">
+                    {securityDiagnostics.allowedIpcChannels.map((channel) => (
+                      <code className="ipc-channel-tag" key={channel}>{channel}</code>
+                    ))}
+                  </div>
+                ) : (
+                  <small className="muted-text">未加载信道信息</small>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. 文件元信息模态窗口 (File Info Modal) */}
+      {isFileInfoOpen && viewState.status === 'ready' && (
+        <div className="modal-overlay" onClick={() => setIsFileInfoOpen(false)}>
+          <div className="file-info-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <Info size={16} />
+                <h2>文件详细信息</h2>
+              </div>
+              <button className="modal-close-btn" type="button" onClick={() => setIsFileInfoOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="file-info-body">
+              <div className="info-row">
+                <span className="info-label">文件名</span>
+                <span className="info-value text-highlight">{viewState.document.name}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-label">绝对路径</span>
+                <span className="info-value code-path-value">{viewState.document.path}</span>
+              </div>
+              <div className="info-row-grid">
+                <div className="info-sub-item">
+                  <span className="info-label">大小</span>
+                  <span className="info-value">{byteCountLabel(viewState.document.size)}</span>
+                </div>
+                <div className="info-sub-item">
+                  <span className="info-label">字数统计</span>
+                  <span className="info-value">{documentWordCount(draftContent)} 字</span>
+                </div>
+                <div className="info-sub-item">
+                  <span className="info-label">字符数</span>
+                  <span className="info-value">{draftContent.length}</span>
+                </div>
+              </div>
+              <div className="info-row">
+                <span className="info-label">更新时间</span>
+                <span className="info-value">{formatModifiedTime(viewState.document.modifiedAt)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. 最近打开记录抽屉 (Recent Drawer) */}
+      {isRecentOpen && (
+        <div className="modal-overlay" onClick={() => setIsRecentOpen(false)}>
+          <div className="settings-drawer-card" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-header">
+              <div className="drawer-title-group">
+                <History size={18} />
+                <h2>最近打开</h2>
+              </div>
+              <button className="drawer-close-btn" type="button" onClick={() => setIsRecentOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="drawer-scroll-content">
+              {recentItems.length > 0 ? (
+                <div className="drawer-recent-list">
+                  {recentItems.map((item) => (
+                    <button
+                      className="recent-drawer-item-btn"
+                      key={`${item.type}:${item.path}`}
+                      title={item.path}
+                      type="button"
+                      disabled={!item.exists}
+                      onClick={() => {
+                        setIsRecentOpen(false);
+                        void openRecentItem(item);
+                      }}
+                    >
+                      <div className="recent-item-icon-wrapper">
+                        {item.type === 'folder' ? <FolderTree size={16} /> : <FileText size={16} />}
+                      </div>
+                      <div className="recent-item-info">
+                        <span className="recent-item-name">{item.name}</span>
+                        <span className="recent-item-path">{item.path}</span>
+                      </div>
+                      {!item.exists && <span className="recent-exists-badge">已失效</span>}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="drawer-empty-state">
+                  <p>暂无任何最近打开的文件或文件夹记录。</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. 图片大图预览 (Lightbox) */}
+      {lightboxImageUrl && (
+        <div className="modal-overlay lightbox-overlay" onClick={() => setLightboxImageUrl(null)}>
+          <button className="lightbox-close-btn" type="button" onClick={() => setLightboxImageUrl(null)}>
+            <X size={24} />
+          </button>
+          <div className="lightbox-image-container" onClick={(e) => e.stopPropagation()}>
+            <img src={lightboxImageUrl} alt="图片预览" />
+          </div>
+        </div>
+      )}
+
+      {/* 6. 外部跳转安全确认弹层 (Link Confirmation Modal) */}
+      {pendingExternalUrl && (
+        <div className="modal-overlay" onClick={() => setPendingExternalUrl(null)}>
+          <div className="link-confirm-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-alert-header">
+              <AlertTriangle size={20} className="warning-icon" />
+              <h2>安全提示</h2>
+            </div>
+            <p className="link-alert-text">您即将访问外部链接，确认离开此应用程序吗？</p>
+            <div className="target-url-card">
+              <span className="target-url-text">{pendingExternalUrl}</span>
+            </div>
+            <div className="link-alert-actions">
+              <button className="secondary-flat-btn" type="button" onClick={() => setPendingExternalUrl(null)}>
+                取消
+              </button>
+              <button className="primary-accent-btn alert-action-btn danger-btn" type="button" onClick={() => void handleConfirmExternalLink()}>
+                继续访问
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. 打印与 PDF 预览弹层 (Print Preview Modal) */}
+      {isPrintPreviewOpen && viewState.status === 'ready' && (
+        <div className="modal-overlay" onClick={() => setIsPrintPreviewOpen(false)}>
+          <div className="print-preview-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <Printer size={16} />
+                <h2>打印与导出 PDF 预览</h2>
+              </div>
+              <button className="modal-close-btn" type="button" onClick={() => setIsPrintPreviewOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="print-preview-body">
+              <p>系统已配置标准打印排版。点击下方按钮后，将唤出系统内置打印预览，您可以直接打印文件或存为 PDF 格式电子书。</p>
+              <div className="print-config-tip">
+                <span>提示：打印范围仅包含文档排版区 (页眉/状态栏/左侧栏会自动隐藏)</span>
+              </div>
+            </div>
+            <div className="print-preview-actions">
+              <button className="secondary-flat-btn" type="button" onClick={() => setIsPrintPreviewOpen(false)}>
+                取消
+              </button>
+              <button
+                className="primary-accent-btn"
+                type="button"
+                onClick={() => {
+                  setIsPrintPreviewOpen(false);
+                  window.print();
+                }}
+              >
+                开始打印/导出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}

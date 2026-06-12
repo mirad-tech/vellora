@@ -1,0 +1,38 @@
+import { describe, expect, test } from 'vitest';
+
+import { SECURE_WEB_PREFERENCES, createSecurityDiagnostics } from './security';
+
+describe('Electron security defaults', () => {
+  test('renderer runs isolated, sandboxed, and without Node integration', () => {
+    expect(SECURE_WEB_PREFERENCES.contextIsolation).toBe(true);
+    expect(SECURE_WEB_PREFERENCES.nodeIntegration).toBe(false);
+    expect(SECURE_WEB_PREFERENCES.sandbox).toBe(true);
+    expect(SECURE_WEB_PREFERENCES.webSecurity).toBe(true);
+    expect(SECURE_WEB_PREFERENCES.webviewTag).toBe(false);
+  });
+
+  test('diagnostics report the same security boundary exposed to renderer', () => {
+    expect(createSecurityDiagnostics()).toEqual({
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      allowedIpcChannels: [
+        'dialog:openMarkdownFile',
+        'document:openMarkdownByPath',
+        'document:openRequested',
+        'document:resolveMarkdownImage',
+        'document:openMarkdownLink',
+        'dialog:openWorkspaceFolder',
+        'workspace:openByPath',
+        'recent:list',
+        'document:saveMarkdownFile',
+        'document:openDefaultEditor',
+        'editor:setUnsavedChanges',
+        'editor:confirmDiscardChanges',
+        'app:getSecurityDiagnostics'
+      ]
+    });
+  });
+});
