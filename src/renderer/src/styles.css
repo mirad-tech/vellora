@@ -149,27 +149,6 @@ input {
   gap: 8px;
 }
 
-.app-logo-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: default;
-  padding: 4px 8px;
-  border-radius: 6px;
-  margin-right: 8px;
-}
-
-.app-logo-group .toolbar-mark {
-  color: var(--accent);
-}
-
-.app-logo-group .app-name-label {
-  font-weight: 750;
-  font-size: 14px;
-  letter-spacing: 0.5px;
-  color: var(--text);
-}
-
 .toolbar-separator {
   width: 1px;
   height: 18px;
@@ -815,29 +794,6 @@ input {
   padding: 40px 24px 80px;
 }
 
-.document-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.document-meta strong {
-  font-size: 20px;
-  font-weight: 750;
-  letter-spacing: -0.5px;
-  color: var(--text);
-  line-height: 1.3;
-}
-
-.document-meta span {
-  word-break: break-all;
-}
-
 .toast-error-banner,
 .document-render-error {
   padding: 10px 14px;
@@ -902,6 +858,23 @@ input {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.quick-edit-body [data-edit-block-id] {
+  border-radius: 4px;
+  cursor: text;
+  outline: 1px dashed transparent;
+  outline-offset: 3px;
+  transition: background-color 0.15s ease, outline-color 0.15s ease;
+}
+
+.quick-edit-body [data-edit-block-id]:hover {
+  background: color-mix(in srgb, var(--accent-bg) 42%, transparent);
+}
+
+.quick-edit-body [data-edit-block-id]:focus {
+  background: color-mix(in srgb, var(--accent-bg) 65%, transparent);
+  outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 /* Markdown typography rendering */
@@ -1739,7 +1712,6 @@ input {
   .loading-state,
   .error-state,
   .modal-overlay,
-  .document-meta,
   .sidebar-tabs-header,
   .workspace-controls,
   .source-editor {
@@ -1794,7 +1766,6 @@ input {
     gap: 8px;
   }
 
-  .app-logo-group .app-name-label,
   .toolbar-status,
   .icon-action span,
   .primary-action span {
@@ -1832,10 +1803,6 @@ input {
 
   .content-surface {
     padding: 12px;
-  }
-
-  .document-meta {
-    display: none;
   }
 
   .markdown-body {
