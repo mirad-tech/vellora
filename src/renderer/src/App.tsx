@@ -205,6 +205,7 @@ export function App() {
   const readerRef = useRef<HTMLElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const menuActionHandlerRef = useRef<(action: string) => void>(() => {});
+  const hasQuickEditPendingRef = useRef(false);
   const quickEditPendingContentRef = useRef<string | null>(null);
   const quickEditSessionRef = useRef<QuickEditSession | null>(null);
 
@@ -228,6 +229,7 @@ export function App() {
     setImageResolutions({});
     setEditorMode('read');
     setHasQuickEditPending(false);
+    hasQuickEditPendingRef.current = false;
     quickEditPendingContentRef.current = null;
     quickEditSessionRef.current = null;
     setSaveState({ status: 'idle' });
@@ -247,7 +249,7 @@ export function App() {
   async function confirmBeforeReplacingDocument(): Promise<boolean> {
     const currentContent = commitActiveQuickEditBlock();
     const dirty = viewState.status === 'ready' && currentContent !== viewState.document.content;
-    if (!dirty && !hasQuickEditPending) return true;
+    if (!dirty && !hasQuickEditPending && !hasQuickEditPendingRef.current) return true;
     const result = await window.mdViewer.confirmDiscardChanges();
     return result.action === 'discard';
   }
@@ -515,6 +517,19 @@ export function App() {
     return applyEditableBlockChange(content, block, quickEditElementText(element));
   }
 
+  function updateQuickEditPendingForContent(nextContent: string): void {
+    const hasPendingContent = viewState.status === 'ready' && nextContent !== viewState.document.content;
+    if (hasQuickEditPendingRef.current !== hasPendingContent) {
+      void window.mdViewer.setUnsavedChanges(hasPendingContent);
+    }
+    hasQuickEditPendingRef.current = hasPendingContent;
+  }
+
+  function clearQuickEditPending(): void {
+    hasQuickEditPendingRef.current = false;
+    setHasQuickEditPending(false);
+  }
+
   function stageQuickEditElement(element: HTMLElement): string {
     const blockId = element.getAttribute('data-edit-block-id');
     if (!blockId) return quickEditPendingContentRef.current ?? draftContent;
@@ -534,6 +549,8 @@ export function App() {
     if (nextContent !== draftContent) {
       setDraftContent(nextContent);
     }
+    quickEditPendingContentRef.current = null;
+    clearQuickEditPending();
     quickEditSessionRef.current = null;
     setSaveState({ status: 'idle' });
     return nextContent;
@@ -541,7 +558,6 @@ export function App() {
 
   function commitQuickEditElement(element: HTMLElement): string {
     const nextContent = stageQuickEditElement(element);
-    setHasQuickEditPending(false);
     return commitQuickEditContent(nextContent);
   }
 
@@ -551,7 +567,7 @@ export function App() {
     const editElement = getQuickEditElement(activeElement);
     if (editElement) return commitQuickEditElement(editElement);
     const pendingContent = quickEditPendingContentRef.current;
-    return pendingContent ? commitQuickEditContent(pendingContent) : draftContent;
+    return pendingContent !== null ? commitQuickEditContent(pendingContent) : draftContent;
   }
 
   function setEditorModeSafely(nextMode: EditorMode): void {
@@ -564,15 +580,15 @@ export function App() {
   function handleQuickEditInput(event: FormEvent<HTMLDivElement>): void {
     const editElement = getQuickEditElement(event.target);
     if (!editElement) return;
-    stageQuickEditElement(editElement);
-    setHasQuickEditPending(true);
-    setSaveState({ status: 'idle' });
+    const nextContent = stageQuickEditElement(editElement);
+    updateQuickEditPendingForContent(nextContent);
   }
 
   function handleQuickEditBlur(event: FocusEvent<HTMLDivElement>): void {
     const editElement = getQuickEditElement(event.target);
     if (!editElement) return;
-    commitQuickEditElement(editElement);
+    const nextContent = stageQuickEditElement(editElement);
+    updateQuickEditPendingForContent(nextContent);
   }
 
   function handleQuickEditKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
@@ -646,8 +662,9 @@ export function App() {
 
     const contentToSave = commitActiveQuickEditBlock();
     if (contentToSave === viewState.document.content) {
-      setHasQuickEditPending(false);
+      clearQuickEditPending();
       quickEditPendingContentRef.current = null;
+      void window.mdViewer.setUnsavedChanges(false);
       return;
     }
 
@@ -656,7 +673,7 @@ export function App() {
 
     if (result.ok) {
       setDraftContent(result.document.content);
-      setHasQuickEditPending(false);
+      clearQuickEditPending();
       quickEditPendingContentRef.current = null;
       quickEditSessionRef.current = null;
       setViewState({ status: 'ready', document: result.document });

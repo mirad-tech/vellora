@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 
 type EditFixture = {
   filePath: string;
+  pdfPath: string;
   statePath: string;
 };
 
@@ -17,6 +18,7 @@ async function createEditFixture(): Promise<EditFixture> {
 
   return {
     filePath,
+    pdfPath: join(dir, 'export.pdf'),
     statePath: join(dir, 'state')
   };
 }
@@ -121,6 +123,27 @@ test('quick edits rendered text blocks and saves the same file', async () => {
   await saveFromNativeMenu(electronApp);
 
   await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 更新标题\n\n更新正文');
+
+  await closeAppDiscardingDrafts(electronApp);
+});
+
+test('quick edit saves complete text typed with the real keyboard', async () => {
+  const fixture = await createEditFixture();
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+
+  const paragraph = page.locator('[data-edit-block-kind="paragraph"]').first();
+  await paragraph.click();
+  await expect(paragraph).toBeFocused();
+
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('逐字键盘正文');
+
+  await saveFromNativeMenu(electronApp);
+
+  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 原始\n\n逐字键盘正文');
 
   await closeAppDiscardingDrafts(electronApp);
 });
@@ -232,6 +255,54 @@ test('opens the current file in the default editor from main process', async () 
       })
     )
     .toBe(fixture.filePath);
+
+  await electronApp.close();
+});
+
+test('exports the current window as a PDF from the native menu', async () => {
+  const fixture = await createEditFixture();
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await electronApp.evaluate(
+    async ({ dialog }, pdfPath) => {
+      const state = globalThis as typeof globalThis & {
+        __stage7SaveDialogOptions?: unknown;
+      };
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        const options = args.length === 1 ? args[0] : args[1];
+        state.__stage7SaveDialogOptions = options;
+        return {
+          canceled: false,
+          filePath: pdfPath
+        };
+      }) as typeof dialog.showSaveDialog;
+    },
+    fixture.pdfPath
+  );
+
+  await openFixture(page);
+  await clickNativeMenuItem(electronApp, 'File', 'Export as PDF');
+
+  await expect
+    .poll(async () => {
+      try {
+        const pdfData = await readFile(fixture.pdfPath);
+        return pdfData.subarray(0, 4).toString('utf8');
+      } catch {
+        return '';
+      }
+    })
+    .toBe('%PDF');
+
+  const saveDialogOptions = await electronApp.evaluate(() => {
+    const state = globalThis as typeof globalThis & { __stage7SaveDialogOptions?: unknown };
+    return state.__stage7SaveDialogOptions;
+  });
+  expect(saveDialogOptions).toMatchObject({
+    title: '导出 PDF',
+    defaultPath: 'document.pdf'
+  });
 
   await electronApp.close();
 });

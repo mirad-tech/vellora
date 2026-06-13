@@ -151,6 +151,38 @@ test('sidebar can toggle without hiding the document', async () => {
   await electronApp.close();
 });
 
+test('command palette, settings diagnostics, and file info open in the window', async () => {
+  const filePath = await createReadingFixture();
+  const electronApp = await launchWithSelectedFile(filePath);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+
+  await clickNativeMenuItem(electronApp, 'Edit', 'Command Palette');
+  await expect(page.locator('.command-palette-card')).toBeVisible();
+  await page.locator('.command-palette-card input').fill('元数据');
+  await expect(page.locator('.palette-item-btn')).toContainText('查看文档元数据详情');
+  await page.keyboard.press('Enter');
+
+  await expect(page.getByRole('heading', { name: '文件详细信息' })).toBeVisible();
+  await expect(page.locator('.file-info-modal-card')).toContainText('阅读 界面 验证.md');
+  await expect(page.locator('.file-info-modal-card')).toContainText(filePath);
+  await expect(page.locator('.file-info-modal-card')).toContainText('字符数');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.file-info-modal-card')).toBeHidden();
+
+  await clickNativeMenuItem(electronApp, 'View', 'Settings');
+  await expect(page.getByRole('heading', { name: '设置与安全诊断' })).toBeVisible();
+  await expect(page.locator('.settings-drawer-card')).toContainText('上下文隔离 (Context Isolation)');
+  await expect(page.locator('.settings-drawer-card')).toContainText('Node.js 集成 (Node Integration)');
+  await expect(page.locator('.settings-drawer-card')).toContainText('已启用');
+  await expect(page.locator('.settings-drawer-card')).toContainText('已禁用');
+  await expect(page.locator('.settings-drawer-card')).toContainText('menu-action');
+  await expect(page.locator('.settings-drawer-card')).toContainText('export-to-pdf');
+
+  await electronApp.close();
+});
+
 test('wide and narrow windows keep readable content without horizontal overflow', async () => {
   const filePath = await createReadingFixture();
   const electronApp = await launchWithSelectedFile(filePath);

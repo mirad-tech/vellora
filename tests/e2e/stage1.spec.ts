@@ -60,9 +60,11 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
   expect(boundary.fsAccess).toBe('require-unavailable');
   expect(boundary.apiKeys).toEqual([
     'confirmDiscardChanges',
+    'exportToPdf',
     'getRecentItems',
     'getSecurityDiagnostics',
     'onMarkdownOpenRequested',
+    'onMenuAction',
     'openDefaultEditor',
     'openDroppedMarkdownFile',
     'openMarkdownByPath',
@@ -93,6 +95,8 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
       'document:openDefaultEditor',
       'editor:setUnsavedChanges',
       'editor:confirmDiscardChanges',
+      'menu-action',
+      'export-to-pdf',
       'app:getSecurityDiagnostics'
     ]
   });
