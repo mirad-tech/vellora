@@ -91,12 +91,6 @@ function formatModifiedTime(value: number, locale: string): string {
   }).format(new Date(value));
 }
 
-function byteCountLabel(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function documentWordCount(content: string): number {
   const trimmed = content.trim();
   if (!trimmed) return 0;
@@ -503,7 +497,7 @@ export function App() {
     if (!searchQuery.trim()) return '';
     if (searchResult.count === 0) return t.search.noResults;
     return `${searchResult.activeIndex + 1}/${searchResult.count}`;
-  }, [searchQuery, searchResult]);
+  }, [searchQuery, searchResult, t]);
 
   const missingImageSources = useMemo(
     () =>
@@ -1451,7 +1445,7 @@ export function App() {
               </div>
 
               <div className="settings-section">
-                <h3>Language / 语言</h3>
+                <h3>{t.settings.language}</h3>
                 <div className="theme-selector-grid">
                   <button
                     className={`theme-pick-btn ${lang === 'en' ? 'selected' : ''}`}
