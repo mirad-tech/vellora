@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { App } from './App';
 import { I18nProvider } from './i18n/I18nContext';
 import type { MdViewerApi } from '../../preload/types';
+import type { MarkdownDocument } from '../../shared/documentTypes';
 
 type TestHarness = {
   container: HTMLDivElement;
@@ -20,6 +21,17 @@ let currentApi:
       getMenuActionHandler: () => ((action: string) => void) | null;
     })
   | null = null;
+
+function createDocument(overrides: Partial<MarkdownDocument> = {}): MarkdownDocument {
+  return {
+    path: 'G:\\docs\\sample.md',
+    name: 'sample.md',
+    content: '# Sample',
+    modifiedAt: 1_700_000_000_000,
+    size: 8,
+    ...overrides
+  };
+}
 
 function createApi(): MdViewerApi & {
   getMenuActionHandler: () => ((action: string) => void) | null;
@@ -102,6 +114,7 @@ async function renderApp(): Promise<TestHarness> {
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  localStorage.clear();
   currentApi = createApi();
   window.mdViewer = currentApi;
 });
@@ -115,6 +128,7 @@ afterEach(async () => {
   currentHarness = null;
   currentApi = null;
   document.body.innerHTML = '';
+  localStorage.clear();
   delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
   vi.restoreAllMocks();
 });
@@ -138,5 +152,81 @@ describe('App native menu integration', () => {
     });
 
     expect(container.querySelector('[data-testid="app-shell"]')?.getAttribute('data-theme')).toBe('dark');
+  });
+
+  test('shows the source editor for an empty Markdown document', async () => {
+    currentApi!.openMarkdownFile = vi.fn().mockResolvedValue({
+      ok: true,
+      document: createDocument({
+        name: 'empty.md',
+        path: 'G:\\docs\\empty.md',
+        content: '',
+        size: 0
+      })
+    });
+
+    const { container, getMenuActionHandler } = await renderApp();
+    const handler = getMenuActionHandler();
+
+    await act(async () => {
+      handler?.('open-file');
+    });
+
+    await act(async () => {
+      handler?.('toggle-source-edit');
+    });
+
+    expect(container.querySelector('[data-testid="source-editor"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="markdown-empty"]')).toBeNull();
+  });
+
+  test('does not show an error when PDF export is canceled in English', async () => {
+    currentApi!.openMarkdownFile = vi.fn().mockResolvedValue({
+      ok: true,
+      document: createDocument()
+    });
+    currentApi!.exportToPdf = vi.fn().mockResolvedValue({
+      ok: false,
+      code: 'CANCELED',
+      message: '已取消导出。'
+    });
+
+    const { container, getMenuActionHandler } = await renderApp();
+    const handler = getMenuActionHandler();
+
+    await act(async () => {
+      handler?.('open-file');
+    });
+
+    await act(async () => {
+      handler?.('export-pdf');
+    });
+
+    expect(container.querySelector('[data-testid="save-error"]')).toBeNull();
+  });
+
+  test('shows a PDF export failure message from the native menu', async () => {
+    currentApi!.openMarkdownFile = vi.fn().mockResolvedValue({
+      ok: true,
+      document: createDocument()
+    });
+    currentApi!.exportToPdf = vi.fn().mockResolvedValue({
+      ok: false,
+      code: 'EXPORT_FAILED',
+      message: 'PDF export failed.'
+    });
+
+    const { container, getMenuActionHandler } = await renderApp();
+    const handler = getMenuActionHandler();
+
+    await act(async () => {
+      handler?.('open-file');
+    });
+
+    await act(async () => {
+      handler?.('export-pdf');
+    });
+
+    expect(container.querySelector('[data-testid="save-error"]')?.textContent).toContain('PDF export failed.');
   });
 });

@@ -36,6 +36,30 @@ describe('Markdown open dialog flow', () => {
     expect(opts.properties).toEqual(['openDirectory']);
   });
 
+  test('returns localized English cancel messages', async () => {
+    await expect(
+      openMarkdownFromDialog(async () => ({
+        canceled: true,
+        filePaths: []
+      }), 'en')
+    ).resolves.toEqual({
+      ok: false,
+      code: 'CANCELED',
+      message: 'No file selected.'
+    });
+
+    await expect(
+      openWorkspaceFromDialog(async () => ({
+        canceled: true,
+        filePaths: []
+      }), {}, 'en')
+    ).resolves.toEqual({
+      ok: false,
+      code: 'CANCELED',
+      message: 'No folder selected.'
+    });
+  });
+
   test('reads the file selected by the dialog through controlled file access', async () => {
     const filePath = await makeMarkdownFixture();
 

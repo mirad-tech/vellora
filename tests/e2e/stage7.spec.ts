@@ -152,10 +152,21 @@ async function clickNativeMenuItem(
 ): Promise<void> {
   await electronApp.evaluate(
     ({ BrowserWindow, Menu }, labels) => {
-      const normalize = (value: string) => value.replaceAll('&', '');
+      const aliases: Record<string, string[]> = {
+        File: ['File', '文件'],
+        View: ['View', '查看'],
+        Save: ['Save', '保存'],
+        'Source Edit': ['Source Edit', '源码编辑'],
+        'Open in Default Editor': ['Open in Default Editor', '用默认编辑器打开'],
+        'Export as PDF': ['Export as PDF', '导出为 PDF']
+      };
+      const normalize = (value: string) => value.replaceAll('&', '').replace(/\([^)]*\)$/, '');
+      const candidatesFor = (value: string) => aliases[value] ?? [value];
       const menu = Menu.getApplicationMenu();
-      const topLevel = menu?.items.find((item) => normalize(item.label) === labels.topLevelLabel);
-      const target = topLevel?.submenu?.items.find((item) => normalize(item.label) === labels.itemLabel);
+      const topLevelCandidates = candidatesFor(labels.topLevelLabel);
+      const itemCandidates = candidatesFor(labels.itemLabel);
+      const topLevel = menu?.items.find((item) => topLevelCandidates.includes(normalize(item.label)));
+      const target = topLevel?.submenu?.items.find((item) => itemCandidates.includes(normalize(item.label)));
       if (!target) throw new Error(`Missing menu item: ${labels.topLevelLabel} -> ${labels.itemLabel}`);
       (target.click as (...args: unknown[]) => void)(target, BrowserWindow.getFocusedWindow(), undefined);
     },

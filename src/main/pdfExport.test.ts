@@ -46,7 +46,7 @@ describe('PDF export backend', () => {
       writeFile
     });
 
-    expect(result).toEqual({ ok: false, message: '已取消导出。' });
+    expect(result).toEqual({ ok: false, code: 'CANCELED', message: '已取消导出。' });
     expect(writeFile).not.toHaveBeenCalled();
   });
 
@@ -59,6 +59,6 @@ describe('PDF export backend', () => {
       writeFile: vi.fn()
     });
 
-    expect(result).toEqual({ ok: false, message: 'PDF 导出失败。' });
+    expect(result).toEqual({ ok: false, code: 'EXPORT_FAILED', message: 'PDF 导出失败。' });
   });
 });
