@@ -24,13 +24,11 @@ export function getWorkspaceDialogOptions(lang: 'zh' | 'en' = 'en'): OpenDialogO
   };
 }
 
-export const MARKDOWN_DIALOG_OPTIONS = getMarkdownDialogOptions();
-export const WORKSPACE_DIALOG_OPTIONS = getWorkspaceDialogOptions();
-
 export type ShowMarkdownDialog = () => Promise<Pick<OpenDialogReturnValue, 'canceled' | 'filePaths'>>;
 
 export async function openMarkdownFromDialog(
-  showOpenDialog: ShowMarkdownDialog
+  showOpenDialog: ShowMarkdownDialog,
+  lang: 'zh' | 'en' = 'en'
 ): Promise<MarkdownOpenResult> {
   const result = await showOpenDialog();
 
@@ -38,7 +36,7 @@ export async function openMarkdownFromDialog(
     return {
       ok: false,
       code: 'CANCELED',
-      message: '未选择文件。'
+      message: lang === 'zh' ? '未选择文件。' : 'No file selected.'
     };
   }
 
@@ -47,7 +45,8 @@ export async function openMarkdownFromDialog(
 
 export async function openWorkspaceFromDialog(
   showOpenDialog: ShowMarkdownDialog,
-  options: WorkspaceOpenOptions = {}
+  options: WorkspaceOpenOptions = {},
+  lang: 'zh' | 'en' = 'en'
 ): Promise<WorkspaceOpenResult> {
   const result = await showOpenDialog();
 
@@ -55,7 +54,7 @@ export async function openWorkspaceFromDialog(
     return {
       ok: false,
       code: 'CANCELED',
-      message: '未选择文件夹。'
+      message: lang === 'zh' ? '未选择文件夹。' : 'No folder selected.'
     };
   }
 

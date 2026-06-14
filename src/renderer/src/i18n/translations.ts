@@ -14,10 +14,7 @@ const zh = {
     reselect: '重新选择',
     documentEmpty: '文件为空',
     parseError: 'Markdown 解析失败，请切换源码编辑修复。',
-    imageMissing: (source: string) => `图片缺失：${source}`,
-    unsavedTitle: '当前文档有未保存更改。',
-    continueEditing: '继续编辑',
-    discardChanges: '放弃更改'
+    imageMissing: (source: string) => `图片缺失：${source}`
   },
   fileInfo: {
     title: '文件详细信息',
@@ -147,10 +144,7 @@ const en: I18nMessages = {
     reselect: 'Reselect',
     documentEmpty: 'File is empty',
     parseError: 'Markdown parse error. Switch to source edit to fix.',
-    imageMissing: (source: string) => `Image missing: ${source}`,
-    unsavedTitle: 'The current document has unsaved changes.',
-    continueEditing: 'Continue Editing',
-    discardChanges: 'Discard Changes'
+    imageMissing: (source: string) => `Image missing: ${source}`
   },
   fileInfo: {
     title: 'File Details',

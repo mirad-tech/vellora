@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { App } from './App';
+import { I18nProvider } from './i18n/I18nContext';
 import type { MdViewerApi } from '../../preload/types';
 
 type TestHarness = {
@@ -88,7 +89,7 @@ async function renderApp(): Promise<TestHarness> {
   const root = createRoot(container);
 
   await act(async () => {
-    root.render(<App />);
+    root.render(<I18nProvider><App /></I18nProvider>);
   });
 
   currentHarness = {

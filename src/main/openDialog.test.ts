@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { describe, expect, test } from 'vitest';
 
 import {
-  MARKDOWN_DIALOG_OPTIONS,
-  WORKSPACE_DIALOG_OPTIONS,
+  getMarkdownDialogOptions,
+  getWorkspaceDialogOptions,
   openMarkdownFromDialog,
   openWorkspaceFromDialog
 } from './openDialog';
@@ -21,8 +21,9 @@ async function makeMarkdownFixture(): Promise<string> {
 
 describe('Markdown open dialog flow', () => {
   test('limits native selection to Markdown extensions', () => {
-    expect(MARKDOWN_DIALOG_OPTIONS.properties).toEqual(['openFile']);
-    expect(MARKDOWN_DIALOG_OPTIONS.filters).toEqual([
+    const opts = getMarkdownDialogOptions('en');
+    expect(opts.properties).toEqual(['openFile']);
+    expect(opts.filters).toEqual([
       {
         name: 'Markdown',
         extensions: ['md', 'markdown']
@@ -31,7 +32,8 @@ describe('Markdown open dialog flow', () => {
   });
 
   test('limits native folder selection to directories', () => {
-    expect(WORKSPACE_DIALOG_OPTIONS.properties).toEqual(['openDirectory']);
+    const opts = getWorkspaceDialogOptions('en');
+    expect(opts.properties).toEqual(['openDirectory']);
   });
 
   test('reads the file selected by the dialog through controlled file access', async () => {

@@ -46,12 +46,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore
     }
-    // Sync to native menu
-    try {
-      window.mdViewer.setLanguage(next);
-    } catch {
-      // preload API may not be available in test
-    }
   }, []);
 
   useEffect(() => {
