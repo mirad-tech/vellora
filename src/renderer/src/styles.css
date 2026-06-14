@@ -770,6 +770,12 @@ input {
   padding: 40px 24px 80px;
 }
 
+.document-view--source-edit {
+  width: 100%;
+  max-width: min(1280px, 100%);
+  padding: 28px 32px 72px;
+}
+
 .toast-error-banner,
 .document-render-error {
   padding: 10px 14px;
@@ -797,7 +803,7 @@ input {
 .editor-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  gap: 24px;
   height: calc(100vh - 180px);
   min-height: 480px;
 }
@@ -806,7 +812,7 @@ input {
   width: 100%;
   height: 100%;
   resize: none;
-  padding: 16px;
+  padding: 18px;
   border: 1px solid var(--border);
   border-radius: 8px;
   outline: 0;
@@ -818,7 +824,7 @@ input {
     "Cascadia Code",
     Consolas,
     monospace;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.6;
 }
 
@@ -831,9 +837,14 @@ input {
 .editor-preview {
   height: 100%;
   overflow-y: auto;
+  padding: 18px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.document-view--source-edit .markdown-body {
+  font-size: 16px;
 }
 
 .mdx-wysiwyg-host {

@@ -1210,7 +1210,7 @@ export function App() {
 
           {/* 文档载入成功 */}
           {viewState.status === 'ready' && (
-            <article className="document-view">
+            <article className={`document-view${editorMode === 'source-edit' ? ' document-view--source-edit' : ''}`}>
               {saveState.status === 'error' && (
                 <div className="document-render-error" data-testid="save-error" role="alert">
                   {saveState.message}
