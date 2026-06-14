@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { _electron as electron, type ElectronApplication, type Page } from 'playwright';
+import { _electron as electron, type ElectronApplication, type Locator, type Page } from 'playwright';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,11 +10,17 @@ type EditFixture = {
   statePath: string;
 };
 
-async function createEditFixture(): Promise<EditFixture> {
+const pixelPng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lb7T2wAAAABJRU5ErkJggg==',
+  'base64'
+);
+
+async function createEditFixture(content = '# 原始\n\n正文。'): Promise<EditFixture> {
   const dir = join(tmpdir(), `md-viewer-stage7-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const filePath = join(dir, '编辑 文档.md');
-  await mkdir(dir, { recursive: true });
-  await writeFile(filePath, '# 原始\n\n正文。', 'utf8');
+  await mkdir(join(dir, 'assets'), { recursive: true });
+  await writeFile(join(dir, 'assets', 'pixel.png'), pixelPng);
+  await writeFile(filePath, content, 'utf8');
 
   return {
     filePath,
@@ -72,6 +78,73 @@ async function openFixture(page: Page): Promise<void> {
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 
+function complexMarkdown(): string {
+  return `# 原始标题
+
+普通段落 初始文本。
+
+带 **强调目标** 和 [链接目标](https://example.com/docs)。
+
+> 引用内容
+
+- 列表目标
+- 第二项
+
+| 字段 | 值 |
+| --- | --- |
+| 状态 | 表格目标 |
+
+\`\`\`ts
+const value = "代码目标";
+\`\`\`
+
+![有效图片](assets/pixel.png)
+`;
+}
+
+async function replaceWithKeyboard(
+  page: Page,
+  locator: Locator,
+  replacement: string,
+  clickCount = 3
+): Promise<void> {
+  await locator.scrollIntoViewIfNeeded();
+  await locator.click({ clickCount });
+  await page.keyboard.type(replacement);
+}
+
+async function replaceInlineTextWithKeyboard(
+  page: Page,
+  locator: Locator,
+  replacement: string,
+  characterCount: number
+): Promise<void> {
+  await locator.scrollIntoViewIfNeeded();
+  const box = await locator.boundingBox();
+  if (!box) throw new Error('Cannot locate inline text box');
+  await page.mouse.click(box.x + box.width - 2, box.y + box.height / 2);
+  for (let index = 0; index < characterCount; index += 1) {
+    await page.keyboard.press('Shift+ArrowLeft');
+  }
+  await page.keyboard.type(replacement);
+}
+
+function shortcutModifier(): 'Control' | 'Meta' {
+  return process.platform === 'darwin' ? 'Meta' : 'Control';
+}
+
+async function updateLinkTextWithDialog(page: Page, link: Locator, replacement: string): Promise<void> {
+  await link.scrollIntoViewIfNeeded();
+  await link.click();
+  await page.getByRole('button', { name: 'Edit link URL' }).click();
+  const textInput = page.locator('#link-text');
+  await expect(textInput).toBeVisible();
+  await textInput.click();
+  await page.keyboard.press(`${shortcutModifier()}+A`);
+  await page.keyboard.type(replacement);
+  await page.keyboard.press('Enter');
+}
+
 async function clickNativeMenuItem(
   electronApp: ElectronApplication,
   topLevelLabel: string,
@@ -108,67 +181,111 @@ async function closeAppDiscardingDrafts(electronApp: ElectronApplication): Promi
   await electronApp.close();
 }
 
-test('quick edits rendered text blocks and saves the same file', async () => {
-  const fixture = await createEditFixture();
+test('edits complex Markdown as WYSIWYG in reading mode and saves the same file', async () => {
+  const fixture = await createEditFixture(complexMarkdown());
   const electronApp = await launchWithSelectedFile(fixture);
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await expect(page.getByTestId('quick-edit-toggle')).toHaveCount(0);
+  const markdownBody = page.getByTestId('markdown-body');
+  await expect(markdownBody.locator('img[alt="有效图片"]')).toHaveAttribute('src', /^data:image\/png;base64,/);
+
+  await replaceWithKeyboard(page, markdownBody.getByText('普通段落 初始文本。'), '普通段落 已更新。');
+  await replaceInlineTextWithKeyboard(page, markdownBody.locator('strong').filter({ hasText: '强调目标' }), '强调更新', 4);
+  await updateLinkTextWithDialog(page, markdownBody.getByRole('link', { name: '链接目标' }), '链接更新');
+  await replaceWithKeyboard(page, markdownBody.locator('li').filter({ hasText: '列表目标' }), '列表更新');
+  await replaceWithKeyboard(page, markdownBody.locator('td').filter({ hasText: '表格目标' }), '表格更新');
+  await replaceWithKeyboard(page, markdownBody.getByText('const value = "代码目标";'), 'const value = "代码更新";');
+
+  await saveFromNativeMenu(electronApp);
+
+  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toContain('普通段落 已更新。');
+  const saved = await readFile(fixture.filePath, 'utf8');
+  expect(saved).toContain('**强调更新**');
+  expect(saved).toContain('[链接更新](https://example.com/docs)');
+  expect(saved).toMatch(/[-*]\s+列表更新/);
+  expect(saved).toContain('表格更新');
+  expect(saved).toMatch(/```ts[\s\S]*代码更新[\s\S]*```/);
+  expect(saved).toContain('![有效图片](assets/pixel.png)');
+
+  await closeAppDiscardingDrafts(electronApp);
+});
+
+test('syncs latest WYSIWYG edits into source mode before showing the textarea', async () => {
+  const fixture = await createEditFixture(complexMarkdown());
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  const markdownBody = page.getByTestId('markdown-body');
+  await updateLinkTextWithDialog(page, markdownBody.getByRole('link', { name: '链接目标' }), '链接同步');
+
+  await enterSourceEditMode(electronApp, page);
+
+  await expect(page.getByTestId('source-editor')).toHaveValue(/^\s*[\s\S]*\[链接同步\]\(https:\/\/example\.com\/docs\)[\s\S]*$/);
+
+  await closeAppDiscardingDrafts(electronApp);
+});
+
+test('syncs source edits back into WYSIWYG reading mode', async () => {
+  const fixture = await createEditFixture(complexMarkdown());
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  await enterSourceEditMode(electronApp, page);
+
+  await page.getByTestId('source-editor').fill('# 源码更新\n\n源码段落\n\n| 字段 | 值 |\n| --- | --- |\n| 状态 | 已同步 |');
+  await clickNativeMenuItem(electronApp, 'View', 'Source Edit');
+
   await expect(page.getByTestId('markdown-body')).toBeVisible();
-
-  await page.locator('[data-edit-block-kind="heading"]').first().fill('更新标题');
-  await page.locator('[data-edit-block-kind="paragraph"]').first().fill('更新正文');
-
-  await saveFromNativeMenu(electronApp);
-
-  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 更新标题\n\n更新正文');
+  await expect(page.locator('.markdown-body h1')).toHaveText('源码更新');
+  await expect(page.locator('.markdown-body td').filter({ hasText: '已同步' })).toBeVisible();
 
   await closeAppDiscardingDrafts(electronApp);
 });
 
-test('quick edit saves complete text typed with the real keyboard', async () => {
-  const fixture = await createEditFixture();
+test('asks before closing with unsaved WYSIWYG changes and can cancel the close', async () => {
+  const fixture = await createEditFixture(complexMarkdown());
   const electronApp = await launchWithSelectedFile(fixture);
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
+  const markdownBody = page.getByTestId('markdown-body');
+  await replaceWithKeyboard(page, markdownBody.locator('td').filter({ hasText: '表格目标' }), '关闭前草稿');
 
-  const paragraph = page.locator('[data-edit-block-kind="paragraph"]').first();
-  await paragraph.click();
-  await expect(paragraph).toBeFocused();
-
-  await page.keyboard.press('Control+A');
-  await page.keyboard.type('逐字键盘正文');
-
-  await saveFromNativeMenu(electronApp);
-
-  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 原始\n\n逐字键盘正文');
-
-  await closeAppDiscardingDrafts(electronApp);
-});
-
-test('quick edit multiline paragraph does not leave stale lines when input changes repeatedly', async () => {
-  const fixture = await createEditFixture();
-  const electronApp = await launchWithSelectedFile(fixture);
-  const page = await electronApp.firstWindow();
-
-  await openFixture(page);
-
-  const paragraph = page.locator('[data-edit-block-kind="paragraph"]').first();
-  await paragraph.evaluate((element) => {
-    const editableElement = element as HTMLElement;
-    editableElement.innerText = '第一行\n第二行';
-    editableElement.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
-    editableElement.innerText = '第一行\n第二行\n第三行';
-    editableElement.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+  await electronApp.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].close();
   });
-
-  await saveFromNativeMenu(electronApp);
-
-  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 原始\n\n第一行\n第二行\n第三行');
+  await expect(markdownBody).toContainText('关闭前草稿');
+  await expect
+    .poll(() =>
+      electronApp.evaluate(() => {
+        const state = globalThis as typeof globalThis & { __stage7MessageBoxCount?: number };
+        return state.__stage7MessageBoxCount;
+      })
+    )
+    .toBe(1);
 
   await closeAppDiscardingDrafts(electronApp);
+});
+
+test('does not ask before closing after a successful WYSIWYG save', async () => {
+  const fixture = await createEditFixture(complexMarkdown());
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  const markdownBody = page.getByTestId('markdown-body');
+  await replaceWithKeyboard(page, markdownBody.getByText('普通段落 初始文本。'), '普通段落 已保存。');
+  await saveFromNativeMenu(electronApp);
+  await expect.poll(() => readFile(fixture.filePath, 'utf8')).toContain('普通段落 已保存。');
+
+  const pageClosed = page.waitForEvent('close');
+  await electronApp.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].close();
+  });
+  await pageClosed;
 });
 
 test('edits Markdown source with split preview and saves the same file', async () => {
@@ -188,20 +305,20 @@ test('edits Markdown source with split preview and saves the same file', async (
   await closeAppDiscardingDrafts(electronApp);
 });
 
-test('keeps the draft visible when save fails', async () => {
-  const fixture = await createEditFixture();
+test('keeps the WYSIWYG draft visible when save fails', async () => {
+  const fixture = await createEditFixture(complexMarkdown());
   const electronApp = await launchWithSelectedFile(fixture);
   const page = await electronApp.firstWindow();
 
   await openFixture(page);
-  await enterSourceEditMode(electronApp, page);
-  await page.getByTestId('source-editor').fill('# 草稿');
+  const markdownBody = page.getByTestId('markdown-body');
+  await replaceWithKeyboard(page, markdownBody.locator('td').filter({ hasText: '表格目标' }), '失败保留草稿');
   await rm(fixture.filePath);
 
   await saveFromNativeMenu(electronApp);
 
   await expect(page.getByRole('alert')).toContainText('文件不存在或已被移动。');
-  await expect(page.getByTestId('source-editor')).toHaveValue('# 草稿');
+  await expect(markdownBody).toContainText('失败保留草稿');
 
   await closeAppDiscardingDrafts(electronApp);
 });

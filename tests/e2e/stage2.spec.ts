@@ -65,8 +65,8 @@ const ok: boolean = true;
   await expect(page.locator('.markdown-body h1')).toHaveText('标题');
   await expect(page.locator('.markdown-body blockquote')).toContainText('引用');
   await expect(page.locator('.markdown-body table')).toContainText('A');
-  await expect(page.locator('.markdown-body pre code')).toContainText('const ok');
-  await expect(page.locator('.markdown-body .hljs-keyword')).toContainText('const');
+  await expect(page.getByTestId('markdown-body')).toContainText('const ok: boolean = true;');
+  await expect(page.getByTestId('markdown-body')).toContainText('TypeScript');
 
   await electronApp.close();
 });

@@ -836,21 +836,51 @@ input {
   background: var(--surface);
 }
 
-.quick-edit-body [data-edit-block-id] {
-  border-radius: 4px;
-  cursor: text;
-  outline: 1px dashed transparent;
-  outline-offset: 3px;
-  transition: background-color 0.15s ease, outline-color 0.15s ease;
+.mdx-wysiwyg-host {
+  min-width: 0;
 }
 
-.quick-edit-body [data-edit-block-id]:hover {
-  background: color-mix(in srgb, var(--accent-bg) 42%, transparent);
+.mdx-wysiwyg-host .mdxeditor {
+  --baseBase: var(--surface);
+  --baseBgSubtle: var(--surface-subtle);
+  --baseBg: var(--surface);
+  --baseBorder: var(--border);
+  --baseLine: var(--border);
+  --baseText: var(--muted);
+  --baseTextContrast: var(--text);
+  --accentBase: var(--accent-bg);
+  --accentBg: var(--accent-bg);
+  --accentBorder: var(--accent);
+  --accentSolid: var(--accent);
+  --accentText: var(--accent-strong);
+  --font-body: inherit;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  background: transparent;
+  color: var(--text);
 }
 
-.quick-edit-body [data-edit-block-id]:focus {
-  background: color-mix(in srgb, var(--accent-bg) 65%, transparent);
-  outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
+.mdx-wysiwyg-editor {
+  min-height: calc(100vh - 220px);
+  padding: 0 !important;
+  caret-color: var(--accent);
+}
+
+.mdx-wysiwyg-editor:focus {
+  outline: none;
+}
+
+.mdx-wysiwyg-host .cm-editor {
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.mdx-wysiwyg-host .cm-content {
+  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
+.editor-search-preview {
+  min-height: calc(100vh - 220px);
 }
 
 /* Markdown typography rendering */

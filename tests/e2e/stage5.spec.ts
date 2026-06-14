@@ -83,6 +83,10 @@ async function openFixture(page: Page): Promise<void> {
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 
+function linkOpenModifier(): 'Control' | 'Meta' {
+  return process.platform === 'darwin' ? 'Meta' : 'Control';
+}
+
 test('resolves local images, reports missing images, and opens links through safe routes', async () => {
   const fixture = await createResourceFixture();
   const electronApp = await launchWithSelectedFile(fixture.documentPath);
@@ -98,8 +102,8 @@ test('resolves local images, reports missing images, and opens links through saf
 
   const initialUrl = page.url();
 
-  // 1. Click external link to trigger confirmation modal
-  await page.getByRole('link', { name: '外部链接' }).click();
+  // 1. Ctrl/Cmd-click external link to trigger confirmation modal
+  await page.getByRole('link', { name: '外部链接' }).click({ modifiers: [linkOpenModifier()] });
   expect(page.url()).toBe(initialUrl);
 
   // Verify safety modal is visible
@@ -119,8 +123,8 @@ test('resolves local images, reports missing images, and opens links through saf
   });
   expect(openedUrl).toBeUndefined();
 
-  // 3. Click external link again
-  await page.getByRole('link', { name: '外部链接' }).click();
+  // 3. Ctrl/Cmd-click external link again
+  await page.getByRole('link', { name: '外部链接' }).click({ modifiers: [linkOpenModifier()] });
   await expect(page.getByRole('heading', { name: '安全提示' })).toBeVisible();
 
   // Click "继续访问" (Confirm/Proceed)
@@ -156,7 +160,7 @@ test('resolves local images, reports missing images, and opens links through saf
   );
   expect(dangerousState).toBeUndefined();
 
-  await page.getByRole('link', { name: '下一篇' }).click();
+  await page.getByRole('link', { name: '下一篇' }).click({ modifiers: [linkOpenModifier()] });
   await expect(page.locator('.markdown-body h1')).toHaveText('下一篇');
   await expect(page.getByTestId('status-file-name')).toContainText('下一篇.md');
 

@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
-  applyEditableBlockChange,
   renderMarkdownDocument,
   type MarkdownRenderResult
 } from './renderMarkdown';
@@ -98,7 +97,7 @@ describe('safe Markdown rendering', () => {
     expect(ready.html).toContain('id="heading-最深"');
   });
 
-  test('marks safe headings, paragraphs, and plain list items as editable blocks', () => {
+  test('renders Markdown without quick-edit metadata', () => {
     const result = renderMarkdownDocument(`# 标题
 
 正文段落
@@ -113,70 +112,8 @@ describe('safe Markdown rendering', () => {
 `);
 
     const ready = asReadyResult(result);
-    expect(
-      ready.editableBlocks.map(({ kind, startLine, endLine, text }) => ({
-        kind,
-        startLine,
-        endLine,
-        text
-      }))
-    ).toEqual([
-      { kind: 'heading', startLine: 0, endLine: 1, text: '标题' },
-      { kind: 'paragraph', startLine: 2, endLine: 3, text: '正文段落' },
-      { kind: 'list-item', startLine: 4, endLine: 5, text: '列表项' }
-    ]);
-    expect(ready.html).toContain('data-edit-block-id="edit-block-1"');
-    expect(ready.html).toContain('data-edit-block-kind="heading"');
-    expect(ready.html).toContain('data-edit-block-kind="paragraph"');
-    expect(ready.html).toContain('data-edit-block-kind="list-item"');
-  });
-
-  test('applies quick-edit text changes back to the original Markdown lines', () => {
-    const content = `# 标题
-
-正文段落
-
-- 列表项
-`;
-    const ready = asReadyResult(renderMarkdownDocument(content));
-    const heading = ready.editableBlocks.find((block) => block.kind === 'heading');
-    const paragraph = ready.editableBlocks.find((block) => block.kind === 'paragraph');
-    const item = ready.editableBlocks.find((block) => block.kind === 'list-item');
-
-    expect(heading).toBeDefined();
-    expect(paragraph).toBeDefined();
-    expect(item).toBeDefined();
-    if (!heading || !paragraph || !item) return;
-
-    const updatedHeading = applyEditableBlockChange(content, heading, '更新标题');
-    const updatedParagraph = applyEditableBlockChange(updatedHeading, paragraph, '更新段落');
-    const updatedItem = applyEditableBlockChange(updatedParagraph, item, '更新列表项');
-
-    expect(updatedItem).toBe(`# 更新标题
-
-更新段落
-
-- 更新列表项
-`);
-  });
-
-  test('does not mark complex Markdown structures as quick editable', () => {
-    const result = renderMarkdownDocument(`文本 [链接](https://example.com)
-
-![截图](assets/screen.png)
-
-\`\`\`ts
-const x = 1;
-\`\`\`
-
-| A | B |
-| - | - |
-| 1 | 2 |
-`);
-
-    const ready = asReadyResult(result);
-    expect(ready.editableBlocks).toEqual([]);
     expect(ready.html).not.toContain('data-edit-block-id=');
+    expect(ready.html).not.toContain('data-edit-block-kind=');
   });
 
   test('strips forged quick-edit attributes from raw HTML', () => {
@@ -192,7 +129,7 @@ const x = 1;
     const heading = template.content.querySelector('h1');
     const forgedParagraph = template.content.querySelector('p');
 
-    expect(heading?.getAttribute('data-edit-block-id')).toBe('edit-block-1');
+    expect(heading?.hasAttribute('data-edit-block-id')).toBe(false);
     expect(forgedParagraph?.hasAttribute('data-edit-block-id')).toBe(false);
     expect(forgedParagraph?.hasAttribute('data-edit-block-kind')).toBe(false);
   });

@@ -33,6 +33,20 @@ async function readPackageJson() {
   };
 }
 
+function readIcoSizes(icon: Buffer): Array<{ width: number; height: number }> {
+  const count = icon.readUInt16LE(4);
+  const sizes: Array<{ width: number; height: number }> = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const offset = 6 + index * 16;
+    const width = icon[offset] === 0 ? 256 : icon[offset];
+    const height = icon[offset + 1] === 0 ? 256 : icon[offset + 1];
+    sizes.push({ width, height });
+  }
+
+  return sizes;
+}
+
 describe('stage 8 packaging configuration', () => {
   test('defines Windows NSIS packaging metadata and scripts', async () => {
     const pkg = await readPackageJson();
@@ -85,6 +99,7 @@ describe('stage 8 packaging configuration', () => {
   test('includes an app icon and concise user guide', async () => {
     const icon = await readFile(join(root, 'build', 'icon.ico'));
     expect(icon.subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0]));
+    expect(readIcoSizes(icon)).toEqual(expect.arrayContaining([{ width: 256, height: 256 }]));
 
     const guide = await readFile(join(root, 'README.md'), 'utf8');
     expect(guide).toContain('Markdown查看器');

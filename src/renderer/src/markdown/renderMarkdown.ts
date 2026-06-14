@@ -1,4 +1,4 @@
-import DOMPurify, { type ElementHook, type UponSanitizeAttributeHook } from 'dompurify';
+import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import css from 'highlight.js/lib/languages/css';
@@ -12,11 +12,10 @@ import type Token from 'markdown-it/lib/token.mjs';
 
 export type MarkdownRenderResult =
   | {
-      status: 'ready';
-      html: string;
-      outline: MarkdownOutlineEntry[];
-      editableBlocks: EditableMarkdownBlock[];
-    }
+    status: 'ready';
+    html: string;
+    outline: MarkdownOutlineEntry[];
+  }
   | {
       status: 'empty';
       html: '';
@@ -32,17 +31,6 @@ export type MarkdownOutlineEntry = {
   id: string;
   level: number;
   text: string;
-};
-
-export type EditableMarkdownBlockKind = 'heading' | 'paragraph' | 'list-item';
-
-export type EditableMarkdownBlock = {
-  id: string;
-  kind: EditableMarkdownBlockKind;
-  startLine: number;
-  endLine: number;
-  text: string;
-  level?: number;
 };
 
 export type MarkdownParser = {
@@ -86,9 +74,6 @@ const ALLOWED_ATTR = [
   'alt',
   'class',
   'colspan',
-  'data-edit-block-id',
-  'data-edit-block-kind',
-  'data-edit-origin-token',
   'data-heading-id',
   'data-local-image-token',
   'data-local-src',
@@ -99,7 +84,6 @@ const ALLOWED_ATTR = [
 ];
 
 type MarkdownRenderEnvironment = {
-  editableBlockToken?: string;
   localImageToken?: string;
 };
 
@@ -169,11 +153,6 @@ function createMarkdownParser(): MarkdownIt {
 
 const defaultParser = createMarkdownParser();
 
-const EDITABLE_BLOCK_ID_ATTR = 'data-edit-block-id';
-const EDITABLE_BLOCK_KIND_ATTR = 'data-edit-block-kind';
-const EDITABLE_BLOCK_TOKEN_ATTR = 'data-edit-origin-token';
-const MAX_EDITABLE_BLOCKS = 500;
-
 function slugifyHeading(text: string): string {
   const slug = text
     .normalize('NFKC')
@@ -217,209 +196,23 @@ function applyHeadingIds(tokens: Token[]): MarkdownOutlineEntry[] {
   return outline;
 }
 
-function isPlainInlineToken(token: Token | undefined): token is Token {
-  if (!token || token.type !== 'inline') return false;
-  const children = token.children ?? [];
-  return children.every((child) => ['text', 'softbreak', 'hardbreak'].includes(child.type));
-}
-
-function tokenLineRange(token: Token): [number, number] | null {
-  if (!token.map || token.map.length !== 2) return null;
-  const [startLine, endLine] = token.map;
-  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine < 0 || endLine <= startLine) {
-    return null;
-  }
-  return [startLine, endLine];
-}
-
-function setEditableBlockAttrs(token: Token, block: EditableMarkdownBlock, editableBlockToken: string): void {
-  token.attrSet(EDITABLE_BLOCK_ID_ATTR, block.id);
-  token.attrSet(EDITABLE_BLOCK_KIND_ATTR, block.kind);
-  token.attrSet(EDITABLE_BLOCK_TOKEN_ATTR, editableBlockToken);
-}
-
-function nextEditableBlockId(blocks: EditableMarkdownBlock[]): string {
-  return `edit-block-${blocks.length + 1}`;
-}
-
-function findListItemInlineToken(tokens: Token[], listItemIndex: number): Token | undefined {
-  let listItemDepth = 1;
-
-  for (let index = listItemIndex + 1; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token.type === 'list_item_open') {
-      listItemDepth += 1;
-      continue;
-    }
-
-    if (token.type === 'list_item_close') {
-      listItemDepth -= 1;
-      if (listItemDepth === 0) return undefined;
-      continue;
-    }
-
-    if (listItemDepth === 1 && token.type === 'inline') {
-      return token;
-    }
-  }
-
-  return undefined;
-}
-
-function isPlainListItemLine(line: string): boolean {
-  return /^\s*(?:[-+*]|\d+[.)])\s+\S/.test(line) && !/^\s*(?:[-+*]|\d+[.)])\s+\[[ xX]\]\s+/.test(line);
-}
-
-function applyEditableBlockAttrs(
-  tokens: Token[],
-  content: string,
-  editableBlockToken: string
-): EditableMarkdownBlock[] {
-  const blocks: EditableMarkdownBlock[] = [];
-  const lines = content.split(/\r?\n/);
-  let listItemDepth = 0;
-
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (blocks.length >= MAX_EDITABLE_BLOCKS) {
-      return blocks;
-    }
-
-    const token = tokens[index];
-
-    if (token.type === 'list_item_open') {
-      const inlineToken = findListItemInlineToken(tokens, index);
-      const lineRange = inlineToken ? tokenLineRange(inlineToken) : null;
-      if (
-        lineRange &&
-        lineRange[1] - lineRange[0] === 1 &&
-        isPlainInlineToken(inlineToken) &&
-        isPlainListItemLine(lines[lineRange[0]] ?? '')
-      ) {
-        const block: EditableMarkdownBlock = {
-          id: nextEditableBlockId(blocks),
-          kind: 'list-item',
-          startLine: lineRange[0],
-          endLine: lineRange[1],
-          text: inlineToken.content.trim()
-        };
-        blocks.push(block);
-        setEditableBlockAttrs(token, block, editableBlockToken);
-      }
-      listItemDepth += 1;
-      continue;
-    }
-
-    if (token.type === 'list_item_close') {
-      listItemDepth = Math.max(0, listItemDepth - 1);
-      continue;
-    }
-
-    if (token.type === 'heading_open') {
-      const inlineToken = tokens[index + 1];
-      const lineRange = tokenLineRange(token);
-      const level = Number(token.tag.slice(1));
-      if (lineRange && token.markup.startsWith('#') && isPlainInlineToken(inlineToken)) {
-        const block: EditableMarkdownBlock = {
-          id: nextEditableBlockId(blocks),
-          kind: 'heading',
-          startLine: lineRange[0],
-          endLine: lineRange[1],
-          text: inlineToken.content.trim(),
-          level
-        };
-        blocks.push(block);
-        setEditableBlockAttrs(token, block, editableBlockToken);
-      }
-      continue;
-    }
-
-    if (token.type === 'paragraph_open' && listItemDepth === 0) {
-      const inlineToken = tokens[index + 1];
-      const lineRange = tokenLineRange(token);
-      if (lineRange && isPlainInlineToken(inlineToken)) {
-        const block: EditableMarkdownBlock = {
-          id: nextEditableBlockId(blocks),
-          kind: 'paragraph',
-          startLine: lineRange[0],
-          endLine: lineRange[1],
-          text: inlineToken.content.trim()
-        };
-        blocks.push(block);
-        setEditableBlockAttrs(token, block, editableBlockToken);
-      }
-    }
-  }
-
-  return blocks;
-}
-
 function createLocalImageToken(): string {
   return globalThis.crypto?.randomUUID?.() ?? `image-token-${Date.now()}-${Math.random()}`;
 }
 
 function renderWithOutline(content: string, parser: MarkdownIt): ReadyMarkdownRenderResult {
-  const editableBlockToken = createLocalImageToken();
   const env: MarkdownRenderEnvironment = {
-    editableBlockToken,
     localImageToken: createLocalImageToken()
   };
   const tokens = parser.parse(content, env);
   const outline = applyHeadingIds(tokens);
-  const editableBlocks = applyEditableBlockAttrs(tokens, content, editableBlockToken);
   const unsafeHtml = parser.renderer.render(tokens, parser.options, env);
 
   return {
     status: 'ready',
-    html: sanitizeHtml(unsafeHtml, env.localImageToken, editableBlockToken),
-    outline,
-    editableBlocks
+    html: sanitizeHtml(unsafeHtml, env.localImageToken),
+    outline
   };
-}
-
-function normalizeEditableText(text: string, singleLine: boolean): string {
-  const normalized = text.replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n');
-  if (singleLine) {
-    return normalized
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .join(' ');
-  }
-
-  return normalized
-    .split('\n')
-    .map((line) => line.trim())
-    .join('\n')
-    .trim();
-}
-
-function replaceLineRange(content: string, block: EditableMarkdownBlock, replacementLines: string[]): string {
-  const newline = content.includes('\r\n') ? '\r\n' : '\n';
-  const lines = content.split(/\r?\n/);
-  lines.splice(block.startLine, block.endLine - block.startLine, ...replacementLines);
-  return lines.join(newline);
-}
-
-export function applyEditableBlockChange(
-  content: string,
-  block: EditableMarkdownBlock,
-  nextText: string
-): string {
-  if (block.kind === 'heading') {
-    const normalized = normalizeEditableText(nextText, true);
-    const marker = '#'.repeat(Math.min(Math.max(block.level ?? 1, 1), 6));
-    return replaceLineRange(content, block, [`${marker} ${normalized}`]);
-  }
-
-  if (block.kind === 'list-item') {
-    const normalized = normalizeEditableText(nextText, true);
-    const originalLine = content.split(/\r?\n/)[block.startLine] ?? '';
-    const marker = originalLine.match(/^(\s*(?:[-+*]|\d+[.)])\s+)/)?.[1] ?? '- ';
-    return replaceLineRange(content, block, [`${marker}${normalized}`]);
-  }
-
-  const normalized = normalizeEditableText(nextText, false);
-  return replaceLineRange(content, block, normalized.length > 0 ? normalized.split('\n') : ['']);
 }
 
 function removeUntrustedImages(html: string, localImageToken?: string): string {
@@ -447,55 +240,30 @@ function removeUntrustedImages(html: string, localImageToken?: string): string {
   return template.innerHTML;
 }
 
-function sanitizeHtml(html: string, localImageToken?: string, editableBlockToken?: string): string {
-  const editableAttrs = new Set([EDITABLE_BLOCK_ID_ATTR, EDITABLE_BLOCK_KIND_ATTR, EDITABLE_BLOCK_TOKEN_ATTR]);
-  const keepTrustedEditableAttr: UponSanitizeAttributeHook = (node, hookEvent) => {
-    if (!editableAttrs.has(hookEvent.attrName)) return;
-
-    const isTrustedEditableBlock =
-      editableBlockToken &&
-      node.getAttribute(EDITABLE_BLOCK_TOKEN_ATTR) === editableBlockToken &&
-      node.hasAttribute(EDITABLE_BLOCK_ID_ATTR) &&
-      node.hasAttribute(EDITABLE_BLOCK_KIND_ATTR);
-
-    if (!isTrustedEditableBlock) {
-      hookEvent.keepAttr = false;
-    }
-  };
-  const removeEditableToken: ElementHook = (node) => {
-    node.removeAttribute(EDITABLE_BLOCK_TOKEN_ATTR);
-  };
-
-  DOMPurify.addHook('uponSanitizeAttribute', keepTrustedEditableAttr);
-  DOMPurify.addHook('afterSanitizeAttributes', removeEditableToken);
-
+function sanitizeHtml(html: string, localImageToken?: string): string {
   let sanitized = '';
-  try {
-    sanitized = DOMPurify.sanitize(html, {
-      ALLOWED_TAGS,
-      ALLOWED_ATTR,
-      FORBID_TAGS: [
-        'base',
-        'button',
-        'embed',
-        'form',
-        'iframe',
-        'input',
-        'link',
-        'math',
-        'meta',
-        'object',
-        'script',
-        'select',
-        'style',
-        'svg',
-        'textarea'
-      ]
-    });
-  } finally {
-    DOMPurify.removeHook('uponSanitizeAttribute', keepTrustedEditableAttr);
-    DOMPurify.removeHook('afterSanitizeAttributes', removeEditableToken);
-  }
+  sanitized = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR,
+    ALLOW_DATA_ATTR: false,
+    FORBID_TAGS: [
+      'base',
+      'button',
+      'embed',
+      'form',
+      'iframe',
+      'input',
+      'link',
+      'math',
+      'meta',
+      'object',
+      'script',
+      'select',
+      'style',
+      'svg',
+      'textarea'
+    ]
+  });
 
   const imageSafeHtml = removeUntrustedImages(sanitized, localImageToken);
   return imageSafeHtml;
@@ -522,7 +290,6 @@ export function renderMarkdownDocument(
       status: 'ready',
       html: sanitizeHtml(unsafeHtml),
       outline: [],
-      editableBlocks: []
     };
   } catch {
     return {

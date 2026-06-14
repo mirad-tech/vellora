@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, session } from 'electron';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { registerIpcHandlers } from './ipc';
@@ -20,6 +20,11 @@ const userDataOverride = process.env.MD_VIEWER_USER_DATA_DIR;
 if (userDataOverride) {
   mkdirSync(userDataOverride, { recursive: true });
   app.setPath('userData', userDataOverride);
+}
+
+function getWindowIconPath(): string | undefined {
+  if (app.isPackaged || process.platform !== 'win32') return undefined;
+  return join(currentDir, '../../build/icon.ico');
 }
 
 function configureAppSecurity(window: BrowserWindow): void {
@@ -58,6 +63,7 @@ async function createMainWindow(): Promise<void> {
     height: 760,
     minWidth: 480,
     minHeight: 520,
+    icon: getWindowIconPath(),
     show: false,
     webPreferences: createWebPreferences(getPreloadPath(currentDir))
   });

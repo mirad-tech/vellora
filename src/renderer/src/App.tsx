@@ -5,11 +5,23 @@ import {
   useState,
   type CSSProperties,
   type DragEvent,
-  type FocusEvent,
-  type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent
 } from 'react';
+import {
+  MDXEditor,
+  codeBlockPlugin,
+  codeMirrorPlugin,
+  headingsPlugin,
+  imagePlugin,
+  linkDialogPlugin,
+  linkPlugin,
+  listsPlugin,
+  markdownShortcutPlugin,
+  quotePlugin,
+  tablePlugin,
+  thematicBreakPlugin,
+  type MDXEditorMethods
+} from '@mdxeditor/editor';
 import {
   ChevronDown,
   ChevronRight,
@@ -33,11 +45,7 @@ import {
   Command,
 } from 'lucide-react';
 
-import {
-  applyEditableBlockChange,
-  renderMarkdownDocument,
-  type EditableMarkdownBlock
-} from './markdown/renderMarkdown';
+import { renderMarkdownDocument } from './markdown/renderMarkdown';
 import {
   applyImageResolutions,
   collectLocalImageResolutionGroups,
@@ -68,10 +76,6 @@ type SaveState =
   | { status: 'saving' }
   | { status: 'saved' }
   | { status: 'error'; message: string };
-type QuickEditSession = {
-  blockId: string;
-  baseContent: string;
-};
 
 type WorkspaceState =
   | { status: 'empty' }
@@ -100,30 +104,56 @@ function documentWordCount(content: string): number {
   return latinWords.length + cjkChars.length;
 }
 
-function enableQuickEditHtml(html: string): string {
-  const template = document.createElement('template');
-  template.innerHTML = html;
+function decodeMarkdownHref(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
-  const editableElements = template.content.querySelectorAll<HTMLElement>('[data-edit-block-id]');
-  for (const element of editableElements) {
-    element.setAttribute('contenteditable', 'plaintext-only');
-    element.setAttribute('spellcheck', 'true');
-    element.setAttribute('tabindex', '0');
-    element.setAttribute('role', 'textbox');
-    element.setAttribute('aria-label', '快速编辑');
+function isProtocolLink(value: string): boolean {
+  return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
+}
+
+function collectLocalMarkdownLinkTargets(content: string): Set<string> {
+  const targets = new Set<string>();
+  const linkPattern = /(?<!!)\[[^\]]*]\(\s*<?([^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = linkPattern.exec(content)) !== null) {
+    const target = decodeMarkdownHref(match[1] ?? '').trim();
+    if (target && !isProtocolLink(target)) {
+      targets.add(target);
+    }
   }
 
-  return template.innerHTML;
+  return targets;
 }
 
-function getQuickEditElement(target: EventTarget | null): HTMLElement | null {
-  if (!(target instanceof Element)) return null;
-  const element = target.closest('[data-edit-block-id]');
-  return element instanceof HTMLElement ? element : null;
+function stripTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value.slice(0, -1) : value;
 }
 
-function quickEditElementText(element: HTMLElement): string {
-  return element.innerText.replace(/\u00a0/g, ' ');
+function recoverMdxNormalizedLocalHref(href: string, referenceContent: string): string {
+  if (!href.startsWith('https://')) return href;
+
+  const candidate = decodeMarkdownHref(stripTrailingSlash(href.slice('https://'.length)));
+  const localTargets = collectLocalMarkdownLinkTargets(referenceContent);
+  return localTargets.has(candidate) ? candidate : href;
+}
+
+function restoreMdxNormalizedLocalLinks(markdown: string, referenceContent: string): string {
+  const localTargets = collectLocalMarkdownLinkTargets(referenceContent);
+  if (localTargets.size === 0) return markdown;
+
+  return markdown.replace(
+    /(?<!!)(\[[^\]]+]\()https:\/\/([^)]+)(\))/g,
+    (full, prefix: string, target: string, suffix: string) => {
+      const candidate = decodeMarkdownHref(stripTrailingSlash(target));
+      return localTargets.has(candidate) ? `${prefix}${candidate}${suffix}` : full;
+    }
+  );
 }
 
 function toViewState(result: MarkdownOpenResult): ViewState {
@@ -195,19 +225,21 @@ export function App() {
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [editorMode, setEditorMode] = useState<EditorMode>('read');
   const [draftContent, setDraftContent] = useState('');
-  const [hasQuickEditPending, setHasQuickEditPending] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
+  const [editorError, setEditorError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeHeadingId, setActiveHeadingId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [imageResolutions, setImageResolutions] = useState<ImageResolutionMap>({});
   const readerRef = useRef<HTMLElement | null>(null);
+  const markdownBodyRef = useRef<HTMLDivElement | null>(null);
+  const mdxEditorRef = useRef<MDXEditorMethods | null>(null);
+  const draftContentRef = useRef('');
+  const mdxEditorTouchedRef = useRef(false);
+  const pendingMdxSyncFrameRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const menuActionHandlerRef = useRef<(action: string) => void>(() => {});
-  const hasQuickEditPendingRef = useRef(false);
-  const quickEditPendingContentRef = useRef<string | null>(null);
-  const quickEditSessionRef = useRef<QuickEditSession | null>(null);
 
   // New visual/structural states
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -222,34 +254,75 @@ export function App() {
   const [securityDiagnostics, setSecurityDiagnostics] = useState<SecurityDiagnostics | null>(null);
   const [sidebarTab, setSidebarTab] = useState<'workspace' | 'outline'>('workspace');
 
+  function updateDraftContent(nextContent: string): void {
+    draftContentRef.current = nextContent;
+    setDraftContent(nextContent);
+  }
+
   function resetDocumentState(): void {
     setSearchQuery('');
     setActiveSearchIndex(0);
     setActiveHeadingId('');
     setImageResolutions({});
     setEditorMode('read');
-    setHasQuickEditPending(false);
-    hasQuickEditPendingRef.current = false;
-    quickEditPendingContentRef.current = null;
-    quickEditSessionRef.current = null;
+    setEditorError(null);
+    mdxEditorTouchedRef.current = false;
+    if (pendingMdxSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingMdxSyncFrameRef.current);
+      pendingMdxSyncFrameRef.current = null;
+    }
     setSaveState({ status: 'idle' });
   }
 
   function applyOpenResult(result: MarkdownOpenResult): void {
     resetDocumentState();
     if (result.ok) {
-      setDraftContent(result.document.content);
+      updateDraftContent(result.document.content);
     }
     setViewState(toViewState(result));
   }
 
   const isDirty = viewState.status === 'ready' && draftContent !== viewState.document.content;
-  const hasUnsavedChanges = isDirty || hasQuickEditPending;
+  const hasUnsavedChanges = isDirty;
+
+  function syncReadEditorToDraft(force = false): string {
+    if (editorMode !== 'read' || viewState.status !== 'ready' || mdxEditorRef.current === null) {
+      return draftContentRef.current;
+    }
+
+    if (!force && !mdxEditorTouchedRef.current) {
+      return draftContentRef.current;
+    }
+
+    const referenceContent = `${viewState.document.content}\n${draftContentRef.current}`;
+    const nextContent = restoreMdxNormalizedLocalLinks(mdxEditorRef.current.getMarkdown(), referenceContent);
+    if (nextContent !== draftContentRef.current) {
+      updateDraftContent(nextContent);
+      setSaveState({ status: 'idle' });
+    }
+    mdxEditorTouchedRef.current = false;
+    return nextContent;
+  }
+
+  function scheduleReadEditorSync(): void {
+    if (editorMode !== 'read' || viewState.status !== 'ready' || mdxEditorRef.current === null) return;
+    mdxEditorTouchedRef.current = true;
+    if (pendingMdxSyncFrameRef.current !== null) return;
+
+    pendingMdxSyncFrameRef.current = window.requestAnimationFrame(() => {
+      pendingMdxSyncFrameRef.current = null;
+      syncReadEditorToDraft(true);
+    });
+  }
+
+  function isContentChangingKey(key: string): boolean {
+    return key.length === 1 || ['Backspace', 'Delete', 'Enter', 'Tab'].includes(key);
+  }
 
   async function confirmBeforeReplacingDocument(): Promise<boolean> {
-    const currentContent = commitActiveQuickEditBlock();
+    const currentContent = syncReadEditorToDraft();
     const dirty = viewState.status === 'ready' && currentContent !== viewState.document.content;
-    if (!dirty && !hasQuickEditPending && !hasQuickEditPendingRef.current) return true;
+    if (!dirty) return true;
     const result = await window.mdViewer.confirmDiscardChanges();
     return result.action === 'discard';
   }
@@ -375,26 +448,71 @@ export function App() {
     return applySearchHighlights(resolvedMarkdownHtml, searchQuery, activeSearchIndex);
   }, [activeSearchIndex, renderedMarkdown, resolvedMarkdownHtml, searchQuery]);
 
-  const editableBlockById = useMemo(() => {
-    const entries =
-      renderedMarkdown?.status === 'ready'
-        ? renderedMarkdown.editableBlocks.map((block) => [block.id, block] as const)
-        : [];
-    return new Map<string, EditableMarkdownBlock>(entries);
-  }, [renderedMarkdown]);
+  const activeDocumentPath = viewState.status === 'ready' ? viewState.document.path : '';
+  const showSearchPreview =
+    editorMode === 'read' && searchQuery.trim().length > 0 && renderedMarkdown?.status === 'ready';
 
-  const quickEditHtml = useMemo(() => {
-    if (editorMode !== 'read' || renderedMarkdown?.status !== 'ready') {
-      return searchResult.html;
-    }
-    return enableQuickEditHtml(searchResult.html);
-  }, [editorMode, renderedMarkdown, searchResult.html]);
+  const mdxEditorPlugins = useMemo(
+    () => [
+      headingsPlugin(),
+      listsPlugin(),
+      quotePlugin(),
+      thematicBreakPlugin(),
+      linkPlugin(),
+      linkDialogPlugin({
+        onClickLinkCallback: (url) => {
+          void openMarkdownHref(url);
+        }
+      }),
+      tablePlugin(),
+      codeBlockPlugin({ defaultCodeBlockLanguage: 'txt' }),
+      codeMirrorPlugin({
+        codeBlockLanguages: {
+          bash: 'Bash',
+          css: 'CSS',
+          html: 'HTML',
+          javascript: 'JavaScript',
+          js: 'JavaScript',
+          json: 'JSON',
+          markdown: 'Markdown',
+          md: 'Markdown',
+          text: 'Text',
+          ts: 'TypeScript',
+          typescript: 'TypeScript',
+          txt: 'Text'
+        }
+      }),
+      imagePlugin({
+        disableImageResize: true,
+        disableImageSettingsButton: true,
+        imagePreviewHandler: async (source) => {
+          if (!activeDocumentPath) return '';
+          const result = await window.mdViewer.resolveMarkdownImage(activeDocumentPath, source);
+          return result.ok ? result.src : '';
+        }
+      }),
+      markdownShortcutPlugin()
+    ],
+    [activeDocumentPath]
+  );
 
   const searchStatus = useMemo(() => {
     if (!searchQuery.trim()) return '';
     if (searchResult.count === 0) return '无结果';
     return `${searchResult.activeIndex + 1}/${searchResult.count}`;
   }, [searchQuery, searchResult]);
+
+  const missingImageSources = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          Object.entries(imageResolutions)
+            .filter(([, resolution]) => !resolution.ok)
+            .map(([source]) => source)
+        )
+      ),
+    [imageResolutions]
+  );
 
   useEffect(() => {
     if (outline.length === 0) {
@@ -453,10 +571,33 @@ export function App() {
   }, [hasUnsavedChanges]);
 
   useEffect(() => {
-    if (quickEditPendingContentRef.current === draftContent) {
-      quickEditPendingContentRef.current = null;
-    }
+    draftContentRef.current = draftContent;
   }, [draftContent]);
+
+  useEffect(() => {
+    if (viewState.status !== 'ready' || editorMode !== 'read' || mdxEditorRef.current === null) return;
+    mdxEditorRef.current.setMarkdown(draftContentRef.current);
+    mdxEditorTouchedRef.current = false;
+    setEditorError(null);
+  }, [editorMode, viewState]);
+
+  useEffect(() => {
+    if (editorMode !== 'read' || showSearchPreview || outline.length === 0) return;
+    const body = markdownBodyRef.current;
+    if (!body) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const headings = Array.from(body.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6'));
+      headings.forEach((heading, index) => {
+        const entry = outline[index];
+        if (!entry) return;
+        heading.id = entry.id;
+        heading.dataset.headingId = entry.id;
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [draftContent, editorMode, outline, showSearchPreview]);
 
   function scrollElementIntoReader(element: HTMLElement, block: 'start' | 'center' = 'start'): void {
     const reader = readerRef.current;
@@ -509,100 +650,46 @@ export function App() {
     });
   }
 
-  function applyQuickEditElement(element: HTMLElement, content: string): string {
-    const blockId = element.getAttribute('data-edit-block-id');
-    if (!blockId) return content;
-    const block = editableBlockById.get(blockId);
-    if (!block) return content;
-    return applyEditableBlockChange(content, block, quickEditElementText(element));
-  }
-
-  function updateQuickEditPendingForContent(nextContent: string): void {
-    const hasPendingContent = viewState.status === 'ready' && nextContent !== viewState.document.content;
-    if (hasQuickEditPendingRef.current !== hasPendingContent) {
-      void window.mdViewer.setUnsavedChanges(hasPendingContent);
-    }
-    hasQuickEditPendingRef.current = hasPendingContent;
-  }
-
-  function clearQuickEditPending(): void {
-    hasQuickEditPendingRef.current = false;
-    setHasQuickEditPending(false);
-  }
-
-  function stageQuickEditElement(element: HTMLElement): string {
-    const blockId = element.getAttribute('data-edit-block-id');
-    if (!blockId) return quickEditPendingContentRef.current ?? draftContent;
-
-    const currentSession = quickEditSessionRef.current;
-    const baseContent =
-      currentSession?.blockId === blockId
-        ? currentSession.baseContent
-        : quickEditPendingContentRef.current ?? draftContent;
-    const nextContent = applyQuickEditElement(element, baseContent);
-    quickEditSessionRef.current = { blockId, baseContent };
-    quickEditPendingContentRef.current = nextContent;
-    return nextContent;
-  }
-
-  function commitQuickEditContent(nextContent: string): string {
-    if (nextContent !== draftContent) {
-      setDraftContent(nextContent);
-    }
-    quickEditPendingContentRef.current = null;
-    clearQuickEditPending();
-    quickEditSessionRef.current = null;
-    setSaveState({ status: 'idle' });
-    return nextContent;
-  }
-
-  function commitQuickEditElement(element: HTMLElement): string {
-    const nextContent = stageQuickEditElement(element);
-    return commitQuickEditContent(nextContent);
-  }
-
-  function commitActiveQuickEditBlock(): string {
-    if (editorMode !== 'read') return quickEditPendingContentRef.current ?? draftContent;
-    const activeElement = document.activeElement;
-    const editElement = getQuickEditElement(activeElement);
-    if (editElement) return commitQuickEditElement(editElement);
-    const pendingContent = quickEditPendingContentRef.current;
-    return pendingContent !== null ? commitQuickEditContent(pendingContent) : draftContent;
-  }
-
   function setEditorModeSafely(nextMode: EditorMode): void {
     if (editorMode === 'read' && nextMode !== 'read') {
-      commitActiveQuickEditBlock();
+      syncReadEditorToDraft(true);
     }
+    setEditorError(null);
     setEditorMode(nextMode);
   }
 
-  function handleQuickEditInput(event: FormEvent<HTMLDivElement>): void {
-    const editElement = getQuickEditElement(event.target);
-    if (!editElement) return;
-    const nextContent = stageQuickEditElement(editElement);
-    updateQuickEditPendingForContent(nextContent);
+  function handleMdxEditorChange(nextMarkdown: string, initialMarkdownNormalize: boolean): void {
+    if (initialMarkdownNormalize && !mdxEditorTouchedRef.current) return;
+    mdxEditorTouchedRef.current = true;
+    updateDraftContent(nextMarkdown);
+    setEditorError(null);
+    setSaveState({ status: 'idle' });
   }
 
-  function handleQuickEditBlur(event: FocusEvent<HTMLDivElement>): void {
-    const editElement = getQuickEditElement(event.target);
-    if (!editElement) return;
-    const nextContent = stageQuickEditElement(editElement);
-    updateQuickEditPendingForContent(nextContent);
-  }
+  async function openMarkdownHref(rawHref: string): Promise<void> {
+    if (viewState.status !== 'ready') return;
 
-  function handleQuickEditKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-    const editElement = getQuickEditElement(event.target);
-    if (!editElement) return;
+    const href = recoverMdxNormalizedLocalHref(rawHref, `${viewState.document.content}\n${draftContentRef.current}`);
+    const isExternal = href.startsWith('http://') || href.startsWith('https://');
+    if (isExternal) {
+      setPendingExternalUrl(href);
+      return;
+    }
 
-    const kind = editElement.getAttribute('data-edit-block-kind');
-    if ((kind === 'heading' || kind === 'list-item') && event.key === 'Enter') {
-      event.preventDefault();
-      editElement.blur();
+    const result = await window.mdViewer.openMarkdownLink(
+      viewState.document.path,
+      href
+    );
+
+    if (result.ok && result.action === 'markdown') {
+      applyOpenResult({ ok: true, document: result.document });
+      await refreshRecentItems();
+    } else if (!result.ok) {
+      setSaveState({ status: 'error', message: result.message });
     }
   }
 
-  async function handleMarkdownClick(event: MouseEvent<HTMLDivElement>): Promise<void> {
+  async function handleMarkdownClick(event: MouseEvent<HTMLElement>): Promise<void> {
     if (viewState.status !== 'ready') return;
 
     const target = event.target;
@@ -620,26 +707,12 @@ export function App() {
 
     const anchor = target.closest('a[href]');
     if (!(anchor instanceof HTMLAnchorElement)) return;
+    if (!event.ctrlKey && !event.metaKey) return;
 
     event.preventDefault();
+    event.stopPropagation();
     const href = anchor.getAttribute('href') ?? '';
-    const isExternal = href.startsWith('http://') || href.startsWith('https://');
-    if (isExternal) {
-      // Intercept and show confirmation dialog
-      setPendingExternalUrl(href);
-    } else {
-      const result = await window.mdViewer.openMarkdownLink(
-        viewState.document.path,
-        href
-      );
-
-      if (result.ok && result.action === 'markdown') {
-        applyOpenResult({ ok: true, document: result.document });
-        await refreshRecentItems();
-      } else if (!result.ok) {
-        setSaveState({ status: 'error', message: result.message });
-      }
-    }
+    await openMarkdownHref(href);
   }
 
   async function handleConfirmExternalLink(): Promise<void> {
@@ -660,10 +733,8 @@ export function App() {
   async function saveCurrentDocument(): Promise<void> {
     if (viewState.status !== 'ready') return;
 
-    const contentToSave = commitActiveQuickEditBlock();
+    const contentToSave = syncReadEditorToDraft();
     if (contentToSave === viewState.document.content) {
-      clearQuickEditPending();
-      quickEditPendingContentRef.current = null;
       void window.mdViewer.setUnsavedChanges(false);
       return;
     }
@@ -672,12 +743,11 @@ export function App() {
     const result = await window.mdViewer.saveMarkdownFile(viewState.document.path, contentToSave);
 
     if (result.ok) {
-      setDraftContent(result.document.content);
-      clearQuickEditPending();
-      quickEditPendingContentRef.current = null;
-      quickEditSessionRef.current = null;
+      updateDraftContent(result.document.content);
+      mdxEditorTouchedRef.current = false;
       setViewState({ status: 'ready', document: result.document });
       setSaveState({ status: 'saved' });
+      void window.mdViewer.setUnsavedChanges(false);
       await refreshRecentItems();
       return;
     }
@@ -710,6 +780,7 @@ export function App() {
   }
 
   function openFindBar(): void {
+    syncReadEditorToDraft();
     setIsFindOpen(true);
     window.requestAnimationFrame(() => {
       searchInputRef.current?.focus();
@@ -726,7 +797,7 @@ export function App() {
 
   async function exportCurrentDocumentToPdf(): Promise<void> {
     if (viewState.status !== 'ready') return;
-    commitActiveQuickEditBlock();
+    syncReadEditorToDraft();
     const result = await window.mdViewer.exportToPdf();
     if (!result.ok && result.message !== '已取消导出。') {
       setSaveState({ status: 'error', message: result.message ?? 'PDF 导出失败。' });
@@ -894,7 +965,7 @@ export function App() {
         }
       }
     ];
-  }, [viewState, hasUnsavedChanges, editorMode, theme, draftContent, editableBlockById]);
+  }, [viewState, hasUnsavedChanges, editorMode, theme, draftContent]);
 
   const filteredCommands = useMemo(() => {
     const q = commandPaletteQuery.trim().toLowerCase();
@@ -1146,51 +1217,78 @@ export function App() {
                 </div>
               )}
 
-              {renderedMarkdown?.status === 'empty' && (
+              {(renderedMarkdown?.status === 'error' || editorError) && (
+                <div className="document-render-error" role="alert">
+                  {editorError ?? (renderedMarkdown?.status === 'error' ? renderedMarkdown.message : '')}
+                </div>
+              )}
+
+              {editorMode === 'source-edit' ? (
+                <div className="editor-split" data-testid="editor-split">
+                  <textarea
+                    className="source-editor"
+                    data-testid="source-editor"
+                    spellCheck={false}
+                    value={draftContent}
+                    onChange={(event) => {
+                      updateDraftContent(event.target.value);
+                      setEditorError(null);
+                      setSaveState({ status: 'idle' });
+                    }}
+                  />
+                  <div
+                    className="markdown-body editor-preview"
+                    data-testid="editor-preview"
+                    dangerouslySetInnerHTML={{ __html: renderedMarkdown?.status === 'ready' ? searchResult.html : '' }}
+                    onClick={handleMarkdownClick}
+                  />
+                </div>
+              ) : renderedMarkdown?.status === 'empty' ? (
                 <div className="document-empty" data-testid="markdown-empty">
                   文件为空
                 </div>
-              )}
-
-              {renderedMarkdown?.status === 'error' && (
-                <div className="document-render-error" role="alert">
-                  {renderedMarkdown.message}
+              ) : showSearchPreview ? (
+                <div
+                  className="markdown-body editor-search-preview"
+                  data-testid="markdown-body"
+                  dangerouslySetInnerHTML={{ __html: searchResult.html }}
+                  onClick={handleMarkdownClick}
+                />
+              ) : (
+                <div
+                  className="mdx-wysiwyg-host"
+                  data-testid="markdown-body"
+                  ref={markdownBodyRef}
+                  onClickCapture={handleMarkdownClick}
+                  onInputCapture={() => {
+                    scheduleReadEditorSync();
+                  }}
+                  onKeyDownCapture={(event) => {
+                    if (isContentChangingKey(event.key)) {
+                      scheduleReadEditorSync();
+                    }
+                  }}
+                >
+                  <MDXEditor
+                    ref={mdxEditorRef}
+                    className="mdx-wysiwyg-editor-root"
+                    contentEditableClassName="markdown-body mdx-wysiwyg-editor"
+                    markdown={draftContent}
+                    plugins={mdxEditorPlugins}
+                    spellCheck
+                    suppressHtmlProcessing
+                    trim={false}
+                    onChange={handleMdxEditorChange}
+                    onError={(payload) => {
+                      setEditorError(payload.error || 'Markdown 解析失败，请切换源码编辑修复。');
+                    }}
+                  />
+                  {missingImageSources.map((source) => (
+                    <span className="image-placeholder" data-testid="missing-image" key={source}>
+                      图片缺失：{source}
+                    </span>
+                  ))}
                 </div>
-              )}
-
-              {renderedMarkdown?.status === 'ready' && (
-                <>
-                  {editorMode === 'source-edit' ? (
-                    <div className="editor-split" data-testid="editor-split">
-                      <textarea
-                        className="source-editor"
-                        data-testid="source-editor"
-                        spellCheck={false}
-                        value={draftContent}
-                        onChange={(event) => {
-                          setDraftContent(event.target.value);
-                          setSaveState({ status: 'idle' });
-                        }}
-                      />
-                      <div
-                        className="markdown-body editor-preview"
-                        data-testid="editor-preview"
-                        dangerouslySetInnerHTML={{ __html: searchResult.html }}
-                        onClick={handleMarkdownClick}
-                      />
-                    </div>
-                  ) : (
-                    <div
-                      className="markdown-body quick-edit-body"
-                      data-testid="markdown-body"
-                      dangerouslySetInnerHTML={{ __html: quickEditHtml }}
-                      onBlur={handleQuickEditBlur}
-                      onClick={handleMarkdownClick}
-                      onInput={handleQuickEditInput}
-                      onKeyDown={handleQuickEditKeyDown}
-                    />
-                  )}
-                </>
               )}
             </article>
           )}
