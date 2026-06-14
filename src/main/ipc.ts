@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -20,12 +20,42 @@ import { createSecurityDiagnostics } from './security';
 import { openMarkdownWorkspace, type WorkspaceOpenOptions } from './workspaceAccess';
 import { isPathInsideDirectory, normalizePath } from './pathPolicy';
 import { IPC_CHANNELS } from '../shared/ipcChannels';
+import { translateErrorMessage } from '../shared/mainI18n';
 import type { MenuManager } from './nativeMenu';
 import type { MarkdownLinkOpenResult, MarkdownOpenResult, WorkspaceOpenResult } from '../shared/documentTypes';
 
 const authorizedFiles = new Set<string>();
 const authorizedDirs = new Set<string>();
 let currentLang: 'zh' | 'en' = 'en';
+
+function langFilePath(): string {
+  return join(app.getPath('userData'), 'viewer-state', 'lang.json');
+}
+
+async function loadLangPreference(): Promise<'zh' | 'en'> {
+  try {
+    const raw = await readFile(langFilePath(), 'utf8');
+    const data = JSON.parse(raw) as unknown;
+    if (typeof data === 'object' && data !== null && 'lang' in data) {
+      const lang = (data as { lang: unknown }).lang;
+      if (lang === 'zh' || lang === 'en') return lang;
+    }
+  } catch {
+    // file doesn't exist or is corrupt — use default
+  }
+  return 'en';
+}
+
+async function saveLangPreference(lang: 'zh' | 'en'): Promise<void> {
+  try {
+    const dir = join(app.getPath('userData'), 'viewer-state');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(dir, { recursive: true });
+    await writeFile(langFilePath(), JSON.stringify({ lang }), 'utf8');
+  } catch {
+    // best-effort persistence
+  }
+}
 
 const unsavedDialogs = {
   zh: {
@@ -139,6 +169,13 @@ function createDefaultRecentStore() {
   return createRecentStore(join(app.getPath('userData'), 'viewer-state', 'recent.json'));
 }
 
+function tr<T extends { ok: boolean; message?: string }>(result: T): T {
+  if (!result.ok && result.message) {
+    return { ...result, message: translateErrorMessage(result.message, currentLang) };
+  }
+  return result;
+}
+
 async function recordRecentSafely(
   recentStore: ReturnType<typeof createRecentStore>,
   type: 'file' | 'folder',
@@ -201,13 +238,14 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
 
   ipcMain.handle(IPC_CHANNELS.OPEN_MARKDOWN_DIALOG, async () => {
     const result: MarkdownOpenResult = await openMarkdownFromDialog(() =>
-      dialog.showOpenDialog(window, getMarkdownDialogOptions(currentLang))
+      dialog.showOpenDialog(window, getMarkdownDialogOptions(currentLang)),
+      currentLang
     );
     if (result.ok) {
       authorizedFiles.add(normalizePath(result.document.path));
       await recordRecentSafely(recentStore, 'file', result.document.path);
     }
-    return result;
+    return tr(result);
   });
 
   ipcMain.handle(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH, async (_event, filePath: unknown, isDropped?: unknown) => {
@@ -239,7 +277,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
     if (result.ok) {
       await recordRecentSafely(recentStore, 'file', result.document.path);
     }
-    return result;
+    return tr(result);
   });
 
   ipcMain.handle(
@@ -278,19 +316,20 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
       authorizedFiles.add(normalizePath(result.document.path));
       await recordRecentSafely(recentStore, 'file', result.document.path);
     }
-    return result;
+    return tr(result);
   });
 
   ipcMain.handle(IPC_CHANNELS.OPEN_WORKSPACE_DIALOG, async () => {
     const result: WorkspaceOpenResult = await openWorkspaceFromDialog(
       () => dialog.showOpenDialog(window, getWorkspaceDialogOptions(currentLang)),
-      workspaceOptions
+      workspaceOptions,
+      currentLang
     );
     if (result.ok) {
       authorizedDirs.add(normalizePath(result.workspace.path));
       await recordRecentSafely(recentStore, 'folder', result.workspace.path);
     }
-    return result;
+    return tr(result);
   });
 
   ipcMain.handle(IPC_CHANNELS.OPEN_WORKSPACE_BY_PATH, async (_event, folderPath: unknown) => {
@@ -312,7 +351,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
     if (result.ok) {
       await recordRecentSafely(recentStore, 'folder', result.workspace.path);
     }
-    return result;
+    return tr(result);
   });
 
   ipcMain.handle(IPC_CHANNELS.GET_RECENT_ITEMS, async () => {
@@ -360,7 +399,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
       hasUnsavedChanges = false;
       await recordRecentSafely(recentStore, 'file', result.document.path);
     }
-    return result;
+    return tr(result);
   });
 
   ipcMain.handle(IPC_CHANNELS.OPEN_DEFAULT_EDITOR, async (_event, filePath: unknown) => {
@@ -428,7 +467,14 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
   ipcMain.handle(IPC_CHANNELS.SET_LANGUAGE, (_event, lang: unknown) => {
     if (typeof lang === 'string' && (lang === 'zh' || lang === 'en')) {
       currentLang = lang;
+      void saveLangPreference(lang);
       menuManager?.setLanguage(lang);
     }
   });
+
+  // Initialize language from persisted preference before first dialog
+  loadLangPreference().then((lang) => {
+    currentLang = lang;
+    menuManager?.setLanguage(lang);
+  }).catch(() => {});
 }
