@@ -6,8 +6,15 @@
   "author": "Markdown viewer Contributors",
   "main": "out/main/index.js",
   "type": "module",
-  "license": "UNLICENSED",
-  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mirad-tech/markdown-viewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mirad-tech/markdown-viewer/issues"
+  },
+  "homepage": "https://github.com/mirad-tech/markdown-viewer#readme",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
