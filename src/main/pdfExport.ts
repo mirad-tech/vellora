@@ -47,12 +47,12 @@ export async function exportWindowToPdf(
     });
 
     if (result.canceled || !result.filePath) {
-      return { ok: false, message: '已取消导出。' };
+      return { ok: false, code: 'CANCELED', message: '已取消导出。' };
     }
 
     await dependencies.writeFile(result.filePath, pdfData);
     return { ok: true };
   } catch {
-    return { ok: false, message: 'PDF 导出失败。' };
+    return { ok: false, code: 'EXPORT_FAILED', message: 'PDF 导出失败。' };
   }
 }

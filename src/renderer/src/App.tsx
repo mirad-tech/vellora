@@ -237,6 +237,7 @@ export function App() {
   const pendingMdxSyncFrameRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const menuActionHandlerRef = useRef<(action: string) => void>(() => {});
+  const unsavedSyncRef = useRef<Promise<void>>(Promise.resolve());
 
   // New visual/structural states
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -269,6 +270,15 @@ export function App() {
       pendingMdxSyncFrameRef.current = null;
     }
     setSaveState({ status: 'idle' });
+  }
+
+  function syncUnsavedChanges(value: boolean): Promise<void> {
+    const nextSync = unsavedSyncRef.current
+      .catch(() => {})
+      .then(() => window.mdViewer.setUnsavedChanges(value))
+      .then(() => undefined, () => undefined);
+    unsavedSyncRef.current = nextSync;
+    return nextSync;
   }
 
   function applyOpenResult(result: MarkdownOpenResult): void {
@@ -564,7 +574,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void window.mdViewer.setUnsavedChanges(hasUnsavedChanges);
+    void syncUnsavedChanges(hasUnsavedChanges);
   }, [hasUnsavedChanges]);
 
   useEffect(() => {
@@ -732,7 +742,7 @@ export function App() {
 
     const contentToSave = syncReadEditorToDraft();
     if (contentToSave === viewState.document.content) {
-      void window.mdViewer.setUnsavedChanges(false);
+      await syncUnsavedChanges(false);
       return;
     }
 
@@ -744,7 +754,7 @@ export function App() {
       mdxEditorTouchedRef.current = false;
       setViewState({ status: 'ready', document: result.document });
       setSaveState({ status: 'saved' });
-      void window.mdViewer.setUnsavedChanges(false);
+      await syncUnsavedChanges(false);
       await refreshRecentItems();
       return;
     }
@@ -796,7 +806,7 @@ export function App() {
     if (viewState.status !== 'ready') return;
     syncReadEditorToDraft();
     const result = await window.mdViewer.exportToPdf();
-    if (!result.ok && result.message !== t.pdf.cancelled) {
+    if (!result.ok && result.code !== 'CANCELED') {
       setSaveState({ status: 'error', message: result.message ?? t.pdf.failed });
     }
   }
@@ -1220,11 +1230,7 @@ export function App() {
                 </div>
               )}
 
-              {renderedMarkdown?.status === 'empty' ? (
-                <div className="document-empty" data-testid="markdown-empty">
-                  {t.app.documentEmpty}
-                </div>
-              ) : editorMode === 'source-edit' ? (
+              {editorMode === 'source-edit' ? (
                 <div className="editor-split" data-testid="editor-split">
                   <textarea
                     className="source-editor"
@@ -1243,6 +1249,10 @@ export function App() {
                     dangerouslySetInnerHTML={{ __html: renderedMarkdown?.status === 'ready' ? searchResult.html : '' }}
                     onClick={handleMarkdownClick}
                   />
+                </div>
+              ) : renderedMarkdown?.status === 'empty' ? (
+                <div className="document-empty" data-testid="markdown-empty">
+                  {t.app.documentEmpty}
                 </div>
               ) : showSearchPreview ? (
                 <div

@@ -23,6 +23,7 @@ const zhMessages: Record<string, string> = {
   '选择的路径不是文件夹。': '选择的路径不是文件夹。',
   '文件夹不存在或已被移动。': '文件夹不存在或已被移动。',
   '无法读取文件夹，请检查权限或文件状态。': '无法读取文件夹，请检查权限或文件状态。',
+  '无法读取最近打开记录。': '无法读取最近打开记录。',
   '已取消导出。': '已取消导出。',
   'PDF 导出失败。': 'PDF 导出失败。'
 };
@@ -52,6 +53,7 @@ const enMessages: Record<string, string> = {
   '选择的路径不是文件夹。': 'The selected path is not a folder.',
   '文件夹不存在或已被移动。': 'Folder not found or has been moved.',
   '无法读取文件夹，请检查权限或文件状态。': 'Cannot read folder. Check permissions or file status.',
+  '无法读取最近打开记录。': 'Cannot read recent items.',
   '已取消导出。': 'Export cancelled.',
   'PDF 导出失败。': 'PDF export failed.'
 };
@@ -59,4 +61,14 @@ const enMessages: Record<string, string> = {
 export function translateErrorMessage(message: string, lang: 'zh' | 'en'): string {
   if (lang === 'zh') return zhMessages[message] ?? message;
   return enMessages[message] ?? message;
+}
+
+export function translateResultMessage<T extends { ok: boolean; message?: string }>(
+  result: T,
+  lang: 'zh' | 'en'
+): T {
+  if (!result.ok && result.message) {
+    return { ...result, message: translateErrorMessage(result.message, lang) };
+  }
+  return result;
 }

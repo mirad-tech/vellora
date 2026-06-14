@@ -1,8 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
 import { openDefaultEditor, saveMarkdownFile } from './documentWrite';
 import { isMarkdownPath, readMarkdownFile } from './fileAccess';
@@ -20,42 +20,13 @@ import { createSecurityDiagnostics } from './security';
 import { openMarkdownWorkspace, type WorkspaceOpenOptions } from './workspaceAccess';
 import { isPathInsideDirectory, normalizePath } from './pathPolicy';
 import { IPC_CHANNELS } from '../shared/ipcChannels';
-import { translateErrorMessage } from '../shared/mainI18n';
+import { translateResultMessage } from '../shared/mainI18n';
 import type { MenuManager } from './nativeMenu';
 import type { MarkdownLinkOpenResult, MarkdownOpenResult, WorkspaceOpenResult } from '../shared/documentTypes';
 
 const authorizedFiles = new Set<string>();
 const authorizedDirs = new Set<string>();
 let currentLang: 'zh' | 'en' = 'en';
-
-function langFilePath(): string {
-  return join(app.getPath('userData'), 'viewer-state', 'lang.json');
-}
-
-async function loadLangPreference(): Promise<'zh' | 'en'> {
-  try {
-    const raw = await readFile(langFilePath(), 'utf8');
-    const data = JSON.parse(raw) as unknown;
-    if (typeof data === 'object' && data !== null && 'lang' in data) {
-      const lang = (data as { lang: unknown }).lang;
-      if (lang === 'zh' || lang === 'en') return lang;
-    }
-  } catch {
-    // file doesn't exist or is corrupt — use default
-  }
-  return 'en';
-}
-
-async function saveLangPreference(lang: 'zh' | 'en'): Promise<void> {
-  try {
-    const dir = join(app.getPath('userData'), 'viewer-state');
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(dir, { recursive: true });
-    await writeFile(langFilePath(), JSON.stringify({ lang }), 'utf8');
-  } catch {
-    // best-effort persistence
-  }
-}
 
 const unsavedDialogs = {
   zh: {
@@ -170,10 +141,7 @@ function createDefaultRecentStore() {
 }
 
 function tr<T extends { ok: boolean; message?: string }>(result: T): T {
-  if (!result.ok && result.message) {
-    return { ...result, message: translateErrorMessage(result.message, currentLang) };
-  }
-  return result;
+  return translateResultMessage(result, currentLang);
 }
 
 async function recordRecentSafely(
@@ -253,25 +221,25 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
       authorizedFiles.add(normalizePath(filePath));
     }
     if (typeof filePath !== 'string' || filePath.trim() === '') {
-      return {
+      return tr({
         ok: false,
         code: 'INVALID_ARGUMENT',
         message: '文件路径无效。'
-      };
+      });
     }
     if (!isMarkdownPath(filePath)) {
-      return {
+      return tr({
         ok: false,
         code: 'UNSUPPORTED_FILE_TYPE',
         message: '只能打开 .md 或 .markdown 文件。'
-      };
+      });
     }
     if (!(await isFileAuthorized(filePath))) {
-      return {
+      return tr({
         ok: false,
         code: 'READ_FAILED',
         message: '无法读取文件，请检查权限或文件状态。'
-      };
+      });
     }
     const result = await readMarkdownFile(filePath);
     if (result.ok) {
@@ -284,25 +252,26 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
     IPC_CHANNELS.RESOLVE_MARKDOWN_IMAGE,
     async (_event, documentPath: unknown, imageSource: unknown) => {
       if (typeof documentPath !== 'string' || !(await isFileAuthorized(documentPath))) {
-        return {
+        return tr({
           ok: false,
           code: 'INVALID_ARGUMENT',
           message: '文件路径无效。'
-        };
+        });
       }
-      return resolveMarkdownImage(documentPath, imageSource, {
+      const result = await resolveMarkdownImage(documentPath, imageSource, {
         allowedDirectories: Array.from(authorizedDirs)
       });
+      return tr(result);
     }
   );
 
   ipcMain.handle(IPC_CHANNELS.OPEN_MARKDOWN_LINK, async (_event, documentPath: unknown, href: unknown) => {
     if (typeof documentPath !== 'string' || !(await isFileAuthorized(documentPath))) {
-      return {
+      return tr({
         ok: false,
         code: 'INVALID_ARGUMENT',
         message: '文件路径无效。'
-      };
+      });
     }
     const result: MarkdownLinkOpenResult = await openMarkdownLink(
       documentPath,
@@ -334,18 +303,18 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
 
   ipcMain.handle(IPC_CHANNELS.OPEN_WORKSPACE_BY_PATH, async (_event, folderPath: unknown) => {
     if (typeof folderPath !== 'string' || folderPath.trim() === '') {
-      return {
+      return tr({
         ok: false,
         code: 'INVALID_ARGUMENT',
         message: '文件夹路径无效。'
-      };
+      });
     }
     if (!(await isDirAuthorized(folderPath))) {
-      return {
+      return tr({
         ok: false,
         code: 'READ_FAILED',
         message: '无法读取文件夹，请检查权限或文件状态。'
-      };
+      });
     }
     const result = await openMarkdownWorkspace(folderPath, workspaceOptions);
     if (result.ok) {
@@ -355,30 +324,30 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
   });
 
   ipcMain.handle(IPC_CHANNELS.GET_RECENT_ITEMS, async () => {
-    return recentStore.read();
+    return tr(await recentStore.read());
   });
 
   ipcMain.handle(IPC_CHANNELS.SAVE_MARKDOWN_FILE, async (_event, filePath: unknown, content: unknown) => {
     if (typeof filePath !== 'string' || filePath.trim() === '') {
-      return {
+      return tr({
         ok: false,
         code: 'INVALID_ARGUMENT',
         message: '文件路径无效。'
-      };
+      });
     }
     if (typeof content !== 'string') {
-      return {
+      return tr({
         ok: false,
         code: 'INVALID_ARGUMENT',
         message: '保存内容无效。'
-      };
+      });
     }
     if (!isMarkdownPath(filePath)) {
-      return {
+      return tr({
         ok: false,
         code: 'UNSUPPORTED_FILE_TYPE',
         message: '只能保存 .md 或 .markdown 文件。'
-      };
+      });
     }
 
     const normPath = normalizePath(filePath);
@@ -387,11 +356,11 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
     const exists = existsSync(filePath);
 
     if (!isAuth || !(isOpened || exists)) {
-      return {
+      return tr({
         ok: false,
         code: 'SAVE_FAILED',
         message: '保存失败，请检查权限或文件状态。'
-      };
+      });
     }
 
     const result = await saveMarkdownFile(filePath, content);
@@ -404,36 +373,37 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
 
   ipcMain.handle(IPC_CHANNELS.OPEN_DEFAULT_EDITOR, async (_event, filePath: unknown) => {
     if (typeof filePath !== 'string' || filePath.trim() === '') {
-      return {
+      return tr({
         ok: false,
         code: 'INVALID_ARGUMENT',
         message: '文件路径无效。'
-      };
+      });
     }
     if (!isMarkdownPath(filePath)) {
-      return {
+      return tr({
         ok: false,
         code: 'UNSUPPORTED_FILE_TYPE',
         message: '只能打开 .md 或 .markdown 文件。'
-      };
+      });
     }
     if (!(await isFileAuthorized(filePath))) {
-      return {
+      return tr({
         ok: false,
         code: 'OPEN_FAILED',
         message: '无法用默认编辑器打开文件。'
-      };
+      });
     }
-    return openDefaultEditor(filePath, (pathToOpen) => shell.openPath(pathToOpen));
+    return tr(await openDefaultEditor(filePath, (pathToOpen) => shell.openPath(pathToOpen)));
   });
 
   ipcMain.handle(IPC_CHANNELS.EXPORT_TO_PDF, async () => {
     const targetWindow = BrowserWindow.getFocusedWindow() ?? window;
-    return exportWindowToPdf(targetWindow, {
+    const result = await exportWindowToPdf(targetWindow, {
       showSaveDialog: (dialogWindow, options) =>
         dialog.showSaveDialog(dialogWindow as BrowserWindow, options),
       writeFile
     });
+    return tr(result);
   });
 
   ipcMain.handle(IPC_CHANNELS.SET_UNSAVED_CHANGES, (_event, value: unknown) => {
@@ -467,14 +437,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
   ipcMain.handle(IPC_CHANNELS.SET_LANGUAGE, (_event, lang: unknown) => {
     if (typeof lang === 'string' && (lang === 'zh' || lang === 'en')) {
       currentLang = lang;
-      void saveLangPreference(lang);
       menuManager?.setLanguage(lang);
     }
   });
-
-  // Initialize language from persisted preference before first dialog
-  loadLangPreference().then((lang) => {
-    currentLang = lang;
-    menuManager?.setLanguage(lang);
-  }).catch(() => {});
 }
