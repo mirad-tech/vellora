@@ -52,14 +52,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     } catch {
       // preload API may not be available in test
     }
-    // Update <html lang>
-    document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
-    // Update <title>
-    document.title = messages[next].app.title;
   }, []);
 
   useEffect(() => {
-    // Set initial lang attribute and title
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
     document.title = messages[lang].app.title;
   }, [lang]);

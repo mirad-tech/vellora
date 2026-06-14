@@ -91,6 +91,7 @@ const zh = {
   settings: {
     title: '设置与安全诊断',
     theme: '外观主题',
+    language: 'Language / 语言',
     themeLight: '浅色',
     themeDark: '深色',
     securityReport: '安全环境诊断报告',
@@ -221,6 +222,7 @@ const en: I18nMessages = {
   settings: {
     title: 'Settings & Security Diagnostics',
     theme: 'Appearance',
+    language: 'Language / 语言',
     themeLight: 'Light',
     themeDark: 'Dark',
     securityReport: 'Security Diagnostics Report',
