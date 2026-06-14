@@ -7,3 +7,4 @@ playwright-report/
 *.stdout.log
 *.stderr.log
 *.log
+.claude/*.json
