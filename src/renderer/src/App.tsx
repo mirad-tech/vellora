@@ -1452,14 +1452,14 @@ export function App() {
                     type="button"
                     onClick={() => setLang('en')}
                   >
-                    <span>English</span>
+                    <span>{t.settings.langEn}</span>
                   </button>
                   <button
                     className={`theme-pick-btn ${lang === 'zh' ? 'selected' : ''}`}
                     type="button"
                     onClick={() => setLang('zh')}
                   >
-                    <span>中文</span>
+                    <span>{t.settings.langZh}</span>
                   </button>
                 </div>
               </div>

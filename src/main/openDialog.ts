@@ -4,21 +4,28 @@ import { readMarkdownFile } from './fileAccess';
 import { openMarkdownWorkspace, type WorkspaceOpenOptions } from './workspaceAccess';
 import type { MarkdownOpenResult, WorkspaceOpenResult } from '../shared/documentTypes';
 
-export const MARKDOWN_DIALOG_OPTIONS: OpenDialogOptions = {
-  title: '打开 Markdown 文件',
-  properties: ['openFile'],
-  filters: [
-    {
-      name: 'Markdown',
-      extensions: ['md', 'markdown']
-    }
-  ]
-};
+export function getMarkdownDialogOptions(lang: 'zh' | 'en' = 'en'): OpenDialogOptions {
+  return {
+    title: lang === 'zh' ? '打开 Markdown 文件' : 'Open Markdown File',
+    properties: ['openFile'],
+    filters: [
+      {
+        name: 'Markdown',
+        extensions: ['md', 'markdown']
+      }
+    ]
+  };
+}
 
-export const WORKSPACE_DIALOG_OPTIONS: OpenDialogOptions = {
-  title: '打开文件夹',
-  properties: ['openDirectory']
-};
+export function getWorkspaceDialogOptions(lang: 'zh' | 'en' = 'en'): OpenDialogOptions {
+  return {
+    title: lang === 'zh' ? '打开文件夹' : 'Open Folder',
+    properties: ['openDirectory']
+  };
+}
+
+export const MARKDOWN_DIALOG_OPTIONS = getMarkdownDialogOptions();
+export const WORKSPACE_DIALOG_OPTIONS = getWorkspaceDialogOptions();
 
 export type ShowMarkdownDialog = () => Promise<Pick<OpenDialogReturnValue, 'canceled' | 'filePaths'>>;
 

@@ -57,6 +57,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
     document.title = messages[lang].app.title;
+    // Sync native menu on startup
+    try {
+      window.mdViewer.setLanguage(lang);
+    } catch {
+      // preload API may not be available in test
+    }
   }, [lang]);
 
   const t = messages[lang];

@@ -10,8 +10,8 @@ import { resolveMarkdownImage } from './imageAccess';
 import { exportWindowToPdf } from './pdfExport';
 import { openMarkdownLink } from './linkAccess';
 import {
-  MARKDOWN_DIALOG_OPTIONS,
-  WORKSPACE_DIALOG_OPTIONS,
+  getMarkdownDialogOptions,
+  getWorkspaceDialogOptions,
   openMarkdownFromDialog,
   openWorkspaceFromDialog
 } from './openDialog';
@@ -25,6 +25,18 @@ import type { MarkdownLinkOpenResult, MarkdownOpenResult, WorkspaceOpenResult } 
 
 const authorizedFiles = new Set<string>();
 const authorizedDirs = new Set<string>();
+let currentLang: 'zh' | 'en' = 'en';
+
+const unsavedDialogs = {
+  zh: {
+    buttons: ['继续编辑', '放弃更改'] as [string, string],
+    message: '当前文档有未保存更改。'
+  },
+  en: {
+    buttons: ['Continue Editing', 'Discard Changes'] as [string, string],
+    message: 'The current document has unsaved changes.'
+  }
+};
 
 let recentStoreRef: ReturnType<typeof createRecentStore> | null = null;
 
@@ -170,13 +182,14 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
     if (!hasUnsavedChanges || closeAllowed) return;
 
     event.preventDefault();
+    const dlg = unsavedDialogs[currentLang];
     const result = await dialog.showMessageBox(window, {
       type: 'warning',
-      buttons: ['继续编辑', '放弃更改'],
+      buttons: dlg.buttons,
       defaultId: 0,
       cancelId: 0,
       noLink: true,
-      message: '当前文档有未保存更改。'
+      message: dlg.message
     });
 
     if (result.response === 1) {
@@ -188,7 +201,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
 
   ipcMain.handle(IPC_CHANNELS.OPEN_MARKDOWN_DIALOG, async () => {
     const result: MarkdownOpenResult = await openMarkdownFromDialog(() =>
-      dialog.showOpenDialog(window, MARKDOWN_DIALOG_OPTIONS)
+      dialog.showOpenDialog(window, getMarkdownDialogOptions(currentLang))
     );
     if (result.ok) {
       authorizedFiles.add(normalizePath(result.document.path));
@@ -270,7 +283,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
 
   ipcMain.handle(IPC_CHANNELS.OPEN_WORKSPACE_DIALOG, async () => {
     const result: WorkspaceOpenResult = await openWorkspaceFromDialog(
-      () => dialog.showOpenDialog(window, WORKSPACE_DIALOG_OPTIONS),
+      () => dialog.showOpenDialog(window, getWorkspaceDialogOptions(currentLang)),
       workspaceOptions
     );
     if (result.ok) {
@@ -390,13 +403,14 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
   });
 
   ipcMain.handle(IPC_CHANNELS.CONFIRM_DISCARD_CHANGES, async () => {
+    const dlg = unsavedDialogs[currentLang];
     const result = await dialog.showMessageBox(window, {
       type: 'warning',
-      buttons: ['继续编辑', '放弃更改'],
+      buttons: dlg.buttons,
       defaultId: 0,
       cancelId: 0,
       noLink: true,
-      message: '当前文档有未保存更改。'
+      message: dlg.message
     });
 
     if (result.response === 1) {
@@ -413,6 +427,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
 
   ipcMain.handle(IPC_CHANNELS.SET_LANGUAGE, (_event, lang: unknown) => {
     if (typeof lang === 'string' && (lang === 'zh' || lang === 'en')) {
+      currentLang = lang;
       menuManager?.setLanguage(lang);
     }
   });
