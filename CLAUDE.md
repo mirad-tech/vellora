@@ -114,3 +114,19 @@ App.tsx 维护 `draftContent` 作为真实内容源，`viewState.document.conten
 - 命名导出优先
 - React 组件不使用路由或状态管理库，纯 `useState`/`useRef`/`useMemo`
 - CSS 在单个 `styles.css` 中，主题通过 `[data-theme="dark"]` 选择器切换。MDXEditor 和 highlight.js 各引入独立样式。
+
+## 版本发布流程
+
+1. 确保 typecheck 和测试通过：`npm run typecheck && npm test`
+2. 更新 `package.json` 中的 `version` 字段（遵循 semver）
+3. 运行 `npm run dist` 构建安装包到 `release/`
+4. 清理 `release/` 中不需要发布的产物（如 `win-unpacked/`、旧的 portable `.exe`）
+5. 打 annotated tag：`git tag -a vX.Y.Z -m "vX.Y.Z — <简要说明>"`
+6. 推送 tag：`git push origin vX.Y.Z`
+7. 创建 GitHub Release 并上传资产：
+   ```
+   gh release create vX.Y.Z "release/Markdown viewer Setup X.Y.Z.exe" \
+     "release/Markdown viewer Setup X.Y.Z.exe.blockmap" \
+     --title "vX.Y.Z" --notes "<更新说明>"
+   ```
+8. 推送提交：`git push origin main`
