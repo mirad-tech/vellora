@@ -1,10 +1,10 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { MenuItemConstructorOptions } from 'electron';
 
-import { createNativeMenuTemplate, installNativeApplicationMenu } from './nativeMenu';
+import { createMenuManager, createNativeMenuTemplate } from './nativeMenu';
 
 function normalizeLabel(label: string | undefined): string {
-  return (label ?? '').replaceAll('&', '');
+  return (label ?? '').replaceAll('&', '').replace(/\([^)]*\)$/, '');
 }
 
 function findTopLevelMenu(
@@ -81,9 +81,40 @@ describe('native application menu template', () => {
       setApplicationMenu: vi.fn()
     };
 
-    installNativeApplicationMenu({} as never, menuApi);
+    const manager = createMenuManager();
+    manager.install({} as never, menuApi);
 
     expect(menuApi.buildFromTemplate).toHaveBeenCalledWith(expect.any(Array));
     expect(menuApi.setApplicationMenu).toHaveBeenCalledWith(menu);
+  });
+
+  test('supports English and Chinese menu labels', () => {
+    const enTemplate = createNativeMenuTemplate(vi.fn(), 'en');
+    const zhTemplate = createNativeMenuTemplate(vi.fn(), 'zh');
+
+    expect(findSubmenuItem(enTemplate, 'File', 'Open File')).toBeTruthy();
+    expect(findSubmenuItem(zhTemplate, '文件', '打开文件')).toBeTruthy();
+  });
+
+  test('setLanguage rebuilds the menu', () => {
+    const builtMenus: unknown[] = [];
+    const menuApi = {
+      buildFromTemplate: vi.fn((template) => {
+        builtMenus.push(template);
+        return { id: `menu-${builtMenus.length}` };
+      }),
+      setApplicationMenu: vi.fn()
+    };
+
+    const manager = createMenuManager();
+    manager.install({} as never, menuApi);
+    expect(builtMenus).toHaveLength(1);
+
+    manager.setLanguage('zh');
+    expect(builtMenus).toHaveLength(2);
+
+    // Second template should have Chinese labels
+    const zhTemplate = builtMenus[1] as MenuItemConstructorOptions[];
+    expect(findSubmenuItem(zhTemplate, '文件', '打开文件')).toBeTruthy();
   });
 });

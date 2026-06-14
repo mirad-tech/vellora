@@ -28,4 +28,5 @@ export type MdViewerApi = {
   resolveMarkdownImage: (documentPath: string, imageSource: string) => Promise<ImageResolutionResult>;
   openMarkdownLink: (documentPath: string, href: string) => Promise<MarkdownLinkOpenResult>;
   getSecurityDiagnostics: () => Promise<SecurityDiagnostics>;
+  setLanguage: (lang: string) => Promise<void>;
 };

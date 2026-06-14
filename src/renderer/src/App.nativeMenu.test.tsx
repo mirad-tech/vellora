@@ -62,6 +62,7 @@ function createApi(): MdViewerApi & {
       webviewTag: false,
       allowedIpcChannels: []
     }),
+    setLanguage: vi.fn().mockResolvedValue(undefined),
     getMenuActionHandler: () => menuActionHandler
   };
 }

@@ -13,7 +13,8 @@ export const IPC_CHANNELS = {
   CONFIRM_DISCARD_CHANGES: 'editor:confirmDiscardChanges',
   MENU_ACTION: 'menu-action',
   EXPORT_TO_PDF: 'export-to-pdf',
-  GET_SECURITY_DIAGNOSTICS: 'app:getSecurityDiagnostics'
+  GET_SECURITY_DIAGNOSTICS: 'app:getSecurityDiagnostics',
+  SET_LANGUAGE: 'app:setLanguage'
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

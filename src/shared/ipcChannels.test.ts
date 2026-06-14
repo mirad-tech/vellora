@@ -19,7 +19,8 @@ describe('IPC channel whitelist', () => {
       CONFIRM_DISCARD_CHANGES: 'editor:confirmDiscardChanges',
       MENU_ACTION: 'menu-action',
       EXPORT_TO_PDF: 'export-to-pdf',
-      GET_SECURITY_DIAGNOSTICS: 'app:getSecurityDiagnostics'
+      GET_SECURITY_DIAGNOSTICS: 'app:getSecurityDiagnostics',
+      SET_LANGUAGE: 'app:setLanguage'
     });
   });
 });

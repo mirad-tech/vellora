@@ -20,6 +20,7 @@ import { createSecurityDiagnostics } from './security';
 import { openMarkdownWorkspace, type WorkspaceOpenOptions } from './workspaceAccess';
 import { isPathInsideDirectory, normalizePath } from './pathPolicy';
 import { IPC_CHANNELS } from '../shared/ipcChannels';
+import type { MenuManager } from './nativeMenu';
 import type { MarkdownLinkOpenResult, MarkdownOpenResult, WorkspaceOpenResult } from '../shared/documentTypes';
 
 const authorizedFiles = new Set<string>();
@@ -143,7 +144,7 @@ async function recordRecentSafely(
   }
 }
 
-export function registerIpcHandlers(window: BrowserWindow): void {
+export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuManager<any>): void {
   const recentStore = createDefaultRecentStore();
   recentStoreRef = recentStore;
   const workspaceOptions = workspaceOptionsFromEnvironment();
@@ -408,5 +409,11 @@ export function registerIpcHandlers(window: BrowserWindow): void {
 
   ipcMain.handle(IPC_CHANNELS.GET_SECURITY_DIAGNOSTICS, () => {
     return createSecurityDiagnostics();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SET_LANGUAGE, (_event, lang: unknown) => {
+    if (typeof lang === 'string' && (lang === 'zh' || lang === 'en')) {
+      menuManager?.setLanguage(lang);
+    }
   });
 }

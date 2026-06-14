@@ -23,46 +23,113 @@ export type NativeMenuApi<TMenu = unknown> = {
   setApplicationMenu: (menu: TMenu) => void;
 };
 
+type MenuLabels = {
+  file: string;
+  openFile: string;
+  openFolder: string;
+  save: string;
+  exportPdf: string;
+  openDefaultEditor: string;
+  closeDocument: string;
+  edit: string;
+  find: string;
+  commandPalette: string;
+  view: string;
+  toggleSidebar: string;
+  sourceEdit: string;
+  toggleTheme: string;
+  fileInfo: string;
+  recentFiles: string;
+  settings: string;
+  window: string;
+};
+
+const labels: Record<'zh' | 'en', MenuLabels> = {
+  zh: {
+    file: '文件(&F)',
+    openFile: '打开文件',
+    openFolder: '打开文件夹',
+    save: '保存',
+    exportPdf: '导出为 PDF',
+    openDefaultEditor: '用默认编辑器打开',
+    closeDocument: '关闭文档',
+    edit: '编辑(&E)',
+    find: '查找',
+    commandPalette: '命令面板',
+    view: '查看(&V)',
+    toggleSidebar: '切换侧边栏',
+    sourceEdit: '源码编辑',
+    toggleTheme: '切换主题',
+    fileInfo: '文件信息',
+    recentFiles: '最近文件',
+    settings: '设置',
+    window: '窗口(&W)'
+  },
+  en: {
+    file: '&File',
+    openFile: 'Open File',
+    openFolder: 'Open Folder',
+    save: 'Save',
+    exportPdf: 'Export as PDF',
+    openDefaultEditor: 'Open in Default Editor',
+    closeDocument: 'Close Document',
+    edit: '&Edit',
+    find: 'Find',
+    commandPalette: 'Command Palette',
+    view: '&View',
+    toggleSidebar: 'Toggle Sidebar',
+    sourceEdit: 'Source Edit',
+    toggleTheme: 'Toggle Theme',
+    fileInfo: 'File Info',
+    recentFiles: 'Recent Files',
+    settings: 'Settings',
+    window: '&Window'
+  }
+};
+
 function send(sendAction: (action: NativeMenuAction) => void, action: NativeMenuAction) {
   return () => sendAction(action);
 }
 
 export function createNativeMenuTemplate(
-  sendAction: (action: NativeMenuAction) => void
+  sendAction: (action: NativeMenuAction) => void,
+  lang: 'zh' | 'en' = 'en'
 ): MenuItemConstructorOptions[] {
+  const lb = labels[lang];
+
   return [
     {
-      label: '&File',
+      label: lb.file,
       submenu: [
         {
-          label: 'Open File',
+          label: lb.openFile,
           accelerator: 'CommandOrControl+O',
           click: send(sendAction, 'open-file')
         },
         {
-          label: 'Open Folder',
+          label: lb.openFolder,
           accelerator: 'CommandOrControl+Shift+O',
           click: send(sendAction, 'open-folder')
         },
         { type: 'separator' },
         {
-          label: 'Save',
+          label: lb.save,
           accelerator: 'CommandOrControl+S',
           click: send(sendAction, 'save-document')
         },
         {
-          label: 'Export as PDF',
+          label: lb.exportPdf,
           accelerator: 'CommandOrControl+Shift+P',
           click: send(sendAction, 'export-pdf')
         },
         {
-          label: 'Open in Default Editor',
+          label: lb.openDefaultEditor,
           accelerator: 'CommandOrControl+Shift+E',
           click: send(sendAction, 'open-default-editor')
         },
         { type: 'separator' },
         {
-          label: 'Close Document',
+          label: lb.closeDocument,
           accelerator: 'CommandOrControl+W',
           click: send(sendAction, 'close-document')
         },
@@ -71,7 +138,7 @@ export function createNativeMenuTemplate(
       ]
     },
     {
-      label: '&Edit',
+      label: lb.edit,
       submenu: [
         { role: 'undo' },
         { role: 'redo' },
@@ -82,47 +149,47 @@ export function createNativeMenuTemplate(
         { role: 'selectAll' },
         { type: 'separator' },
         {
-          label: 'Find',
+          label: lb.find,
           accelerator: 'CommandOrControl+F',
           click: send(sendAction, 'focus-search')
         },
         {
-          label: 'Command Palette',
+          label: lb.commandPalette,
           accelerator: 'CommandOrControl+K',
           click: send(sendAction, 'open-command-palette')
         }
       ]
     },
     {
-      label: '&View',
+      label: lb.view,
       submenu: [
         {
-          label: 'Toggle Sidebar',
+          label: lb.toggleSidebar,
           accelerator: 'CommandOrControl+B',
           click: send(sendAction, 'toggle-sidebar')
         },
         {
-          label: 'Source Edit',
+          label: lb.sourceEdit,
           accelerator: 'CommandOrControl+E',
           click: send(sendAction, 'toggle-source-edit')
         },
         {
-          label: 'Toggle Theme',
+          label: lb.toggleTheme,
           accelerator: 'CommandOrControl+D',
           click: send(sendAction, 'toggle-theme')
         },
         { type: 'separator' },
         {
-          label: 'File Info',
+          label: lb.fileInfo,
           accelerator: 'CommandOrControl+I',
           click: send(sendAction, 'show-file-info')
         },
         {
-          label: 'Recent Files',
+          label: lb.recentFiles,
           click: send(sendAction, 'show-recent')
         },
         {
-          label: 'Settings',
+          label: lb.settings,
           accelerator: 'CommandOrControl+,',
           click: send(sendAction, 'open-settings')
         },
@@ -139,22 +206,46 @@ export function createNativeMenuTemplate(
       ]
     },
     {
-      label: '&Window',
+      label: lb.window,
       submenu: [{ role: 'minimize' }, { role: 'close' }]
     }
   ];
 }
 
-export function installNativeApplicationMenu<TMenu>(
-  window: BrowserWindow,
-  menuApi: NativeMenuApi<TMenu>
-): void {
-  const template = createNativeMenuTemplate((action) => {
-    if (!window.webContents.isDestroyed()) {
-      window.webContents.send(IPC_CHANNELS.MENU_ACTION, action);
-    }
-  });
+export type MenuManager<TMenu = unknown> = {
+  install: (window: BrowserWindow, menuApi: NativeMenuApi<TMenu>) => void;
+  setLanguage: (lang: 'zh' | 'en') => void;
+};
 
-  const menu = menuApi.buildFromTemplate(template);
-  menuApi.setApplicationMenu(menu);
+export function createMenuManager<TMenu>(): MenuManager<TMenu> {
+  let currentWindow: BrowserWindow | null = null;
+  let currentMenuApi: NativeMenuApi<TMenu> | null = null;
+  let currentLang: 'zh' | 'en' = 'en';
+
+  function rebuild(): void {
+    if (!currentWindow || !currentMenuApi) return;
+    const win = currentWindow;
+
+    const template = createNativeMenuTemplate((action) => {
+      if (!win.webContents.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.MENU_ACTION, action);
+      }
+    }, currentLang);
+
+    const menu = currentMenuApi.buildFromTemplate(template);
+    currentMenuApi.setApplicationMenu(menu);
+  }
+
+  return {
+    install(window, menuApi) {
+      currentWindow = window;
+      currentMenuApi = menuApi;
+      rebuild();
+    },
+    setLanguage(lang) {
+      if (currentLang === lang) return;
+      currentLang = lang;
+      rebuild();
+    }
+  };
 }

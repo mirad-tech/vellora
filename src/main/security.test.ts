@@ -33,7 +33,8 @@ describe('Electron security defaults', () => {
         'editor:confirmDiscardChanges',
         'menu-action',
         'export-to-pdf',
-        'app:getSecurityDiagnostics'
+        'app:getSecurityDiagnostics',
+        'app:setLanguage'
       ]
     });
   });

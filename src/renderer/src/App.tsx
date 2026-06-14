@@ -45,6 +45,7 @@ import {
   Command,
 } from 'lucide-react';
 
+import { useI18n } from './i18n/useI18n';
 import { renderMarkdownDocument } from './markdown/renderMarkdown';
 import {
   applyImageResolutions,
@@ -83,8 +84,8 @@ type WorkspaceState =
   | { status: 'ready'; workspace: MarkdownWorkspace }
   | { status: 'error'; message: string };
 
-function formatModifiedTime(value: number): string {
-  return new Intl.DateTimeFormat('zh-CN', {
+function formatModifiedTime(value: number, locale: string): string {
+  return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', {
     dateStyle: 'medium',
     timeStyle: 'short'
   }).format(new Date(value));
@@ -217,6 +218,8 @@ function filterWorkspaceNodes(
 }
 
 export function App() {
+  const { t, lang, setLang } = useI18n();
+
   // Original core states
   const [viewState, setViewState] = useState<ViewState>({ status: 'empty' });
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>({ status: 'empty' });
@@ -406,20 +409,20 @@ export function App() {
   const fileStatus = useMemo(() => {
     if (viewState.status !== 'ready') {
       return {
-        name: '未打开文件',
+        name: t.statusBar.noFile,
         path: '',
         modifiedAt: '',
-        words: '0 字'
+        words: t.statusBar.words(0)
       };
     }
 
     return {
       name: viewState.document.name,
       path: viewState.document.path,
-      modifiedAt: `修改：${formatModifiedTime(viewState.document.modifiedAt)}`,
-      words: `${documentWordCount(draftContent)} 字`
+      modifiedAt: t.fileInfo.modifiedLabel(formatModifiedTime(viewState.document.modifiedAt, lang)),
+      words: t.fileInfo.words(documentWordCount(draftContent))
     };
-  }, [draftContent, viewState]);
+  }, [draftContent, viewState, t, lang]);
 
   const renderedMarkdown = useMemo(() => {
     if (viewState.status !== 'ready') return null;
@@ -498,7 +501,7 @@ export function App() {
 
   const searchStatus = useMemo(() => {
     if (!searchQuery.trim()) return '';
-    if (searchResult.count === 0) return '无结果';
+    if (searchResult.count === 0) return t.search.noResults;
     return `${searchResult.activeIndex + 1}/${searchResult.count}`;
   }, [searchQuery, searchResult]);
 
@@ -799,8 +802,8 @@ export function App() {
     if (viewState.status !== 'ready') return;
     syncReadEditorToDraft();
     const result = await window.mdViewer.exportToPdf();
-    if (!result.ok && result.message !== '已取消导出。') {
-      setSaveState({ status: 'error', message: result.message ?? 'PDF 导出失败。' });
+    if (!result.ok && result.message !== t.pdf.cancelled) {
+      setSaveState({ status: 'error', message: result.message ?? t.pdf.failed });
     }
   }
 
@@ -886,21 +889,21 @@ export function App() {
     return [
       {
         id: 'open_file',
-        name: '打开 Markdown 文件',
+        name: t.commandPalette.items.openFile,
         icon: <FolderOpen size={16} />,
         shortcut: 'Ctrl+O',
         action: () => void openMarkdownFile()
       },
       {
         id: 'open_folder',
-        name: '打开工作区文件夹',
+        name: t.commandPalette.items.openFolder,
         icon: <FolderTree size={16} />,
         shortcut: 'Ctrl+Shift+O',
         action: () => void openWorkspaceFolder()
       },
       {
         id: 'save_document',
-        name: '保存当前更改',
+        name: t.commandPalette.items.save,
         icon: <Save size={16} />,
         shortcut: 'Ctrl+S',
         disabled: !isDocReady || !hasUnsavedChanges,
@@ -908,7 +911,7 @@ export function App() {
       },
       {
         id: 'source_edit_mode',
-        name: editorMode === 'source-edit' ? '返回阅读模式' : '进入源码编辑',
+        name: editorMode === 'source-edit' ? t.commandPalette.items.editRead : t.commandPalette.items.editSource,
         icon: <SquarePen size={16} />,
         shortcut: 'Ctrl+E',
         disabled: !isDocReady,
@@ -916,14 +919,14 @@ export function App() {
       },
       {
         id: 'toggle_theme',
-        name: theme === 'light' ? '切换到深色夜间主题' : '切换到浅色明亮主题',
+        name: theme === 'light' ? t.commandPalette.items.themeDark : t.commandPalette.items.themeLight,
         icon: theme === 'light' ? <Moon size={16} /> : <Sun size={16} />,
         shortcut: 'Ctrl+D',
         action: () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))
       },
       {
         id: 'view_file_info',
-        name: '查看文档元数据详情',
+        name: t.commandPalette.items.fileInfo,
         icon: <Info size={16} />,
         shortcut: 'Ctrl+I',
         disabled: !isDocReady,
@@ -931,7 +934,7 @@ export function App() {
       },
       {
         id: 'print_document',
-        name: '导出 PDF',
+        name: t.commandPalette.items.exportPdf,
         icon: <Printer size={16} />,
         shortcut: 'Ctrl+Shift+P',
         disabled: !isDocReady,
@@ -939,21 +942,21 @@ export function App() {
       },
       {
         id: 'security_audit',
-        name: '系统安全诊断与设置',
+        name: t.commandPalette.items.settings,
         icon: <Settings size={16} />,
         shortcut: 'Ctrl+,',
         action: openSettingsDrawer
       },
       {
         id: 'recent_history',
-        name: '浏览最近打开的文件/文件夹',
+        name: t.commandPalette.items.recent,
         icon: <History size={16} />,
         shortcut: '',
         action: () => setIsRecentOpen(true)
       },
       {
         id: 'close_file',
-        name: '关闭当前文档',
+        name: t.commandPalette.items.closeDoc,
         icon: <X size={16} />,
         shortcut: 'Esc',
         disabled: !isDocReady,
@@ -965,7 +968,7 @@ export function App() {
         }
       }
     ];
-  }, [viewState, hasUnsavedChanges, editorMode, theme, draftContent]);
+  }, [viewState, hasUnsavedChanges, editorMode, theme, draftContent, t]);
 
   const filteredCommands = useMemo(() => {
     const q = commandPaletteQuery.trim().toLowerCase();
@@ -1039,9 +1042,9 @@ export function App() {
           className="sidebar-panel outline-panel"
           data-testid="sidebar-panel"
           hidden={!sidebarOpen}
-          aria-label="侧栏"
+          aria-label={t.sidebar.ariaLabel}
         >
-          <div className="sidebar-tabs-header" role="tablist" aria-label="侧栏视图">
+          <div className="sidebar-tabs-header" role="tablist" aria-label={t.sidebar.ariaView}>
             <button
               aria-selected={sidebarTab === 'workspace'}
               className={`sidebar-tab-btn ${sidebarTab === 'workspace' ? 'active' : ''}`}
@@ -1051,7 +1054,7 @@ export function App() {
               onClick={() => setSidebarTab('workspace')}
             >
               <FolderTree aria-hidden="true" size={14} />
-              <span>工作区</span>
+              <span>{t.workspace.tab}</span>
             </button>
             <button
               aria-selected={sidebarTab === 'outline'}
@@ -1062,7 +1065,7 @@ export function App() {
               onClick={() => setSidebarTab('outline')}
             >
               <ListTree aria-hidden="true" size={14} />
-              <span>大纲</span>
+              <span>{t.outline.tab}</span>
             </button>
           </div>
 
@@ -1071,21 +1074,21 @@ export function App() {
               <section className="workspace-panel" data-testid="workspace-panel">
                 <div className="outline-heading">
                   <FolderTree aria-hidden="true" size={15} />
-                  <span>工作区</span>
+                  <span>{t.workspace.heading}</span>
                 </div>
                 <div className="workspace-controls">
                   {(workspaceState.status === 'empty' || workspaceState.status === 'error') && (
                     <button className="sidebar-action" type="button" onClick={openWorkspaceFolder}>
-                      打开文件夹
+                      {t.app.openFolder}
                     </button>
                   )}
                   {workspaceState.status === 'ready' && (
                     <div className="workspace-filter-container">
                       <Search aria-hidden="true" className="filter-icon" size={13} />
                       <input
-                        aria-label="筛选文件"
+                        aria-label={t.workspace.filterAria}
                         data-testid="workspace-filter"
-                        placeholder="筛选文件"
+                        placeholder={t.workspace.filterPlaceholder}
                         type="search"
                         value={workspaceFilter}
                         onChange={(event) => setWorkspaceFilter(event.target.value)}
@@ -1093,8 +1096,8 @@ export function App() {
                     </div>
                   )}
                 </div>
-                {workspaceState.status === 'empty' && <div className="sidebar-note">未打开文件夹</div>}
-                {workspaceState.status === 'loading' && <div className="sidebar-note">正在读取文件夹</div>}
+                {workspaceState.status === 'empty' && <div className="sidebar-note">{t.workspace.noFolder}</div>}
+                {workspaceState.status === 'loading' && <div className="sidebar-note">{t.workspace.loading}</div>}
                 {workspaceState.status === 'error' && (
                   <div className="sidebar-error" role="alert">
                     {workspaceState.message}
@@ -1107,13 +1110,13 @@ export function App() {
                     </div>
                     {workspaceState.workspace.truncated && (
                       <div className="workspace-limit" data-testid="workspace-limit">
-                        已限制显示 {workspaceState.workspace.limit} 个 Markdown 文件
+                        {t.workspace.truncated(workspaceState.workspace.limit)}
                       </div>
                     )}
                     {filteredWorkspaceNodes.length > 0 ? (
                       renderWorkspaceNodes(filteredWorkspaceNodes)
                     ) : (
-                      <div className="sidebar-note">无匹配文件</div>
+                      <div className="sidebar-note">{t.workspace.noMatch}</div>
                     )}
                   </div>
                 )}
@@ -1124,7 +1127,7 @@ export function App() {
               <section className="outline-section">
                 <div className="outline-heading">
                   <ListTree aria-hidden="true" size={15} />
-                  <span>大纲</span>
+                  <span>{t.outline.heading}</span>
                 </div>
                 {outline.length > 0 ? (
                   <ol className="outline-list">
@@ -1144,7 +1147,7 @@ export function App() {
                     ))}
                   </ol>
                 ) : (
-                  <div className="sidebar-note">无大纲</div>
+                  <div className="sidebar-note">{t.outline.empty}</div>
                 )}
               </section>
             )}
@@ -1162,16 +1165,16 @@ export function App() {
           {/* 空状态视图 */}
           {viewState.status === 'empty' && (
             <div className="empty-state">
-              <h1>未打开文件</h1>
-              <p>请选择 .md 或 .markdown 文件。</p>
+              <h1>{t.app.emptyTitle}</h1>
+              <p>{t.app.emptyHint}</p>
 
               <button className="secondary-action" type="button" onClick={openMarkdownFile}>
                 <FolderOpen aria-hidden="true" size={16} />
-                <span>打开文件</span>
+                <span>{t.app.openFile}</span>
               </button>
               {recentItems.length > 0 && (
                 <div className="recent-list" data-testid="recent-list">
-                  <strong>最近打开</strong>
+                  <strong>{t.app.recentHeading}</strong>
                   {recentItems.slice(0, 5).map((item) => (
                     <button
                       className="recent-item"
@@ -1183,7 +1186,7 @@ export function App() {
                       onClick={() => openRecentItem(item)}
                     >
                       <span>{item.name}</span>
-                      <small>{item.exists ? item.path : '文件不存在'}</small>
+                      <small>{item.exists ? item.path : t.app.fileNotExist}</small>
                     </button>
                   ))}
                 </div>
@@ -1193,17 +1196,17 @@ export function App() {
 
           {/* 正在加载视图 */}
           {viewState.status === 'loading' && (
-            <div className="loading-state">正在打开文件</div>
+            <div className="loading-state">{t.app.loading}</div>
           )}
 
           {/* 加载失败视图 */}
           {viewState.status === 'error' && (
             <div className="error-state" role="alert">
-              <h1>打开失败</h1>
+              <h1>{t.app.errorTitle}</h1>
               <p>{viewState.message}</p>
               <button className="secondary-action" type="button" onClick={openMarkdownFile}>
                 <FolderOpen aria-hidden="true" size={16} />
-                <span>重新选择</span>
+                <span>{t.app.reselect}</span>
               </button>
             </div>
           )}
@@ -1223,7 +1226,11 @@ export function App() {
                 </div>
               )}
 
-              {editorMode === 'source-edit' ? (
+              {renderedMarkdown?.status === 'empty' ? (
+                <div className="document-empty" data-testid="markdown-empty">
+                  {t.app.documentEmpty}
+                </div>
+              ) : editorMode === 'source-edit' ? (
                 <div className="editor-split" data-testid="editor-split">
                   <textarea
                     className="source-editor"
@@ -1242,10 +1249,6 @@ export function App() {
                     dangerouslySetInnerHTML={{ __html: renderedMarkdown?.status === 'ready' ? searchResult.html : '' }}
                     onClick={handleMarkdownClick}
                   />
-                </div>
-              ) : renderedMarkdown?.status === 'empty' ? (
-                <div className="document-empty" data-testid="markdown-empty">
-                  文件为空
                 </div>
               ) : showSearchPreview ? (
                 <div
@@ -1280,12 +1283,12 @@ export function App() {
                     trim={false}
                     onChange={handleMdxEditorChange}
                     onError={(payload) => {
-                      setEditorError(payload.error || 'Markdown 解析失败，请切换源码编辑修复。');
+                      setEditorError(payload.error || t.app.parseError);
                     }}
                   />
                   {missingImageSources.map((source) => (
                     <span className="image-placeholder" data-testid="missing-image" key={source}>
-                      图片缺失：{source}
+                      {t.app.imageMissing(source)}
                     </span>
                   ))}
                 </div>
@@ -1301,9 +1304,9 @@ export function App() {
             <Search aria-hidden="true" size={13} />
             <input
               ref={searchInputRef}
-              aria-label="搜索当前文档"
+              aria-label={t.search.ariaLabel}
               data-testid="document-search"
-              placeholder="搜索"
+              placeholder={t.search.placeholder}
               type="search"
               value={searchQuery}
               onChange={(event) => {
@@ -1315,22 +1318,22 @@ export function App() {
               {searchStatus}
             </span>
             <button
-              aria-label="上一个结果"
+              aria-label={t.search.prevAria}
               className="search-step"
               data-testid="search-previous"
               disabled={searchResult.count === 0}
-              title="上一个结果"
+              title={t.search.prevTitle}
               type="button"
               onClick={() => moveSearchResult(-1)}
             >
               <ChevronUp aria-hidden="true" size={13} />
             </button>
             <button
-              aria-label="下一个结果"
+              aria-label={t.search.nextAria}
               className="search-step"
               data-testid="search-next"
               disabled={searchResult.count === 0}
-              title="下一个结果"
+              title={t.search.nextTitle}
               type="button"
               onClick={() => moveSearchResult(1)}
             >
@@ -1338,9 +1341,9 @@ export function App() {
             </button>
           </div>
           <button
-            aria-label="关闭搜索"
+            aria-label={t.search.closeAria}
             className="find-close"
-            title="关闭搜索"
+            title={t.search.closeTitle}
             type="button"
             onClick={() => setIsFindOpen(false)}
           >
@@ -1369,7 +1372,7 @@ export function App() {
               <Command size={16} className="palette-search-icon" />
               <input
                 autoFocus
-                placeholder="输入命令快速执行操作..."
+                placeholder={t.commandPalette.placeholder}
                 type="text"
                 value={commandPaletteQuery}
                 onChange={(e) => {
@@ -1403,7 +1406,7 @@ export function App() {
                   </button>
                 ))
               ) : (
-                <div className="palette-empty-note">未匹配到任何命令。</div>
+                <div className="palette-empty-note">{t.commandPalette.noMatch}</div>
               )}
             </div>
           </div>
@@ -1417,7 +1420,7 @@ export function App() {
             <div className="drawer-header">
               <div className="drawer-title-group">
                 <Settings size={18} />
-                <h2>设置与安全诊断</h2>
+                <h2>{t.settings.title}</h2>
               </div>
               <button className="drawer-close-btn" type="button" onClick={() => setIsSettingsOpen(false)}>
                 <X size={18} />
@@ -1426,7 +1429,7 @@ export function App() {
 
             <div className="drawer-scroll-content">
               <div className="settings-section">
-                <h3>外观主题</h3>
+                <h3>{t.settings.theme}</h3>
                 <div className="theme-selector-grid">
                   <button
                     className={`theme-pick-btn ${theme === 'light' ? 'selected' : ''}`}
@@ -1434,7 +1437,7 @@ export function App() {
                     onClick={() => setTheme('light')}
                   >
                     <Sun size={16} />
-                    <span>浅色</span>
+                    <span>{t.settings.themeLight}</span>
                   </button>
                   <button
                     className={`theme-pick-btn ${theme === 'dark' ? 'selected' : ''}`}
@@ -1442,55 +1445,75 @@ export function App() {
                     onClick={() => setTheme('dark')}
                   >
                     <Moon size={16} />
-                    <span>深色</span>
+                    <span>{t.settings.themeDark}</span>
                   </button>
                 </div>
               </div>
 
               <div className="settings-section">
-                <h3>安全环境诊断报告</h3>
+                <h3>Language / 语言</h3>
+                <div className="theme-selector-grid">
+                  <button
+                    className={`theme-pick-btn ${lang === 'en' ? 'selected' : ''}`}
+                    type="button"
+                    onClick={() => setLang('en')}
+                  >
+                    <span>English</span>
+                  </button>
+                  <button
+                    className={`theme-pick-btn ${lang === 'zh' ? 'selected' : ''}`}
+                    type="button"
+                    onClick={() => setLang('zh')}
+                  >
+                    <span>中文</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <h3>{t.settings.securityReport}</h3>
                 {securityDiagnostics ? (
                   <div className="security-diagnostics-grid">
                     <div className="security-diagnostic-item">
-                      <span>上下文隔离 (Context Isolation)</span>
+                      <span>{t.settings.contextIsolation}</span>
                       <strong className={securityDiagnostics.contextIsolation ? 'status-safe' : 'status-danger'}>
-                        {securityDiagnostics.contextIsolation ? '已启用' : '未启用'}
+                        {securityDiagnostics.contextIsolation ? t.settings.enabled : t.settings.disabled}
                       </strong>
                     </div>
                     <div className="security-diagnostic-item">
-                      <span>Node.js 集成 (Node Integration)</span>
+                      <span>{t.settings.nodeIntegration}</span>
                       <strong className={!securityDiagnostics.nodeIntegration ? 'status-safe' : 'status-danger'}>
-                        {!securityDiagnostics.nodeIntegration ? '已禁用' : '已启用'}
+                        {!securityDiagnostics.nodeIntegration ? t.settings.disabled : t.settings.enabled}
                       </strong>
                     </div>
                     <div className="security-diagnostic-item">
-                      <span>沙盒化 (Sandbox)</span>
+                      <span>{t.settings.sandbox}</span>
                       <strong className={securityDiagnostics.sandbox ? 'status-safe' : 'status-danger'}>
-                        {securityDiagnostics.sandbox ? '已启用' : '未启用'}
+                        {securityDiagnostics.sandbox ? t.settings.enabled : t.settings.disabled}
                       </strong>
                     </div>
                     <div className="security-diagnostic-item">
-                      <span>网页安全限制 (Web Security)</span>
+                      <span>{t.settings.webSecurity}</span>
                       <strong className={securityDiagnostics.webSecurity ? 'status-safe' : 'status-danger'}>
-                        {securityDiagnostics.webSecurity ? '已启用' : '未启用'}
+                        {securityDiagnostics.webSecurity ? t.settings.enabled : t.settings.disabled}
                       </strong>
                     </div>
                     <div className="security-diagnostic-item">
-                      <span>Webview 标签 (Webview Tag)</span>
+                      <span>{t.settings.webviewTag}</span>
                       <strong className={!securityDiagnostics.webviewTag ? 'status-safe' : 'status-danger'}>
-                        {!securityDiagnostics.webviewTag ? '已禁用' : '已启用'}
+                        {!securityDiagnostics.webviewTag ? t.settings.disabled : t.settings.enabled}
                       </strong>
                     </div>
                   </div>
                 ) : (
                   <div className="diagnostics-loading">
-                    <span>获取诊断报告中...</span>
+                    <span>{t.settings.loadingDiagnostics}</span>
                   </div>
                 )}
               </div>
 
               <div className="settings-section">
-                <h3>IPC 信道白名单</h3>
+                <h3>{t.settings.ipcWhitelist}</h3>
                 {securityDiagnostics?.allowedIpcChannels ? (
                   <div className="ipc-whitelist-list">
                     {securityDiagnostics.allowedIpcChannels.map((channel) => (
@@ -1498,7 +1521,7 @@ export function App() {
                     ))}
                   </div>
                 ) : (
-                  <small className="muted-text">未加载信道信息</small>
+                  <small className="muted-text">{t.settings.notLoaded}</small>
                 )}
               </div>
             </div>
@@ -1513,7 +1536,7 @@ export function App() {
             <div className="modal-header">
               <div className="modal-title-group">
                 <Info size={16} />
-                <h2>文件详细信息</h2>
+                <h2>{t.fileInfo.title}</h2>
               </div>
               <button className="modal-close-btn" type="button" onClick={() => setIsFileInfoOpen(false)}>
                 <X size={16} />
@@ -1521,30 +1544,30 @@ export function App() {
             </div>
             <div className="file-info-body">
               <div className="info-row">
-                <span className="info-label">文件名</span>
+                <span className="info-label">{t.fileInfo.fileName}</span>
                 <span className="info-value text-highlight">{viewState.document.name}</span>
               </div>
               <div className="info-row">
-                <span className="info-label">绝对路径</span>
+                <span className="info-label">{t.fileInfo.filePath}</span>
                 <span className="info-value code-path-value">{viewState.document.path}</span>
               </div>
               <div className="info-row-grid">
                 <div className="info-sub-item">
-                  <span className="info-label">大小</span>
-                  <span className="info-value">{byteCountLabel(viewState.document.size)}</span>
+                  <span className="info-label">{t.fileInfo.fileSize}</span>
+                  <span className="info-value">{t.fileInfo.bytes(viewState.document.size)}</span>
                 </div>
                 <div className="info-sub-item">
-                  <span className="info-label">字数统计</span>
-                  <span className="info-value">{documentWordCount(draftContent)} 字</span>
+                  <span className="info-label">{t.fileInfo.wordCount}</span>
+                  <span className="info-value">{t.fileInfo.words(documentWordCount(draftContent))}</span>
                 </div>
                 <div className="info-sub-item">
-                  <span className="info-label">字符数</span>
+                  <span className="info-label">{t.fileInfo.charCount}</span>
                   <span className="info-value">{draftContent.length}</span>
                 </div>
               </div>
               <div className="info-row">
-                <span className="info-label">更新时间</span>
-                <span className="info-value">{formatModifiedTime(viewState.document.modifiedAt)}</span>
+                <span className="info-label">{t.fileInfo.modifiedAt}</span>
+                <span className="info-value">{formatModifiedTime(viewState.document.modifiedAt, lang)}</span>
               </div>
             </div>
           </div>
@@ -1558,7 +1581,7 @@ export function App() {
             <div className="drawer-header">
               <div className="drawer-title-group">
                 <History size={18} />
-                <h2>最近打开</h2>
+                <h2>{t.recent.heading}</h2>
               </div>
               <button className="drawer-close-btn" type="button" onClick={() => setIsRecentOpen(false)}>
                 <X size={18} />
@@ -1586,13 +1609,13 @@ export function App() {
                         <span className="recent-item-name">{item.name}</span>
                         <span className="recent-item-path">{item.path}</span>
                       </div>
-                      {!item.exists && <span className="recent-exists-badge">已失效</span>}
+                      {!item.exists && <span className="recent-exists-badge">{t.recent.expired}</span>}
                     </button>
                   ))}
                 </div>
               ) : (
                 <div className="drawer-empty-state">
-                  <p>暂无任何最近打开的文件或文件夹记录。</p>
+                  <p>{t.recent.empty}</p>
                 </div>
               )}
             </div>
@@ -1607,7 +1630,7 @@ export function App() {
             <X size={24} />
           </button>
           <div className="lightbox-image-container" onClick={(e) => e.stopPropagation()}>
-            <img src={lightboxImageUrl} alt="图片预览" />
+            <img src={lightboxImageUrl} alt={t.imageLightbox.alt} />
           </div>
         </div>
       )}
@@ -1618,18 +1641,18 @@ export function App() {
           <div className="link-confirm-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-alert-header">
               <AlertTriangle size={20} className="warning-icon" />
-              <h2>安全提示</h2>
+              <h2>{t.externalLink.title}</h2>
             </div>
-            <p className="link-alert-text">您即将访问外部链接，确认离开此应用程序吗？</p>
+            <p className="link-alert-text">{t.externalLink.message}</p>
             <div className="target-url-card">
               <span className="target-url-text">{pendingExternalUrl}</span>
             </div>
             <div className="link-alert-actions">
               <button className="secondary-flat-btn" type="button" onClick={() => setPendingExternalUrl(null)}>
-                取消
+                {t.externalLink.cancel}
               </button>
               <button className="primary-accent-btn alert-action-btn danger-btn" type="button" onClick={() => void handleConfirmExternalLink()}>
-                继续访问
+                {t.externalLink.confirm}
               </button>
             </div>
           </div>

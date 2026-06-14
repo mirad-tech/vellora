@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { registerIpcHandlers } from './ipc';
 import { findMarkdownPathInArgs } from './launchArguments';
-import { installNativeApplicationMenu } from './nativeMenu';
+import { createMenuManager } from './nativeMenu';
 import { getPreloadPath, getRendererIndexPath } from './paths';
 import { createWebPreferences, resolveTrustedRendererUrl } from './security';
 import { IPC_CHANNELS } from '../shared/ipcChannels';
@@ -15,6 +15,7 @@ const currentDir = dirname(currentFile);
 
 let mainWindow: BrowserWindow | null = null;
 let pendingLaunchMarkdownPath = findMarkdownPathInArgs(process.argv);
+const menuManager = createMenuManager<Electron.Menu>();
 
 const userDataOverride = process.env.MD_VIEWER_USER_DATA_DIR;
 if (userDataOverride) {
@@ -68,8 +69,11 @@ async function createMainWindow(): Promise<void> {
     webPreferences: createWebPreferences(getPreloadPath(currentDir))
   });
 
-  registerIpcHandlers(mainWindow);
-  installNativeApplicationMenu(mainWindow, Menu);
+  registerIpcHandlers(mainWindow, menuManager);
+  menuManager.install(mainWindow, {
+    buildFromTemplate: (template) => Menu.buildFromTemplate(template),
+    setApplicationMenu: (menu) => Menu.setApplicationMenu(menu)
+  });
   configureAppSecurity(mainWindow);
 
   mainWindow.webContents.once('did-finish-load', () => {

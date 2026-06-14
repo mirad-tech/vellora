@@ -68,7 +68,8 @@ const api: MdViewerApi = {
     ipcRenderer.invoke(IPC_CHANNELS.RESOLVE_MARKDOWN_IMAGE, documentPath, imageSource),
   openMarkdownLink: (documentPath: string, href: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.OPEN_MARKDOWN_LINK, documentPath, href),
-  getSecurityDiagnostics: () => ipcRenderer.invoke(IPC_CHANNELS.GET_SECURITY_DIAGNOSTICS)
+  getSecurityDiagnostics: () => ipcRenderer.invoke(IPC_CHANNELS.GET_SECURITY_DIAGNOSTICS),
+  setLanguage: (lang: string) => ipcRenderer.invoke(IPC_CHANNELS.SET_LANGUAGE, lang)
 };
 
 contextBridge.exposeInMainWorld('mdViewer', api);
