@@ -1039,6 +1039,129 @@ export function App() {
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
+      {/* 顶部工具栏 / Header */}
+      <header className="app-header">
+        <div className="header-left">
+          <button
+            className={`header-action-btn ${sidebarOpen ? 'active' : ''}`}
+            title={sidebarOpen ? (lang === 'zh' ? '隐藏侧栏' : 'Hide Sidebar') : (lang === 'zh' ? '显示侧栏' : 'Show Sidebar')}
+            type="button"
+            onClick={toggleSidebar}
+          >
+            <FolderTree size={16} />
+          </button>
+          {workspaceState.status === 'ready' ? (
+            <span className="header-workspace-badge" title={workspaceState.workspace.path}>
+              {workspaceState.workspace.name}
+            </span>
+          ) : (
+            <span className="app-logo">
+              <FileText size={16} />
+              <span>Mirad MD</span>
+            </span>
+          )}
+        </div>
+
+        <div className="header-center">
+          {viewState.status === 'ready' ? (
+            <>
+              <FileIcon size={14} className="muted-text" />
+              <span className="header-filename" title={viewState.document.path}>
+                {viewState.document.name}
+              </span>
+              <button
+                className={`save-badge ${saveState.status === 'saving' ? 'saving' : isDirty ? 'dirty' : 'saved'}`}
+                title={isDirty ? (lang === 'zh' ? '点击保存 (Ctrl+S)' : 'Click to Save (Ctrl+S)') : ''}
+                type="button"
+                disabled={saveState.status === 'saving' || !isDirty}
+                onClick={() => void saveCurrentDocument()}
+              >
+                {saveState.status === 'saving' ? (
+                  <span>{t.save.saving}</span>
+                ) : isDirty ? (
+                  <>
+                    <Save size={11} />
+                    <span>{lang === 'zh' ? '未保存' : 'Draft'}</span>
+                  </>
+                ) : (
+                  <span>{lang === 'zh' ? '已保存' : 'Saved'}</span>
+                )}
+              </button>
+            </>
+          ) : (
+            <span style={{ fontSize: '12px', color: 'var(--faint)' }}>
+              {lang === 'zh' ? '本地优先 Markdown 阅览器' : 'Local-First Markdown Reader'}
+            </span>
+          )}
+        </div>
+
+        <div className="header-right">
+          {viewState.status === 'ready' && (
+            <div className="mode-pill-switch">
+              <button
+                className={`mode-switch-btn ${editorMode === 'read' ? 'active' : ''}`}
+                type="button"
+                onClick={() => setEditorModeSafely('read')}
+              >
+                {lang === 'zh' ? '富文本' : 'Rich'}
+              </button>
+              <button
+                className={`mode-switch-btn ${editorMode === 'source-edit' ? 'active' : ''}`}
+                type="button"
+                onClick={() => setEditorModeSafely('source-edit')}
+              >
+                {lang === 'zh' ? '源码' : 'Source'}
+              </button>
+            </div>
+          )}
+
+          <button
+            className={`header-action-btn ${isFindOpen ? 'active' : ''}`}
+            title={t.search.ariaLabel}
+            type="button"
+            onClick={openFindBar}
+          >
+            <Search size={16} />
+          </button>
+
+          <button
+            className="header-action-btn"
+            title={t.recent.heading}
+            type="button"
+            onClick={() => setIsRecentOpen(true)}
+          >
+            <History size={16} />
+          </button>
+
+          <button
+            className="header-action-btn"
+            title={theme === 'light' ? t.commandPalette.items.themeDark : t.commandPalette.items.themeLight}
+            type="button"
+            onClick={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
+          >
+            {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+          </button>
+
+          <button
+            className="header-action-btn"
+            title={t.commandPalette.items.settings}
+            type="button"
+            onClick={openSettingsDrawer}
+          >
+            <Settings size={16} />
+          </button>
+
+          <button
+            className="header-action-btn"
+            title={lang === 'zh' ? '命令行面板' : 'Command Palette'}
+            type="button"
+            onClick={openCommandPalette}
+          >
+            <Command size={16} />
+          </button>
+        </div>
+      </header>
+
       {/* 工作区和内容区域 */}
       <div className={`workspace ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
         {/* 侧边栏 */}
@@ -1166,35 +1289,69 @@ export function App() {
           aria-live="polite"
           onScroll={updateActiveHeadingFromScroll}
         >
-          {/* 空状态视图 */}
+          {/* 空状态视图 / Redesigned Dashboard */}
           {viewState.status === 'empty' && (
-            <div className="empty-state">
-              <h1>{t.app.emptyTitle}</h1>
-              <p>{t.app.emptyHint}</p>
+            <div className="dashboard-container">
+              <div className="dashboard-hero">
+                <span className="app-logo" style={{ fontSize: '32px', justifyContent: 'center', marginBottom: '12px' }}>
+                  <FileText size={36} />
+                </span>
+                <h1>{t.app.emptyTitle}</h1>
+                <p>{t.app.emptyHint}</p>
+              </div>
 
-              <button className="secondary-action" type="button" onClick={openMarkdownFile}>
-                <FolderOpen aria-hidden="true" size={16} />
-                <span>{t.app.openFile}</span>
-              </button>
-              {recentItems.length > 0 && (
-                <div className="recent-list" data-testid="recent-list">
-                  <strong>{t.app.recentHeading}</strong>
-                  {recentItems.slice(0, 5).map((item) => (
-                    <button
-                      className="recent-item"
-                      data-recent-type={item.type}
-                      data-testid="recent-item"
-                      key={`${item.type}:${item.path}`}
-                      title={item.path}
-                      type="button"
-                      onClick={() => openRecentItem(item)}
-                    >
-                      <span>{item.name}</span>
-                      <small>{item.exists ? item.path : t.app.fileNotExist}</small>
+              <div className="dashboard-grid">
+                <div className="dashboard-card">
+                  <div className="dashboard-card-title">
+                    <FolderOpen size={14} />
+                    <span>{lang === 'zh' ? '快速开始' : 'Quick Start'}</span>
+                  </div>
+                  <div className="dashboard-actions-list">
+                    <button className="dashboard-action-btn primary" type="button" onClick={openMarkdownFile}>
+                      <FolderOpen aria-hidden="true" size={16} />
+                      <span>{t.app.openFile}</span>
                     </button>
-                  ))}
+                    <button className="dashboard-action-btn secondary" type="button" onClick={openWorkspaceFolder}>
+                      <FolderTree aria-hidden="true" size={16} />
+                      <span>{lang === 'zh' ? '选择工作区' : 'Open Folder'}</span>
+                    </button>
+                  </div>
                 </div>
-              )}
+
+                <div className="dashboard-card">
+                  <div className="dashboard-card-title">
+                    <History size={14} />
+                    <span>{t.app.recentHeading}</span>
+                  </div>
+                  <div className="dashboard-recent-list" data-testid="recent-list">
+                    {recentItems.length > 0 ? (
+                      recentItems.slice(0, 4).map((item) => (
+                        <button
+                          className="dashboard-recent-item"
+                          data-recent-type={item.type}
+                          data-testid="recent-item"
+                          key={`${item.type}:${item.path}`}
+                          title={item.path}
+                          type="button"
+                          onClick={() => openRecentItem(item)}
+                        >
+                          <div className="dashboard-recent-icon">
+                            {item.type === 'folder' ? <FolderTree size={14} /> : <FileText size={14} />}
+                          </div>
+                          <div className="dashboard-recent-info">
+                            <span className="dashboard-recent-name">{item.name}</span>
+                            <span className="dashboard-recent-path">{item.exists ? item.path : t.app.fileNotExist}</span>
+                          </div>
+                        </button>
+                      ))
+                    ) : (
+                      <div style={{ color: 'var(--faint)', fontSize: '12.5px', textAlign: 'center', padding: '24px 0' }}>
+                        {t.recent.empty}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 

@@ -100,7 +100,7 @@ const zh = {
     webSecurity: '网页安全限制 (Web Security)',
     webviewTag: 'Webview 标签 (Webview Tag)',
     enabled: '已启用',
-    disabled: '未启用',
+    disabled: '已禁用',
     ipcWhitelist: 'IPC 信道白名单',
     notLoaded: '未加载信道信息',
     loadingDiagnostics: '获取诊断报告中...'

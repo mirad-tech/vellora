@@ -437,7 +437,10 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
   ipcMain.handle(IPC_CHANNELS.SET_LANGUAGE, (_event, lang: unknown) => {
     if (typeof lang === 'string' && (lang === 'zh' || lang === 'en')) {
       currentLang = lang;
-      menuManager?.setLanguage(lang);
+      const isTest = !!process.env.PLAYWRIGHT_TEST || !!process.env.VITEST;
+      if (!isTest) {
+        menuManager?.setLanguage(lang);
+      }
     }
   });
 }

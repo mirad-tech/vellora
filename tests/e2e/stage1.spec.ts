@@ -74,6 +74,7 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
     'openWorkspaceFolder',
     'resolveMarkdownImage',
     'saveMarkdownFile',
+    'setLanguage',
     'setUnsavedChanges'
   ]);
   expect(boundary.diagnostics).toEqual({
@@ -97,7 +98,8 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
       'editor:confirmDiscardChanges',
       'menu-action',
       'export-to-pdf',
-      'app:getSecurityDiagnostics'
+      'app:getSecurityDiagnostics',
+      'app:setLanguage'
     ]
   });
 
