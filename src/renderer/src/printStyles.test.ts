@@ -16,4 +16,15 @@ describe('print and PDF export styles', () => {
     expect(printBlock).toContain('print-color-adjust: exact');
     expect(printBlock).toContain('overflow: visible !important');
   });
+
+  test('prints source edit mode as a single document preview', async () => {
+    const css = await readFile('src/renderer/src/styles.css', 'utf8');
+    const printBlock = css.slice(css.indexOf('@media print'));
+
+    expect(printBlock).toContain('.editor-split');
+    expect(printBlock).toContain('display: block !important');
+    expect(printBlock).toContain('height: auto !important');
+    expect(printBlock).toContain('.editor-preview');
+    expect(printBlock).toContain('border: 0 !important');
+  });
 });

@@ -3,10 +3,13 @@ export type I18nMessages = typeof zh;
 const zh = {
   app: {
     title: 'Markdown查看器',
+    brand: 'Mirad MD',
+    tagline: '本地优先 Markdown 阅览器',
     emptyTitle: '未打开文件',
     emptyHint: '请选择 .md 或 .markdown 文件。',
     openFile: '打开文件',
     openFolder: '打开文件夹',
+    quickStart: '快速开始',
     recentHeading: '最近打开',
     fileNotExist: '文件不存在',
     loading: '正在打开文件',
@@ -39,6 +42,7 @@ const zh = {
   workspace: {
     tab: '工作区',
     heading: '工作区',
+    openWorkspace: '选择工作区',
     noFolder: '未打开文件夹',
     loading: '正在读取文件夹',
     filterPlaceholder: '筛选文件',
@@ -53,7 +57,13 @@ const zh = {
   },
   sidebar: {
     ariaLabel: '侧栏',
-    ariaView: '侧栏视图'
+    ariaView: '侧栏视图',
+    show: '显示侧栏',
+    hide: '隐藏侧栏'
+  },
+  editorMode: {
+    rich: '富文本',
+    source: '源码'
   },
   search: {
     placeholder: '搜索',
@@ -68,6 +78,7 @@ const zh = {
     closeTitle: '关闭搜索'
   },
   commandPalette: {
+    title: '命令面板',
     placeholder: '输入命令快速执行操作...',
     noMatch: '未匹配到任何命令。',
     items: {
@@ -125,7 +136,9 @@ const zh = {
   },
   save: {
     saving: '保存中...',
+    unsaved: '未保存',
     saved: '已保存',
+    clickToSave: '点击保存 (Ctrl+S)',
     error: '保存失败'
   }
 };
@@ -133,10 +146,13 @@ const zh = {
 const en: I18nMessages = {
   app: {
     title: 'Markdown Viewer',
+    brand: 'Mirad MD',
+    tagline: 'Local-First Markdown Reader',
     emptyTitle: 'No file opened',
     emptyHint: 'Please select a .md or .markdown file.',
     openFile: 'Open File',
     openFolder: 'Open Folder',
+    quickStart: 'Quick Start',
     recentHeading: 'Recent',
     fileNotExist: 'File does not exist',
     loading: 'Opening file…',
@@ -169,6 +185,7 @@ const en: I18nMessages = {
   workspace: {
     tab: 'Workspace',
     heading: 'Workspace',
+    openWorkspace: 'Open Folder',
     noFolder: 'No folder opened',
     loading: 'Reading folder…',
     filterPlaceholder: 'Filter files',
@@ -183,7 +200,13 @@ const en: I18nMessages = {
   },
   sidebar: {
     ariaLabel: 'Sidebar',
-    ariaView: 'Sidebar view'
+    ariaView: 'Sidebar view',
+    show: 'Show Sidebar',
+    hide: 'Hide Sidebar'
+  },
+  editorMode: {
+    rich: 'Rich',
+    source: 'Source'
   },
   search: {
     placeholder: 'Search',
@@ -198,6 +221,7 @@ const en: I18nMessages = {
     closeTitle: 'Close search'
   },
   commandPalette: {
+    title: 'Command Palette',
     placeholder: 'Type a command…',
     noMatch: 'No matching commands.',
     items: {
@@ -255,7 +279,9 @@ const en: I18nMessages = {
   },
   save: {
     saving: 'Saving…',
+    unsaved: 'Draft',
     saved: 'Saved',
+    clickToSave: 'Click to Save (Ctrl+S)',
     error: 'Save failed'
   }
 };

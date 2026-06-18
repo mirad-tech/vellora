@@ -36,6 +36,7 @@ async function launchWithSelectedFile(fixture: EditFixture): Promise<ElectronApp
     env: {
       ...process.env,
       ELECTRON_ENABLE_SECURITY_WARNINGS: 'true',
+      PLAYWRIGHT_TEST: 'true',
       MD_VIEWER_USER_DATA_DIR: fixture.statePath
     }
   });
@@ -74,7 +75,7 @@ async function launchWithSelectedFile(fixture: EditFixture): Promise<ElectronApp
 }
 
 async function openFixture(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开文件' }).click();
+  await page.getByRole('button', { name: '打开文件', exact: true }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 

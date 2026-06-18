@@ -91,11 +91,17 @@ function send(sendAction: (action: NativeMenuAction) => void, action: NativeMenu
   return () => sendAction(action);
 }
 
+export type NativeMenuOptions = {
+  isDev?: boolean;
+};
+
 export function createNativeMenuTemplate(
   sendAction: (action: NativeMenuAction) => void,
-  lang: 'zh' | 'en' = 'en'
+  lang: 'zh' | 'en' = 'en',
+  options: NativeMenuOptions = {}
 ): MenuItemConstructorOptions[] {
   const lb = labels[lang];
+  const { isDev = false } = options;
 
   return [
     {
@@ -194,10 +200,12 @@ export function createNativeMenuTemplate(
           click: send(sendAction, 'open-settings')
         },
         { type: 'separator' },
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
+        ...(isDev ? [
+          { role: 'reload' as const },
+          { role: 'forceReload' as const },
+          { role: 'toggleDevTools' as const },
+          { type: 'separator' as const },
+        ] : []),
         { role: 'resetZoom' },
         { role: 'zoomIn' },
         { role: 'zoomOut' },
@@ -217,7 +225,7 @@ export type MenuManager<TMenu = unknown> = {
   setLanguage: (lang: 'zh' | 'en') => void;
 };
 
-export function createMenuManager<TMenu>(): MenuManager<TMenu> {
+export function createMenuManager<TMenu>(options: NativeMenuOptions = {}): MenuManager<TMenu> {
   let currentWindow: BrowserWindow | null = null;
   let currentMenuApi: NativeMenuApi<TMenu> | null = null;
   let currentLang: 'zh' | 'en' = 'en';
@@ -230,7 +238,7 @@ export function createMenuManager<TMenu>(): MenuManager<TMenu> {
       if (!win.webContents.isDestroyed()) {
         win.webContents.send(IPC_CHANNELS.MENU_ACTION, action);
       }
-    }, currentLang);
+    }, currentLang, options);
 
     const menu = currentMenuApi.buildFromTemplate(template);
     currentMenuApi.setApplicationMenu(menu);

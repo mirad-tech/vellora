@@ -116,4 +116,17 @@ describe('controlled Markdown link opening', () => {
       code: 'UNSUPPORTED_LINK'
     });
   });
+
+  test('returns an error for malformed URLs instead of throwing', async () => {
+    const { documentPath } = await createLinkFixture();
+    const openExternal = vi.fn();
+
+    const result = await openMarkdownLink(documentPath, 'http://[invalid', openExternal);
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'UNSUPPORTED_LINK'
+    });
+    expect(openExternal).not.toHaveBeenCalled();
+  });
 });

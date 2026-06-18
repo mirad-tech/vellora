@@ -1,9 +1,9 @@
-import { app, BrowserWindow, Menu, session } from 'electron';
+import { app, BrowserWindow, Menu, screen, session } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { registerIpcHandlers } from './ipc';
+import { authorizeMarkdownOpenRequest, registerIpcHandlers } from './ipc';
 import { findMarkdownPathInArgs } from './launchArguments';
 import { createMenuManager } from './nativeMenu';
 import { getPreloadPath, getRendererIndexPath } from './paths';
@@ -13,9 +13,15 @@ import { IPC_CHANNELS } from '../shared/ipcChannels';
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = dirname(currentFile);
 
+const DEFAULT_WINDOW_WIDTH = 880;
+const DEFAULT_WINDOW_HEIGHT = 980;
+const MIN_WINDOW_WIDTH = 480;
+const MIN_WINDOW_HEIGHT = 520;
+const WINDOW_WORK_AREA_MARGIN = 24;
+
 let mainWindow: BrowserWindow | null = null;
 let pendingLaunchMarkdownPath = findMarkdownPathInArgs(process.argv);
-const menuManager = createMenuManager<Electron.Menu>();
+const menuManager = createMenuManager<Electron.Menu>({ isDev: !app.isPackaged });
 
 const userDataOverride = process.env.MD_VIEWER_USER_DATA_DIR;
 if (userDataOverride) {
@@ -43,6 +49,8 @@ function configureAppSecurity(window: BrowserWindow): void {
 }
 
 function sendMarkdownOpenRequest(filePath: string): void {
+  if (!authorizeMarkdownOpenRequest(filePath)) return;
+
   if (!mainWindow || mainWindow.webContents.isDestroyed()) {
     pendingLaunchMarkdownPath = filePath;
     return;
@@ -58,12 +66,22 @@ function flushPendingMarkdownOpenRequest(): void {
   sendMarkdownOpenRequest(filePath);
 }
 
+function getInitialWindowSize(): { width: number; height: number } {
+  const { workAreaSize } = screen.getPrimaryDisplay();
+  return {
+    width: Math.max(MIN_WINDOW_WIDTH, Math.min(DEFAULT_WINDOW_WIDTH, workAreaSize.width - WINDOW_WORK_AREA_MARGIN)),
+    height: Math.max(MIN_WINDOW_HEIGHT, Math.min(DEFAULT_WINDOW_HEIGHT, workAreaSize.height - WINDOW_WORK_AREA_MARGIN))
+  };
+}
+
 async function createMainWindow(): Promise<void> {
+  const initialWindowSize = getInitialWindowSize();
+
   mainWindow = new BrowserWindow({
-    width: 1120,
-    height: 760,
-    minWidth: 480,
-    minHeight: 520,
+    width: initialWindowSize.width,
+    height: initialWindowSize.height,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     icon: getWindowIconPath(),
     show: false,
     webPreferences: createWebPreferences(getPreloadPath(currentDir))

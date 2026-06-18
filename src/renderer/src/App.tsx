@@ -78,6 +78,8 @@ type SaveState =
   | { status: 'saved' }
   | { status: 'error'; message: string };
 
+const LOCAL_IMAGE_RESOLUTION_DEBOUNCE_MS = 400;
+
 type WorkspaceState =
   | { status: 'empty' }
   | { status: 'loading' }
@@ -235,6 +237,8 @@ export function App() {
   const draftContentRef = useRef('');
   const mdxEditorTouchedRef = useRef(false);
   const pendingMdxSyncFrameRef = useRef<number | null>(null);
+  const syncReadEditorToDraftRef = useRef<(force?: boolean) => string>(() => '');
+  const openMarkdownByPathRef = useRef<(filePath: string) => Promise<void>>(async () => {});
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const menuActionHandlerRef = useRef<(action: string) => void>(() => {});
   const unsavedSyncRef = useRef<Promise<void>>(Promise.resolve());
@@ -311,6 +315,8 @@ export function App() {
     return nextContent;
   }
 
+  syncReadEditorToDraftRef.current = syncReadEditorToDraft;
+
   function scheduleReadEditorSync(): void {
     if (editorMode !== 'read' || viewState.status !== 'ready' || mdxEditorRef.current === null) return;
     mdxEditorTouchedRef.current = true;
@@ -318,7 +324,7 @@ export function App() {
 
     pendingMdxSyncFrameRef.current = window.requestAnimationFrame(() => {
       pendingMdxSyncFrameRef.current = null;
-      syncReadEditorToDraft(true);
+      syncReadEditorToDraftRef.current(true);
     });
   }
 
@@ -387,11 +393,13 @@ export function App() {
     await refreshRecentItems();
   }
 
+  openMarkdownByPathRef.current = openMarkdownByPath;
+
   useEffect(() => {
     return window.mdViewer.onMarkdownOpenRequested((filePath) => {
-      void openMarkdownByPath(filePath);
+      void openMarkdownByPathRef.current(filePath);
     });
-  });
+  }, []);
 
   function toggleSidebar(): void {
     if (!sidebarOpen && viewState.status === 'ready' && workspaceState.status !== 'ready') {
@@ -562,10 +570,13 @@ export function App() {
       }
     }
 
-    void resolveImages();
+    const timer = window.setTimeout(() => {
+      void resolveImages();
+    }, LOCAL_IMAGE_RESOLUTION_DEBOUNCE_MS);
 
     return () => {
       canceled = true;
+      window.clearTimeout(timer);
     };
   }, [renderedMarkdown, viewState]);
 
@@ -1044,7 +1055,7 @@ export function App() {
         <div className="header-left">
           <button
             className={`header-action-btn ${sidebarOpen ? 'active' : ''}`}
-            title={sidebarOpen ? (lang === 'zh' ? '隐藏侧栏' : 'Hide Sidebar') : (lang === 'zh' ? '显示侧栏' : 'Show Sidebar')}
+            title={sidebarOpen ? t.sidebar.hide : t.sidebar.show}
             type="button"
             onClick={toggleSidebar}
           >
@@ -1057,7 +1068,7 @@ export function App() {
           ) : (
             <span className="app-logo">
               <FileText size={16} />
-              <span>Mirad MD</span>
+              <span>{t.app.brand}</span>
             </span>
           )}
         </div>
@@ -1071,7 +1082,7 @@ export function App() {
               </span>
               <button
                 className={`save-badge ${saveState.status === 'saving' ? 'saving' : isDirty ? 'dirty' : 'saved'}`}
-                title={isDirty ? (lang === 'zh' ? '点击保存 (Ctrl+S)' : 'Click to Save (Ctrl+S)') : ''}
+                title={isDirty ? t.save.clickToSave : ''}
                 type="button"
                 disabled={saveState.status === 'saving' || !isDirty}
                 onClick={() => void saveCurrentDocument()}
@@ -1081,16 +1092,16 @@ export function App() {
                 ) : isDirty ? (
                   <>
                     <Save size={11} />
-                    <span>{lang === 'zh' ? '未保存' : 'Draft'}</span>
+                    <span>{t.save.unsaved}</span>
                   </>
                 ) : (
-                  <span>{lang === 'zh' ? '已保存' : 'Saved'}</span>
+                  <span>{t.save.saved}</span>
                 )}
               </button>
             </>
           ) : (
             <span style={{ fontSize: '12px', color: 'var(--faint)' }}>
-              {lang === 'zh' ? '本地优先 Markdown 阅览器' : 'Local-First Markdown Reader'}
+              {t.app.tagline}
             </span>
           )}
         </div>
@@ -1103,14 +1114,14 @@ export function App() {
                 type="button"
                 onClick={() => setEditorModeSafely('read')}
               >
-                {lang === 'zh' ? '富文本' : 'Rich'}
+                {t.editorMode.rich}
               </button>
               <button
                 className={`mode-switch-btn ${editorMode === 'source-edit' ? 'active' : ''}`}
                 type="button"
                 onClick={() => setEditorModeSafely('source-edit')}
               >
-                {lang === 'zh' ? '源码' : 'Source'}
+                {t.editorMode.source}
               </button>
             </div>
           )}
@@ -1153,7 +1164,7 @@ export function App() {
 
           <button
             className="header-action-btn"
-            title={lang === 'zh' ? '命令行面板' : 'Command Palette'}
+            title={t.commandPalette.title}
             type="button"
             onClick={openCommandPalette}
           >
@@ -1304,7 +1315,7 @@ export function App() {
                 <div className="dashboard-card">
                   <div className="dashboard-card-title">
                     <FolderOpen size={14} />
-                    <span>{lang === 'zh' ? '快速开始' : 'Quick Start'}</span>
+                    <span>{t.app.quickStart}</span>
                   </div>
                   <div className="dashboard-actions-list">
                     <button className="dashboard-action-btn primary" type="button" onClick={openMarkdownFile}>
@@ -1313,7 +1324,7 @@ export function App() {
                     </button>
                     <button className="dashboard-action-btn secondary" type="button" onClick={openWorkspaceFolder}>
                       <FolderTree aria-hidden="true" size={16} />
-                      <span>{lang === 'zh' ? '选择工作区' : 'Open Folder'}</span>
+                      <span>{t.workspace.openWorkspace}</span>
                     </button>
                   </div>
                 </div>

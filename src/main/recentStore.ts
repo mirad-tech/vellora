@@ -56,25 +56,35 @@ async function itemExists(item: RecentRecord): Promise<boolean> {
 }
 
 export function createRecentStore(statePath: string, limit = DEFAULT_RECENT_LIMIT): RecentStore {
+  let recordQueue: Promise<void> = Promise.resolve();
+
   async function writeRecords(records: RecentRecord[]): Promise<void> {
     await mkdir(dirname(statePath), { recursive: true });
     await writeFile(statePath, JSON.stringify(records, null, 2), 'utf8');
   }
 
+  async function recordNow(item: RecentRecordInput): Promise<void> {
+    const resolvedPath = resolve(item.path);
+    const records = await readRecords(statePath);
+    const nextRecord: RecentRecord = {
+      type: item.type,
+      path: resolvedPath,
+      name: basename(resolvedPath),
+      openedAt: Date.now()
+    };
+    const deduped = records.filter(
+      (record) => !(record.type === nextRecord.type && resolve(record.path) === resolvedPath)
+    );
+    await writeRecords([nextRecord, ...deduped].slice(0, limit));
+  }
+
   return {
     async record(item) {
-      const resolvedPath = resolve(item.path);
-      const records = await readRecords(statePath);
-      const nextRecord: RecentRecord = {
-        type: item.type,
-        path: resolvedPath,
-        name: basename(resolvedPath),
-        openedAt: Date.now()
-      };
-      const deduped = records.filter(
-        (record) => !(record.type === nextRecord.type && resolve(record.path) === resolvedPath)
-      );
-      await writeRecords([nextRecord, ...deduped].slice(0, limit));
+      const nextRecord = recordQueue
+        .catch(() => {})
+        .then(() => recordNow(item));
+      recordQueue = nextRecord.then(() => undefined, () => undefined);
+      await nextRecord;
     },
 
     async read() {

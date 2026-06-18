@@ -154,6 +154,19 @@ describe('App native menu integration', () => {
     expect(container.querySelector('[data-testid="app-shell"]')?.getAttribute('data-theme')).toBe('dark');
   });
 
+  test('keeps the system open-request listener registered once across rerenders', async () => {
+    const { getMenuActionHandler } = await renderApp();
+
+    expect(currentApi!.onMarkdownOpenRequested).toHaveBeenCalledTimes(1);
+
+    const handler = getMenuActionHandler();
+    await act(async () => {
+      handler?.('toggle-theme');
+    });
+
+    expect(currentApi!.onMarkdownOpenRequested).toHaveBeenCalledTimes(1);
+  });
+
   test('shows the source editor for an empty Markdown document', async () => {
     currentApi!.openMarkdownFile = vi.fn().mockResolvedValue({
       ok: true,

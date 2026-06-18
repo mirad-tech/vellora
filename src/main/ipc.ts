@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,23 @@ import type { MarkdownLinkOpenResult, MarkdownOpenResult, WorkspaceOpenResult } 
 const authorizedFiles = new Set<string>();
 const authorizedDirs = new Set<string>();
 let currentLang: 'zh' | 'en' = 'en';
+
+const REGISTERED_HANDLER_CHANNELS = [
+  IPC_CHANNELS.OPEN_MARKDOWN_DIALOG,
+  IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH,
+  IPC_CHANNELS.RESOLVE_MARKDOWN_IMAGE,
+  IPC_CHANNELS.OPEN_MARKDOWN_LINK,
+  IPC_CHANNELS.OPEN_WORKSPACE_DIALOG,
+  IPC_CHANNELS.OPEN_WORKSPACE_BY_PATH,
+  IPC_CHANNELS.GET_RECENT_ITEMS,
+  IPC_CHANNELS.SAVE_MARKDOWN_FILE,
+  IPC_CHANNELS.OPEN_DEFAULT_EDITOR,
+  IPC_CHANNELS.EXPORT_TO_PDF,
+  IPC_CHANNELS.SET_UNSAVED_CHANGES,
+  IPC_CHANNELS.CONFIRM_DISCARD_CHANGES,
+  IPC_CHANNELS.GET_SECURITY_DIAGNOSTICS,
+  IPC_CHANNELS.SET_LANGUAGE
+] as const;
 
 const unsavedDialogs = {
   zh: {
@@ -80,8 +97,7 @@ async function isFileAuthorized(filePath: string): Promise<boolean> {
   const isTestMode =
     process.env.NODE_ENV === 'test' ||
     !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST ||
-    process.env.ELECTRON_ENABLE_SECURITY_WARNINGS === 'true';
+    !!process.env.PLAYWRIGHT_TEST;
   if (isTestMode) {
     const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
     if (normPath.startsWith(tempDir)) {
@@ -111,8 +127,7 @@ async function isDirAuthorized(dirPath: string): Promise<boolean> {
   const isTestMode =
     process.env.NODE_ENV === 'test' ||
     !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST ||
-    process.env.ELECTRON_ENABLE_SECURITY_WARNINGS === 'true';
+    !!process.env.PLAYWRIGHT_TEST;
   if (isTestMode) {
     const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
     if (normPath.startsWith(tempDir)) {
@@ -144,6 +159,25 @@ function tr<T extends { ok: boolean; message?: string }>(result: T): T {
   return translateResultMessage(result, currentLang);
 }
 
+export function authorizeMarkdownOpenRequest(filePath: unknown): boolean {
+  if (typeof filePath !== 'string' || filePath.trim() === '') return false;
+  if (!isMarkdownPath(filePath)) return false;
+
+  try {
+    if (!statSync(filePath).isFile()) return false;
+    authorizedFiles.add(normalizePath(filePath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resetIpcHandlers(): void {
+  for (const channel of REGISTERED_HANDLER_CHANNELS) {
+    ipcMain.removeHandler(channel);
+  }
+}
+
 async function recordRecentSafely(
   recentStore: ReturnType<typeof createRecentStore>,
   type: 'file' | 'folder',
@@ -162,6 +196,7 @@ async function recordRecentSafely(
 }
 
 export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuManager<any>): void {
+  resetIpcHandlers();
   const recentStore = createDefaultRecentStore();
   recentStoreRef = recentStore;
   const workspaceOptions = workspaceOptionsFromEnvironment();
@@ -217,9 +252,6 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
   });
 
   ipcMain.handle(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH, async (_event, filePath: unknown, isDropped?: unknown) => {
-    if (typeof filePath === 'string' && isDropped === true) {
-      authorizedFiles.add(normalizePath(filePath));
-    }
     if (typeof filePath !== 'string' || filePath.trim() === '') {
       return tr({
         ok: false,
@@ -234,6 +266,15 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
         message: '只能打开 .md 或 .markdown 文件。'
       });
     }
+    if (isDropped === true) {
+      const result = await readMarkdownFile(filePath);
+      if (result.ok) {
+        authorizedFiles.add(normalizePath(result.document.path));
+        await recordRecentSafely(recentStore, 'file', result.document.path);
+      }
+      return tr(result);
+    }
+
     if (!(await isFileAuthorized(filePath))) {
       return tr({
         ok: false,
@@ -437,10 +478,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
   ipcMain.handle(IPC_CHANNELS.SET_LANGUAGE, (_event, lang: unknown) => {
     if (typeof lang === 'string' && (lang === 'zh' || lang === 'en')) {
       currentLang = lang;
-      const isTest = !!process.env.PLAYWRIGHT_TEST || !!process.env.VITEST;
-      if (!isTest) {
-        menuManager?.setLanguage(lang);
-      }
+      menuManager?.setLanguage(lang);
     }
   });
 }

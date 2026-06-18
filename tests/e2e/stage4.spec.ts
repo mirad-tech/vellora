@@ -48,7 +48,8 @@ async function launchWithSelectedFile(filePath: string): Promise<ElectronApplica
     args: [appPath],
     env: {
       ...process.env,
-      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true'
+      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true',
+      PLAYWRIGHT_TEST: 'true'
     }
   });
 
@@ -83,10 +84,19 @@ async function clickNativeMenuItem(
 ): Promise<void> {
   await electronApp.evaluate(
     ({ BrowserWindow, Menu }, labels) => {
-      const normalize = (value: string) => value.replaceAll('&', '');
+      const aliases: Record<string, string[]> = {
+        Edit: ['Edit', '编辑'],
+        View: ['View', '查看'],
+        Find: ['Find', '查找'],
+        'Toggle Sidebar': ['Toggle Sidebar', '切换侧边栏']
+      };
+      const normalize = (value: string) => value.replaceAll('&', '').replace(/\([^)]*\)$/, '');
+      const candidatesFor = (value: string) => aliases[value] ?? [value];
       const menu = Menu.getApplicationMenu();
-      const topLevel = menu?.items.find((item) => normalize(item.label) === labels.topLevelLabel);
-      const target = topLevel?.submenu?.items.find((item) => normalize(item.label) === labels.itemLabel);
+      const topLevelCandidates = candidatesFor(labels.topLevelLabel);
+      const itemCandidates = candidatesFor(labels.itemLabel);
+      const topLevel = menu?.items.find((item) => topLevelCandidates.includes(normalize(item.label)));
+      const target = topLevel?.submenu?.items.find((item) => itemCandidates.includes(normalize(item.label)));
       if (!target) throw new Error(`Missing menu item: ${labels.topLevelLabel} -> ${labels.itemLabel}`);
       (target.click as (...args: unknown[]) => void)(target, BrowserWindow.getFocusedWindow(), undefined);
     },
@@ -95,7 +105,7 @@ async function clickNativeMenuItem(
 }
 
 async function openFixture(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开文件' }).click();
+  await page.getByRole('button', { name: '打开文件', exact: true }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 

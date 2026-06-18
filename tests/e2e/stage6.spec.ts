@@ -41,6 +41,7 @@ async function launchApp(fixture: WorkspaceFixture, fileLimit?: number): Promise
     env: {
       ...process.env,
       ELECTRON_ENABLE_SECURITY_WARNINGS: 'true',
+      PLAYWRIGHT_TEST: 'true',
       MD_VIEWER_USER_DATA_DIR: fixture.statePath,
       ...(fileLimit ? { MD_VIEWER_WORKSPACE_FILE_LIMIT: String(fileLimit) } : {})
     }
@@ -77,10 +78,17 @@ async function clickNativeMenuItem(
 ): Promise<void> {
   await electronApp.evaluate(
     ({ BrowserWindow, Menu }, labels) => {
-      const normalize = (value: string) => value.replaceAll('&', '');
+      const aliases: Record<string, string[]> = {
+        File: ['File', '文件'],
+        'Open Folder': ['Open Folder', '打开文件夹']
+      };
+      const normalize = (value: string) => value.replaceAll('&', '').replace(/\([^)]*\)$/, '');
+      const candidatesFor = (value: string) => aliases[value] ?? [value];
       const menu = Menu.getApplicationMenu();
-      const topLevel = menu?.items.find((item) => normalize(item.label) === labels.topLevelLabel);
-      const target = topLevel?.submenu?.items.find((item) => normalize(item.label) === labels.itemLabel);
+      const topLevelCandidates = candidatesFor(labels.topLevelLabel);
+      const itemCandidates = candidatesFor(labels.itemLabel);
+      const topLevel = menu?.items.find((item) => topLevelCandidates.includes(normalize(item.label)));
+      const target = topLevel?.submenu?.items.find((item) => itemCandidates.includes(normalize(item.label)));
       if (!target) throw new Error(`Missing menu item: ${labels.topLevelLabel} -> ${labels.itemLabel}`);
       (target.click as (...args: unknown[]) => void)(target, BrowserWindow.getFocusedWindow(), undefined);
     },
@@ -89,7 +97,7 @@ async function clickNativeMenuItem(
 }
 
 async function openWorkspace(electronApp: ElectronApplication, page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开文件' }).waitFor();
+  await page.getByRole('button', { name: '打开文件', exact: true }).waitFor();
   await clickNativeMenuItem(electronApp, 'File', 'Open Folder');
   await expect(page.getByTestId('sidebar-panel')).toBeVisible();
   await expect(page.getByTestId('sidebar-tab-workspace')).toHaveAttribute('aria-selected', 'true');

@@ -10,16 +10,20 @@ async function createRecentFixture(): Promise<{
   statePath: string;
   filePath: string;
   folderPath: string;
+  secondFilePath: string;
 }> {
   const dir = join(tmpdir(), `md-viewer-recent-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const folderPath = join(dir, '资料 目录');
   const filePath = join(folderPath, '记录.md');
+  const secondFilePath = join(folderPath, '第二篇.md');
   await mkdir(folderPath, { recursive: true });
   await writeFile(filePath, '# 记录', 'utf8');
+  await writeFile(secondFilePath, '# 第二篇', 'utf8');
   return {
     statePath: join(dir, 'state', 'recent.json'),
     filePath,
-    folderPath
+    folderPath,
+    secondFilePath
   };
 }
 
@@ -69,5 +73,26 @@ describe('recent local document store', () => {
       path: filePath,
       exists: false
     });
+  });
+
+  test('serializes concurrent record calls without losing recent items', async () => {
+    const { statePath, filePath, folderPath, secondFilePath } = await createRecentFixture();
+    const store = createRecentStore(statePath);
+
+    await Promise.all([
+      store.record({ type: 'file', path: filePath }),
+      store.record({ type: 'folder', path: folderPath }),
+      store.record({ type: 'file', path: secondFilePath })
+    ]);
+
+    const result = await store.read();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.items.map((item) => item.path)).toEqual([
+      secondFilePath,
+      folderPath,
+      filePath
+    ]);
   });
 });

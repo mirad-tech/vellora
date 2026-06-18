@@ -1758,6 +1758,20 @@ input {
     margin: 0 !important;
   }
 
+  .editor-split {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  .editor-preview {
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: #ffffff !important;
+  }
+
   .markdown-body {
     border: 0 !important;
     box-shadow: none !important;
@@ -1823,7 +1837,7 @@ input {
   }
 
   .app-shell {
-    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-rows: 52px minmax(0, 1fr) auto;
   }
 
   .workspace,

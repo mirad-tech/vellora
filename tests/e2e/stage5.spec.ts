@@ -42,7 +42,7 @@ async function createResourceFixture(): Promise<Stage5Fixture> {
     'utf8'
   );
   await writeFile(linkedPath, '# 下一篇\n\n本地链接打开成功。', 'utf8');
-  await writeFile(dragPath, '# 拖入文档\n\n拖放打开成功。', 'utf8');
+  await writeFile(dragPath, '# 拖入文档\n\n![拖入图片](assets/pixel.png)\n\n拖放打开成功。', 'utf8');
 
   return { documentPath, dragPath };
 }
@@ -53,7 +53,8 @@ async function launchWithSelectedFile(filePath: string): Promise<ElectronApplica
     args: [appPath],
     env: {
       ...process.env,
-      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true'
+      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true',
+      PLAYWRIGHT_TEST: 'true'
     }
   });
 
@@ -79,7 +80,7 @@ async function launchWithSelectedFile(filePath: string): Promise<ElectronApplica
 }
 
 async function openFixture(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '打开文件' }).click();
+  await page.getByRole('button', { name: '打开文件', exact: true }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 }
 
@@ -194,6 +195,10 @@ test('opens a dropped Markdown file through preload path extraction', async () =
   await page.dispatchEvent('[data-testid="app-shell"]', 'drop', { dataTransfer });
 
   await expect(page.locator('.markdown-body h1')).toHaveText('拖入文档');
+  await expect(page.locator('.markdown-body img[alt="拖入图片"]')).toHaveAttribute(
+    'src',
+    /^data:image\/png;base64,/
+  );
   await expect(page.getByTestId('status-file-name')).toContainText('拖入 文档.markdown');
 
   await electronApp.close();

@@ -28,6 +28,7 @@ test('packaged Windows app starts securely and opens Markdown without dev server
     env: {
       ...process.env,
       ELECTRON_ENABLE_SECURITY_WARNINGS: 'true',
+      PLAYWRIGHT_TEST: 'true',
       MD_VIEWER_USER_DATA_DIR: fixture.statePath
     }
   });
@@ -44,7 +45,7 @@ test('packaged Windows app starts securely and opens Markdown without dev server
   );
 
   const page = await electronApp.firstWindow();
-  await page.getByRole('button', { name: '打开文件' }).click();
+  await page.getByRole('button', { name: '打开文件', exact: true }).click();
   await expect(page.locator('.markdown-body h1')).toHaveText('打包验证');
 
   const boundary = await page.evaluate(async () => ({

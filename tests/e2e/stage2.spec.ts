@@ -18,7 +18,8 @@ async function launchAppWithDialogFixture(filePath: string) {
     args: [appPath],
     env: {
       ...process.env,
-      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true'
+      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true',
+      PLAYWRIGHT_TEST: 'true'
     }
   });
 
@@ -59,7 +60,7 @@ const ok: boolean = true;
   const electronApp = await launchAppWithDialogFixture(filePath);
   const page = await electronApp.firstWindow();
 
-  await page.getByRole('button', { name: '打开文件' }).click();
+  await page.getByRole('button', { name: '打开文件', exact: true }).click();
 
   await expect(page.getByTestId('markdown-body')).toBeVisible();
   await expect(page.locator('.markdown-body h1')).toHaveText('标题');
@@ -84,7 +85,7 @@ test('does not execute malicious HTML in the Electron renderer', async () => {
   const electronApp = await launchAppWithDialogFixture(filePath);
   const page = await electronApp.firstWindow();
 
-  await page.getByRole('button', { name: '打开文件' }).click();
+  await page.getByRole('button', { name: '打开文件', exact: true }).click();
   await expect(page.getByTestId('markdown-body')).toBeVisible();
 
   const xssState = await page.evaluate(() => {
@@ -126,7 +127,7 @@ test('shows an empty document state without crashing', async () => {
   const electronApp = await launchAppWithDialogFixture(filePath);
   const page = await electronApp.firstWindow();
 
-  await page.getByRole('button', { name: '打开文件' }).click();
+  await page.getByRole('button', { name: '打开文件', exact: true }).click();
 
   await expect(page.getByTestId('markdown-empty')).toHaveText('文件为空');
 

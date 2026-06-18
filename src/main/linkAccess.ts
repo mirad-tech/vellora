@@ -58,7 +58,16 @@ export async function openMarkdownLink(
   }
 
   if (protocol === 'http:' || protocol === 'https:') {
-    const url = new URL(href).toString();
+    let url: string;
+    try {
+      url = new URL(href).toString();
+    } catch {
+      return {
+        ok: false,
+        code: 'UNSUPPORTED_LINK',
+        message: '链接无效。'
+      };
+    }
     await openExternal(url);
     return {
       ok: true,

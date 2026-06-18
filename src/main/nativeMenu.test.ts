@@ -30,6 +30,14 @@ function findSubmenuItem(
   return item;
 }
 
+function submenuRoles(template: MenuItemConstructorOptions[], topLevelLabel: string): string[] {
+  const topLevel = findTopLevelMenu(template, topLevelLabel);
+  const submenu = Array.isArray(topLevel.submenu) ? topLevel.submenu : [];
+  return submenu
+    .filter((entry): entry is MenuItemConstructorOptions => typeof entry !== 'string')
+    .map((entry) => String(entry.role ?? ''));
+}
+
 describe('native application menu template', () => {
   test('matches the Typora-like top-level menu organization', () => {
     const template = createNativeMenuTemplate(vi.fn());
@@ -72,6 +80,22 @@ describe('native application menu template', () => {
     expect(findSubmenuItem(template, 'File', 'Export as PDF').accelerator).toBe(
       'CommandOrControl+Shift+P'
     );
+  });
+
+  test('hides reload and devtools roles by default', () => {
+    const template = createNativeMenuTemplate(vi.fn());
+    const roles = submenuRoles(template, 'View');
+
+    expect(roles).not.toContain('reload');
+    expect(roles).not.toContain('forceReload');
+    expect(roles).not.toContain('toggleDevTools');
+  });
+
+  test('shows reload and devtools roles in development mode', () => {
+    const template = createNativeMenuTemplate(vi.fn(), 'en', { isDev: true });
+    const roles = submenuRoles(template, 'View');
+
+    expect(roles).toEqual(expect.arrayContaining(['reload', 'forceReload', 'toggleDevTools']));
   });
 
   test('installs the built template through the supplied Electron Menu API', () => {

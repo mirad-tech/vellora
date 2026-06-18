@@ -12,6 +12,17 @@ async function createMarkdownFixture(): Promise<string> {
   return filePath;
 }
 
+function createLaunchArgumentEnv(): Record<string, string> {
+  const envEntries = Object.entries(process.env).filter(
+    (entry): entry is [string, string] => entry[0] !== 'PLAYWRIGHT_TEST' && typeof entry[1] === 'string'
+  );
+
+  return {
+    ...Object.fromEntries(envEntries),
+    ELECTRON_ENABLE_SECURITY_WARNINGS: 'true'
+  };
+}
+
 test('stage 1 shell starts securely and reads Markdown through the preload API', async () => {
   const fixturePath = await createMarkdownFixture();
   const appPath = join(process.cwd(), 'out/main/index.js');
@@ -19,7 +30,8 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
     args: [appPath],
     env: {
       ...process.env,
-      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true'
+      ELECTRON_ENABLE_SECURITY_WARNINGS: 'true',
+      PLAYWRIGHT_TEST: 'true'
     }
   });
 
@@ -29,7 +41,7 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
     consoleMessages.push(message.text());
   });
 
-  await page.getByRole('button', { name: '打开文件' }).waitFor();
+  await page.getByRole('button', { name: '打开文件', exact: true }).waitFor();
   await expect(page.getByRole('heading', { name: '未打开文件' })).toBeVisible();
 
   const boundary = await page.evaluate(async () => {
@@ -120,6 +132,21 @@ test('stage 1 shell starts securely and reads Markdown through the preload API',
     message.includes('Electron Security Warning')
   );
   expect(securityWarnings).toEqual([]);
+
+  await electronApp.close();
+});
+
+test('opens a Markdown file passed as a launch argument without test authorization', async () => {
+  const fixturePath = await createMarkdownFixture();
+  const appPath = join(process.cwd(), 'out/main/index.js');
+  const electronApp = await electron.launch({
+    args: [appPath, fixturePath],
+    env: createLaunchArgumentEnv()
+  });
+
+  const page = await electronApp.firstWindow();
+  await expect(page.locator('.markdown-body h1')).toHaveText('阶段 1');
+  await expect(page.getByTestId('status-file-name')).toContainText('阶段 1 验证.md');
 
   await electronApp.close();
 });
