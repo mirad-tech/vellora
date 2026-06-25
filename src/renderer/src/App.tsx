@@ -1399,25 +1399,25 @@ export function App() {
               )}
 
               {editorMode === 'source-edit' ? (
-                <div className="editor-split" data-testid="editor-split">
-                  <textarea
-                    className="source-editor"
-                    data-testid="source-editor"
-                    spellCheck={false}
-                    value={draftContent}
-                    onChange={(event) => {
-                      updateDraftContent(event.target.value);
-                      setEditorError(null);
-                      setSaveState({ status: 'idle' });
-                    }}
-                  />
+                <>
+                  <div className="source-editor-panel" data-testid="source-editor-panel">
+                    <textarea
+                      className="source-editor"
+                      data-testid="source-editor"
+                      spellCheck={false}
+                      value={draftContent}
+                      onChange={(event) => {
+                        updateDraftContent(event.target.value);
+                        setEditorError(null);
+                        setSaveState({ status: 'idle' });
+                      }}
+                    />
+                  </div>
                   <div
-                    className="markdown-body editor-preview"
-                    data-testid="editor-preview"
+                    className="markdown-body editor-print-preview"
                     dangerouslySetInnerHTML={{ __html: renderedMarkdown?.status === 'ready' ? searchResult.html : '' }}
-                    onClick={handleMarkdownClick}
                   />
-                </div>
+                </>
               ) : renderedMarkdown?.status === 'empty' ? (
                 <div className="document-empty" data-testid="markdown-empty">
                   {t.app.documentEmpty}

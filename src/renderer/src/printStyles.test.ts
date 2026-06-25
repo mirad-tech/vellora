@@ -21,10 +21,10 @@ describe('print and PDF export styles', () => {
     const css = await readFile('src/renderer/src/styles.css', 'utf8');
     const printBlock = css.slice(css.indexOf('@media print'));
 
-    expect(printBlock).toContain('.editor-split');
+    expect(printBlock).toContain('.source-editor-panel');
     expect(printBlock).toContain('display: block !important');
     expect(printBlock).toContain('height: auto !important');
-    expect(printBlock).toContain('.editor-preview');
+    expect(printBlock).toContain('.editor-print-preview');
     expect(printBlock).toContain('border: 0 !important');
   });
 });

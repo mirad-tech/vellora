@@ -1,7 +1,7 @@
 {
   "name": "markdown-viewer",
   "productName": "Markdown viewer",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Markdown viewer desktop app",
   "author": "Markdown viewer Contributors",
   "main": "out/main/index.js",
@@ -18,6 +18,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
+    "generate:icon": "node build/generate-icon.mjs",
     "dist": "npm run build && electron-builder",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
@@ -42,6 +43,8 @@
     "appId": "app.markdown-viewer.desktop",
     "productName": "Markdown viewer",
     "asar": true,
+    "afterPack": "build/afterPack.mjs",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "buildResources": "build",
       "output": "release"
@@ -52,6 +55,8 @@
     ],
     "win": {
       "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "signExecutable": false,
       "target": [
         "nsis"
       ]
@@ -80,7 +85,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   },
   "dependencies": {
@@ -105,6 +112,7 @@
     "electron-vite": "^5.0.0",
     "esbuild": "0.28.1",
     "jsdom": "^29.1.1",
+    "resedit": "^1.7.2",
     "typescript": "^5.9.2",
     "vite": "^7.3.5",
     "vitest": "^4.1.8"

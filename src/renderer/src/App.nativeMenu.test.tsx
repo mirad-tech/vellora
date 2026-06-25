@@ -167,7 +167,7 @@ describe('App native menu integration', () => {
     expect(currentApi!.onMarkdownOpenRequested).toHaveBeenCalledTimes(1);
   });
 
-  test('shows the source editor for an empty Markdown document', async () => {
+  test('shows only the full-width source editor for an empty Markdown document', async () => {
     currentApi!.openMarkdownFile = vi.fn().mockResolvedValue({
       ok: true,
       document: createDocument({
@@ -189,7 +189,9 @@ describe('App native menu integration', () => {
       handler?.('toggle-source-edit');
     });
 
+    expect(container.querySelector('[data-testid="source-editor-panel"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="source-editor"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="editor-preview"]')).toBeNull();
     expect(container.querySelector('[data-testid="markdown-empty"]')).toBeNull();
   });
 

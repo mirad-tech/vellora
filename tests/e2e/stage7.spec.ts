@@ -177,8 +177,9 @@ async function clickNativeMenuItem(
 
 async function enterSourceEditMode(electronApp: ElectronApplication, page: Page): Promise<void> {
   await clickNativeMenuItem(electronApp, 'View', 'Source Edit');
+  await expect(page.getByTestId('source-editor-panel')).toBeVisible();
   await expect(page.getByTestId('source-editor')).toBeVisible();
-  await expect(page.getByTestId('editor-preview')).toBeVisible();
+  await expect(page.getByTestId('editor-preview')).toHaveCount(0);
 }
 
 async function saveFromNativeMenu(electronApp: ElectronApplication): Promise<void> {
@@ -300,7 +301,7 @@ test('does not ask before closing after a successful WYSIWYG save', async () => 
   await pageClosed;
 });
 
-test('edits Markdown source with split preview and saves the same file', async () => {
+test('edits Markdown source in a full-width editor and saves the same file', async () => {
   const fixture = await createEditFixture();
   const electronApp = await launchWithSelectedFile(fixture);
   const page = await electronApp.firstWindow();
@@ -309,7 +310,7 @@ test('edits Markdown source with split preview and saves the same file', async (
   await enterSourceEditMode(electronApp, page);
 
   await page.getByTestId('source-editor').fill('# 更新\n\n- 一项');
-  await expect(page.getByTestId('editor-preview').locator('h1')).toHaveText('更新');
+  await expect(page.getByTestId('editor-preview')).toHaveCount(0);
 
   await saveFromNativeMenu(electronApp);
   await expect.poll(() => readFile(fixture.filePath, 'utf8')).toBe('# 更新\n\n- 一项');
