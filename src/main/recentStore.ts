@@ -18,6 +18,7 @@ type RecentRecordInput = {
 export type RecentStore = {
   record: (item: RecentRecordInput) => Promise<void>;
   read: () => Promise<RecentItemsResult>;
+  remove: (item: RecentRecordInput) => Promise<void>;
 };
 
 const DEFAULT_RECENT_LIMIT = 12;
@@ -78,11 +79,28 @@ export function createRecentStore(statePath: string, limit = DEFAULT_RECENT_LIMI
     await writeRecords([nextRecord, ...deduped].slice(0, limit));
   }
 
+  async function removeNow(item: RecentRecordInput): Promise<void> {
+    const resolvedPath = resolve(item.path);
+    const records = await readRecords(statePath);
+    const remaining = records.filter(
+      (record) => !(record.type === item.type && resolve(record.path) === resolvedPath)
+    );
+    await writeRecords(remaining);
+  }
+
   return {
     async record(item) {
       const nextRecord = recordQueue
         .catch(() => {})
         .then(() => recordNow(item));
+      recordQueue = nextRecord.then(() => undefined, () => undefined);
+      await nextRecord;
+    },
+
+    async remove(item) {
+      const nextRecord = recordQueue
+        .catch(() => {})
+        .then(() => removeNow(item));
       recordQueue = nextRecord.then(() => undefined, () => undefined);
       await nextRecord;
     },

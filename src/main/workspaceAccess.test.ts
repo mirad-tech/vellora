@@ -10,11 +10,15 @@ async function createWorkspaceFixture(): Promise<string> {
   const dir = join(tmpdir(), `md-viewer-workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(join(dir, 'docs', '深入'), { recursive: true });
   await mkdir(join(dir, 'assets'), { recursive: true });
+  await mkdir(join(dir, 'node_modules', 'dep'), { recursive: true });
+  await mkdir(join(dir, '.git', 'hooks'), { recursive: true });
   await writeFile(join(dir, 'README.md'), '# README', 'utf8');
   await writeFile(join(dir, 'docs', '开始.md'), '# 开始', 'utf8');
   await writeFile(join(dir, 'docs', '深入', 'API.markdown'), '# API', 'utf8');
   await writeFile(join(dir, 'assets', 'logo.png'), 'not markdown', 'utf8');
   await writeFile(join(dir, 'notes.txt'), 'ignore me', 'utf8');
+  await writeFile(join(dir, 'node_modules', 'dep', 'README.md'), '# DEP README', 'utf8');
+  await writeFile(join(dir, '.git', 'description.md'), '# Description', 'utf8');
   return dir;
 }
 

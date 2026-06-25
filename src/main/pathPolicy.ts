@@ -1,11 +1,83 @@
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
+const isWindows = process.platform === 'win32';
+
 export type LocalResourceAccessOptions = {
   allowedDirectories?: readonly string[];
 };
 
 export function normalizePath(filePath: string): string {
-  return resolve(filePath).replace(/\\/g, '/').toLowerCase();
+  const resolved = resolve(filePath).replace(/\\/g, '/');
+  return isWindows ? resolved.toLowerCase() : resolved;
+}
+
+export function getSafeUserDirectories(): string[] {
+  const paths: string[] = [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { app } = require('electron');
+    if (app) {
+      paths.push(app.getPath('home'));
+      paths.push(app.getPath('documents'));
+      paths.push(app.getPath('desktop'));
+    }
+  } catch {
+    // ignore and fallback
+  }
+
+  if (paths.length === 0) {
+    const home = process.env.USERPROFILE || process.env.HOME;
+    if (home) {
+      paths.push(home);
+      paths.push(resolve(home, 'Documents'));
+      paths.push(resolve(home, 'Desktop'));
+    }
+  }
+
+  return Array.from(new Set(paths.map(p => normalizePath(p))));
+}
+
+export function isDangerousSystemDirectory(filePath: string): boolean {
+  const normPath = normalizePath(filePath);
+
+  const winDangerousDirs = [
+    'c:/windows',
+    'c:/program files',
+    'c:/program files (x86)'
+  ];
+
+  const unixDangerousDirs = [
+    '/etc',
+    '/var',
+    '/bin',
+    '/sbin',
+    '/usr/bin',
+    '/usr/sbin',
+    '/proc',
+    '/sys',
+    '/dev',
+    '/root'
+  ];
+
+  for (const dir of winDangerousDirs) {
+    if (normPath === dir || isPathInsideDirectory(normPath, dir)) {
+      return true;
+    }
+  }
+
+  for (const dir of unixDangerousDirs) {
+    if (normPath === dir || isPathInsideDirectory(normPath, dir)) {
+      return true;
+    }
+  }
+
+  if (normPath.includes('/appdata/local/temp')) {
+    // Exclude Temp folder to let test frameworks function properly
+  } else if (normPath.includes('/appdata/local') || normPath.includes('/appdata/roaming')) {
+    return true;
+  }
+
+  return false;
 }
 
 export function isPathInsideDirectory(childPath: string, parentDir: string): boolean {

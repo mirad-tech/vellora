@@ -34,7 +34,8 @@ describe('Electron security defaults', () => {
         'menu-action',
         'export-to-pdf',
         'app:getSecurityDiagnostics',
-        'app:setLanguage'
+        'app:setLanguage',
+        'recent:removeItem'
       ]
     });
   });
@@ -49,5 +50,30 @@ describe('Electron security defaults', () => {
     expect(resolveTrustedRendererUrl('http://[::1]:5173', false)).toBe('http://[::1]:5173/');
     expect(resolveTrustedRendererUrl('https://example.com/app', false)).toBeNull();
     expect(resolveTrustedRendererUrl('file:///C:/tmp/renderer.html', false)).toBeNull();
+  });
+});
+
+import { isDangerousSystemDirectory, getSafeUserDirectories, normalizePath } from './pathPolicy';
+
+describe('Path and Directory Security policy', () => {
+  test('correctly detects dangerous system folders', () => {
+    expect(isDangerousSystemDirectory('C:/Windows/system32/cmd.exe')).toBe(true);
+    expect(isDangerousSystemDirectory('/etc/passwd')).toBe(true);
+    expect(isDangerousSystemDirectory('C:/Users/User/AppData/Local/Temp')).toBe(true);
+    expect(isDangerousSystemDirectory('/var/log/syslog')).toBe(true);
+    expect(isDangerousSystemDirectory('D:/Projects/App/notes.md')).toBe(false);
+  });
+
+  test('retrieves user directories and normalizes path based on OS', () => {
+    const safeDirs = getSafeUserDirectories();
+    expect(safeDirs.length).toBeGreaterThan(0);
+
+    const testPath = 'C:/Temp/Docs/MyDoc.MD';
+    const normalized = normalizePath(testPath);
+    if (process.platform === 'win32') {
+      expect(normalized).toBe('c:/temp/docs/mydoc.md');
+    } else {
+      expect(normalized).toBe('C:/Temp/Docs/MyDoc.MD');
+    }
   });
 });

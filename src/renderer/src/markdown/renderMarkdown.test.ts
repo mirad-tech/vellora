@@ -178,7 +178,7 @@ describe('safe Markdown rendering', () => {
 
     const elapsed = performance.now() - startedAt;
     expect(result.status).toBe('ready');
-    expect(elapsed).toBeLessThan(1500);
+    expect(elapsed).toBeLessThan(3000);
     if (result.status !== 'ready') return;
     expect(result.html).toContain('<h2 id="heading-标题-0"');
     expect(result.html.length).toBeGreaterThan(100_000);

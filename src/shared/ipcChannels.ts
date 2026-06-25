@@ -14,7 +14,8 @@ export const IPC_CHANNELS = {
   MENU_ACTION: 'menu-action',
   EXPORT_TO_PDF: 'export-to-pdf',
   GET_SECURITY_DIAGNOSTICS: 'app:getSecurityDiagnostics',
-  SET_LANGUAGE: 'app:setLanguage'
+  SET_LANGUAGE: 'app:setLanguage',
+  REMOVE_RECENT_ITEM: 'recent:removeItem'
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

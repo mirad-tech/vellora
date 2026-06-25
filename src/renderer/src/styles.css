@@ -527,6 +527,16 @@ input {
   font-weight: 600;
   color: var(--text);
   opacity: 0.85;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.workspace-directory-label:hover {
+  background: var(--surface-strong);
+  color: var(--accent);
+  opacity: 1;
 }
 
 .workspace-file {
@@ -1429,7 +1439,8 @@ input {
   display: flex;
   align-items: center;
   gap: 12px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 8px;
   border-radius: 6px;
   background: transparent;
@@ -1444,6 +1455,34 @@ input {
 .recent-drawer-item-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.recent-drawer-item-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.recent-drawer-delete-btn {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.recent-drawer-delete-btn:hover {
+  background: var(--surface-strong);
+  color: var(--accent);
+  opacity: 1;
 }
 
 .recent-item-icon-wrapper {

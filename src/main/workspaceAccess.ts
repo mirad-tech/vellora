@@ -30,6 +30,26 @@ function sortDirectoryEntries(entries: Dirent<string>[]): Dirent<string>[] {
   });
 }
 
+const IGNORED_DIRECTORIES = new Set([
+  'node_modules',
+  '.git',
+  '.svn',
+  '.hg',
+  '.vscode',
+  '.idea',
+  'dist',
+  'build',
+  'out',
+  'release',
+  'build',
+  'coverage',
+  '.next',
+  '.nuxt',
+  '.cache',
+  '.turbo',
+  '.github'
+]);
+
 async function walkMarkdownTree(rootPath: string, currentPath: string, state: WalkState): Promise<WorkspaceTreeNode[]> {
   if (state.fileCount >= state.limit) {
     state.truncated = true;
@@ -48,7 +68,11 @@ async function walkMarkdownTree(rootPath: string, currentPath: string, state: Wa
     const entryPath = join(currentPath, entry.name);
 
     if (entry.isDirectory()) {
+      if (IGNORED_DIRECTORIES.has(entry.name)) {
+        continue;
+      }
       const children = await walkMarkdownTree(rootPath, entryPath, state);
+
       if (children.length > 0) {
         nodes.push({
           type: 'directory',

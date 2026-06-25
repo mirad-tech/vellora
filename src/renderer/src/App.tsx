@@ -234,6 +234,7 @@ export function App() {
   const readerRef = useRef<HTMLElement | null>(null);
   const markdownBodyRef = useRef<HTMLDivElement | null>(null);
   const mdxEditorRef = useRef<MDXEditorMethods | null>(null);
+  const mdxLoadedPathRef = useRef<string | null>(null);
   const draftContentRef = useRef('');
   const mdxEditorTouchedRef = useRef(false);
   const pendingMdxSyncFrameRef = useRef<number | null>(null);
@@ -255,6 +256,7 @@ export function App() {
   const [pendingExternalUrl, setPendingExternalUrl] = useState<string | null>(null);
   const [securityDiagnostics, setSecurityDiagnostics] = useState<SecurityDiagnostics | null>(null);
   const [sidebarTab, setSidebarTab] = useState<'workspace' | 'outline'>('workspace');
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
 
   function updateDraftContent(nextContent: string): void {
     draftContentRef.current = nextContent;
@@ -269,6 +271,7 @@ export function App() {
     setEditorMode('read');
     setEditorError(null);
     mdxEditorTouchedRef.current = false;
+    setCollapsedPaths(new Set());
     if (pendingMdxSyncFrameRef.current !== null) {
       window.cancelAnimationFrame(pendingMdxSyncFrameRef.current);
       pendingMdxSyncFrameRef.current = null;
@@ -409,6 +412,14 @@ export function App() {
   }
 
   async function openRecentItem(item: RecentItem): Promise<void> {
+    if (!item.exists) {
+      const confirmRemove = window.confirm(t.recent.removeConfirm);
+      if (confirmRemove) {
+        await window.mdViewer.removeRecentItem(item.path, item.type);
+        await refreshRecentItems();
+      }
+      return;
+    }
     if (item.type === 'folder') {
       await openWorkspaceByPath(item.path);
       setSidebarTab('workspace');
@@ -593,10 +604,19 @@ export function App() {
   }, [draftContent]);
 
   useEffect(() => {
-    if (viewState.status !== 'ready' || editorMode !== 'read' || mdxEditorRef.current === null) return;
-    mdxEditorRef.current.setMarkdown(draftContentRef.current);
-    mdxEditorTouchedRef.current = false;
-    setEditorError(null);
+    if (viewState.status !== 'ready' || editorMode !== 'read' || mdxEditorRef.current === null) {
+      if (viewState.status !== 'ready' || editorMode !== 'read') {
+        mdxLoadedPathRef.current = null;
+      }
+      return;
+    }
+
+    if (mdxLoadedPathRef.current !== viewState.document.path) {
+      mdxEditorRef.current.setMarkdown(draftContentRef.current);
+      mdxEditorTouchedRef.current = false;
+      setEditorError(null);
+      mdxLoadedPathRef.current = viewState.document.path;
+    }
   }, [editorMode, viewState]);
 
   useEffect(() => {
@@ -815,7 +835,14 @@ export function App() {
 
   async function exportCurrentDocumentToPdf(): Promise<void> {
     if (viewState.status !== 'ready') return;
-    syncReadEditorToDraft();
+    syncReadEditorToDraft(true);
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+    });
     const result = await window.mdViewer.exportToPdf();
     if (!result.ok && result.code !== 'CANCELED') {
       setSaveState({ status: 'error', message: result.message ?? t.pdf.failed });
@@ -1010,20 +1037,47 @@ export function App() {
     }
   };
 
+  function toggleDirectoryCollapse(path: string): void {
+    setCollapsedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }
+
   function renderWorkspaceNodes(nodes: WorkspaceTreeNode[], level = 1) {
+    const isSearching = workspaceFilter.trim() !== '';
+
     return (
       <ol className="workspace-tree" data-level={level}>
-        {nodes.map((node) => (
-          <li key={node.path}>
-            {node.type === 'directory' ? (
-              <div className="workspace-directory">
-                <span className="workspace-directory-label" style={{ '--level': level } as CSSProperties}>
-                  <ChevronRight aria-hidden="true" size={13} />
-                  {node.name}
-                </span>
-                {node.children.length > 0 && renderWorkspaceNodes(node.children, level + 1)}
-              </div>
-            ) : (
+        {nodes.map((node) => {
+          if (node.type === 'directory') {
+            const isCollapsed = collapsedPaths.has(node.path) && !isSearching;
+            const ChevronIcon = isCollapsed ? ChevronRight : ChevronDown;
+
+            return (
+              <li key={node.path}>
+                <div className="workspace-directory">
+                  <span
+                    className="workspace-directory-label"
+                    style={{ '--level': level } as CSSProperties}
+                    onClick={() => toggleDirectoryCollapse(node.path)}
+                  >
+                    <ChevronIcon aria-hidden="true" size={13} />
+                    <span>{node.name}</span>
+                  </span>
+                  {!isCollapsed && node.children.length > 0 && renderWorkspaceNodes(node.children, level + 1)}
+                </div>
+              </li>
+            );
+          }
+
+          return (
+            <li key={node.path}>
               <button
                 className="workspace-file"
                 data-testid="workspace-file"
@@ -1035,9 +1089,9 @@ export function App() {
                 <FileIcon aria-hidden="true" size={13} />
                 <span>{node.name}</span>
               </button>
-            )}
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ol>
     );
   }
@@ -1763,26 +1817,39 @@ export function App() {
               {recentItems.length > 0 ? (
                 <div className="drawer-recent-list">
                   {recentItems.map((item) => (
-                    <button
-                      className="recent-drawer-item-btn"
-                      key={`${item.type}:${item.path}`}
-                      title={item.path}
-                      type="button"
-                      disabled={!item.exists}
-                      onClick={() => {
-                        setIsRecentOpen(false);
-                        void openRecentItem(item);
-                      }}
-                    >
-                      <div className="recent-item-icon-wrapper">
-                        {item.type === 'folder' ? <FolderTree size={16} /> : <FileText size={16} />}
-                      </div>
-                      <div className="recent-item-info">
-                        <span className="recent-item-name">{item.name}</span>
-                        <span className="recent-item-path">{item.path}</span>
-                      </div>
-                      {!item.exists && <span className="recent-exists-badge">{t.recent.expired}</span>}
-                    </button>
+                    <div className="recent-drawer-item-row" key={`${item.type}:${item.path}`}>
+                      <button
+                        className="recent-drawer-item-btn"
+                        title={item.path}
+                        type="button"
+                        disabled={!item.exists}
+                        onClick={() => {
+                          setIsRecentOpen(false);
+                          void openRecentItem(item);
+                        }}
+                      >
+                        <div className="recent-item-icon-wrapper">
+                          {item.type === 'folder' ? <FolderTree size={16} /> : <FileText size={16} />}
+                        </div>
+                        <div className="recent-item-info">
+                          <span className="recent-item-name">{item.name}</span>
+                          <span className="recent-item-path">{item.path}</span>
+                        </div>
+                        {!item.exists && <span className="recent-exists-badge">{t.recent.expired}</span>}
+                      </button>
+                      <button
+                        className="recent-drawer-delete-btn"
+                        type="button"
+                        title={lang === 'zh' ? '移除此项' : 'Remove item'}
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          await window.mdViewer.removeRecentItem(item.path, item.type);
+                          await refreshRecentItems();
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               ) : (

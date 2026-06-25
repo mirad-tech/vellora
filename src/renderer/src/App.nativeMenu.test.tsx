@@ -76,6 +76,7 @@ function createApi(): MdViewerApi & {
       allowedIpcChannels: []
     }),
     setLanguage: vi.fn().mockResolvedValue(undefined),
+    removeRecentItem: vi.fn().mockResolvedValue({ ok: true }),
     getMenuActionHandler: () => menuActionHandler
   };
 }
@@ -240,6 +241,11 @@ describe('App native menu integration', () => {
 
     await act(async () => {
       handler?.('export-pdf');
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     expect(container.querySelector('[data-testid="save-error"]')?.textContent).toContain('PDF export failed.');

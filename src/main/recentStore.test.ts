@@ -95,4 +95,27 @@ describe('recent local document store', () => {
       filePath
     ]);
   });
+
+  test('removes individual items from the recent store', async () => {
+    const { statePath, filePath, folderPath } = await createRecentFixture();
+    const store = createRecentStore(statePath);
+
+    await store.record({ type: 'folder', path: folderPath });
+    await store.record({ type: 'file', path: filePath });
+
+    const resultBefore = await store.read();
+    expect(resultBefore.ok).toBe(true);
+    if (resultBefore.ok) {
+      expect(resultBefore.items).toHaveLength(2);
+    }
+
+    await store.remove({ type: 'file', path: filePath });
+
+    const resultAfter = await store.read();
+    expect(resultAfter.ok).toBe(true);
+    if (resultAfter.ok) {
+      expect(resultAfter.items).toHaveLength(1);
+      expect(resultAfter.items[0].path).toBe(folderPath);
+    }
+  });
 });

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, lstatSync, realpathSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,7 +18,7 @@ import {
 import { createRecentStore } from './recentStore';
 import { createSecurityDiagnostics } from './security';
 import { openMarkdownWorkspace, type WorkspaceOpenOptions } from './workspaceAccess';
-import { isPathInsideDirectory, normalizePath } from './pathPolicy';
+import { isPathInsideDirectory, normalizePath, getSafeUserDirectories, isDangerousSystemDirectory } from './pathPolicy';
 import { IPC_CHANNELS } from '../shared/ipcChannels';
 import { translateResultMessage } from '../shared/mainI18n';
 import type { MenuManager } from './nativeMenu';
@@ -42,7 +42,8 @@ const REGISTERED_HANDLER_CHANNELS = [
   IPC_CHANNELS.SET_UNSAVED_CHANGES,
   IPC_CHANNELS.CONFIRM_DISCARD_CHANGES,
   IPC_CHANNELS.GET_SECURITY_DIAGNOSTICS,
-  IPC_CHANNELS.SET_LANGUAGE
+  IPC_CHANNELS.SET_LANGUAGE,
+  IPC_CHANNELS.REMOVE_RECENT_ITEM
 ] as const;
 
 const unsavedDialogs = {
@@ -83,8 +84,80 @@ async function verifyAndAuthorizeFromRecent(filePath: string, type: 'file' | 'fo
   return false;
 }
 
+function resolveRealPathAndCheckDanger(filePath: string): string | null {
+  let targetPath = filePath;
+  try {
+    const lstats = lstatSync(filePath);
+    if (lstats.isSymbolicLink()) {
+      targetPath = realpathSync(filePath);
+    }
+  } catch {
+    // ignore
+  }
+  const norm = normalizePath(targetPath);
+  if (isDangerousSystemDirectory(norm)) {
+    return null;
+  }
+  return norm;
+}
+
+async function handleUnresolvedFileAuthorization(
+  filePath: string,
+  window: BrowserWindow
+): Promise<boolean> {
+  const normPath = resolveRealPathAndCheckDanger(filePath);
+  if (!normPath) return false;
+
+  const safeDirs = getSafeUserDirectories();
+  const isTestMode =
+    process.env.NODE_ENV === 'test' ||
+    !!process.env.VITEST ||
+    !!process.env.PLAYWRIGHT_TEST;
+  if (isTestMode) {
+    const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
+    safeDirs.push(tempDir);
+  }
+
+  const isInsideSafeDir = safeDirs.some(dir => isPathInsideDirectory(normPath, dir));
+  const isInsideAuthWorkspace = Array.from(authorizedDirs).some(dir => isPathInsideDirectory(normPath, dir));
+
+  if (isInsideSafeDir || isInsideAuthWorkspace) {
+    authorizedFiles.add(normPath);
+    return true;
+  }
+
+  const trConfirm = {
+    zh: {
+      message: `您正在尝试打开外部文件：\n${filePath}\n\n该路径不属于常用用户目录，是否授权并打开？`,
+      buttons: ['取消', '授权并打开']
+    },
+    en: {
+      message: `You are attempting to open an external file:\n${filePath}\n\nThe path is outside common user directories. Do you want to authorize and open it?`,
+      buttons: ['Cancel', 'Authorize and Open']
+    }
+  };
+
+  const lang = currentLang === 'zh' ? 'zh' : 'en';
+  const choice = await dialog.showMessageBox(window, {
+    type: 'question',
+    buttons: trConfirm[lang].buttons,
+    defaultId: 0,
+    cancelId: 0,
+    message: trConfirm[lang].message
+  });
+
+  if (choice.response === 1) {
+    authorizedFiles.add(normPath);
+    return true;
+  }
+
+  return false;
+}
+
 async function isFileAuthorized(filePath: string): Promise<boolean> {
-  const normPath = normalizePath(filePath);
+  const normPath = resolveRealPathAndCheckDanger(filePath);
+  if (!normPath) return false;
+
   if (authorizedFiles.has(normPath)) {
     return true;
   }
@@ -105,7 +178,7 @@ async function isFileAuthorized(filePath: string): Promise<boolean> {
     }
   }
 
-  const isRecent = await verifyAndAuthorizeFromRecent(filePath, 'file');
+  const isRecent = await verifyAndAuthorizeFromRecent(normPath, 'file');
   if (isRecent) {
     return true;
   }
@@ -114,7 +187,9 @@ async function isFileAuthorized(filePath: string): Promise<boolean> {
 }
 
 async function isDirAuthorized(dirPath: string): Promise<boolean> {
-  const normPath = normalizePath(dirPath);
+  const normPath = resolveRealPathAndCheckDanger(dirPath);
+  if (!normPath) return false;
+
   if (authorizedDirs.has(normPath)) {
     return true;
   }
@@ -135,7 +210,7 @@ async function isDirAuthorized(dirPath: string): Promise<boolean> {
     }
   }
 
-  const isRecent = await verifyAndAuthorizeFromRecent(dirPath, 'folder');
+  const isRecent = await verifyAndAuthorizeFromRecent(normPath, 'folder');
   if (isRecent) {
     return true;
   }
@@ -251,7 +326,7 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
     return tr(result);
   });
 
-  ipcMain.handle(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH, async (_event, filePath: unknown, isDropped?: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH, async (_event, filePath: unknown) => {
     if (typeof filePath !== 'string' || filePath.trim() === '') {
       return tr({
         ok: false,
@@ -266,21 +341,16 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
         message: '只能打开 .md 或 .markdown 文件。'
       });
     }
-    if (isDropped === true) {
-      const result = await readMarkdownFile(filePath);
-      if (result.ok) {
-        authorizedFiles.add(normalizePath(result.document.path));
-        await recordRecentSafely(recentStore, 'file', result.document.path);
-      }
-      return tr(result);
-    }
 
     if (!(await isFileAuthorized(filePath))) {
-      return tr({
-        ok: false,
-        code: 'READ_FAILED',
-        message: '无法读取文件，请检查权限或文件状态。'
-      });
+      const isAuthorized = await handleUnresolvedFileAuthorization(filePath, window);
+      if (!isAuthorized) {
+        return tr({
+          ok: false,
+          code: 'READ_FAILED',
+          message: '无法读取文件，请检查权限或文件状态。'
+        });
+      }
     }
     const result = await readMarkdownFile(filePath);
     if (result.ok) {
@@ -479,6 +549,24 @@ export function registerIpcHandlers(window: BrowserWindow, menuManager?: MenuMan
     if (typeof lang === 'string' && (lang === 'zh' || lang === 'en')) {
       currentLang = lang;
       menuManager?.setLanguage(lang);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.REMOVE_RECENT_ITEM, async (_event, filePath: unknown, type: unknown) => {
+    if (typeof filePath !== 'string' || (type !== 'file' && type !== 'folder')) {
+      return { ok: false, code: 'INVALID_ARGUMENT', message: '参数无效。' };
+    }
+    try {
+      await recentStore.remove({ type, path: filePath });
+      const norm = normalizePath(filePath);
+      if (type === 'file') {
+        authorizedFiles.delete(norm);
+      } else if (type === 'folder') {
+        authorizedDirs.delete(norm);
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, code: 'REMOVE_FAILED', message: '无法移除最近打开记录。' };
     }
   });
 }

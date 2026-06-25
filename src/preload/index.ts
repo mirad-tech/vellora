@@ -38,7 +38,7 @@ const api: MdViewerApi = {
   },
   openDroppedMarkdownFile: (file: File) => {
     const filePath = webUtils.getPathForFile(file);
-    return ipcRenderer.invoke(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH, filePath, true);
+    return ipcRenderer.invoke(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH, filePath);
   },
   openWorkspaceFolder: () => ipcRenderer.invoke(IPC_CHANNELS.OPEN_WORKSPACE_DIALOG),
   openWorkspaceByPath: (folderPath: string) =>
@@ -69,7 +69,9 @@ const api: MdViewerApi = {
   openMarkdownLink: (documentPath: string, href: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.OPEN_MARKDOWN_LINK, documentPath, href),
   getSecurityDiagnostics: () => ipcRenderer.invoke(IPC_CHANNELS.GET_SECURITY_DIAGNOSTICS),
-  setLanguage: (lang: string) => ipcRenderer.invoke(IPC_CHANNELS.SET_LANGUAGE, lang)
+  setLanguage: (lang: string) => ipcRenderer.invoke(IPC_CHANNELS.SET_LANGUAGE, lang),
+  removeRecentItem: (path: string, type: 'file' | 'folder') =>
+    ipcRenderer.invoke(IPC_CHANNELS.REMOVE_RECENT_ITEM, path, type)
 };
 
 contextBridge.exposeInMainWorld('mdViewer', api);

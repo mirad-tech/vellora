@@ -119,7 +119,8 @@ const zh = {
   recent: {
     heading: '最近打开',
     empty: '暂无任何最近打开的文件或文件夹记录。',
-    expired: '已失效'
+    expired: '已失效',
+    removeConfirm: '该记录已失效，是否从最近记录中移除？'
   },
   externalLink: {
     title: '安全提示',
@@ -262,7 +263,8 @@ const en: I18nMessages = {
   recent: {
     heading: 'Recently Opened',
     empty: 'No recently opened files or folders.',
-    expired: 'Unavailable'
+    expired: 'Unavailable',
+    removeConfirm: 'This item is no longer available. Would you like to remove it from your recent history?'
   },
   externalLink: {
     title: 'Security Notice',

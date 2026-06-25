@@ -29,4 +29,5 @@ export type MdViewerApi = {
   openMarkdownLink: (documentPath: string, href: string) => Promise<MarkdownLinkOpenResult>;
   getSecurityDiagnostics: () => Promise<SecurityDiagnostics>;
   setLanguage: (lang: string) => Promise<void>;
+  removeRecentItem: (path: string, type: 'file' | 'folder') => Promise<{ ok: boolean; message?: string }>;
 };
