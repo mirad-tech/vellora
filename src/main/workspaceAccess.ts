@@ -41,7 +41,6 @@ const IGNORED_DIRECTORIES = new Set([
   'build',
   'out',
   'release',
-  'build',
   'coverage',
   '.next',
   '.nuxt',

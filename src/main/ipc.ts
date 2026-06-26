@@ -93,7 +93,9 @@ function isTestMode(): boolean {
 }
 
 function isInsideTestTempDirectory(normPath: string): boolean {
-  return isTestMode() && isPathInsideDirectory(normPath, tmpdir());
+  if (!isTestMode()) return false;
+  const tempDir = normalizePath(tmpdir());
+  return normPath === tempDir || isPathInsideDirectory(normPath, tempDir);
 }
 
 function resolveRealPathAndCheckDanger(filePath: string): string | null {
@@ -122,7 +124,8 @@ async function handleUnresolvedFileAuthorization(
 
   const safeDirs = getSafeUserDirectories();
   if (isTestMode()) {
-    safeDirs.push(normalizePath(tmpdir()));
+    const tempDir = normalizePath(tmpdir());
+    safeDirs.push(tempDir);
   }
 
   const isInsideSafeDir = safeDirs.some(dir => isPathInsideDirectory(normPath, dir));

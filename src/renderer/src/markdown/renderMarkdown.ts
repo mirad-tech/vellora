@@ -12,10 +12,10 @@ import type Token from 'markdown-it/lib/token.mjs';
 
 export type MarkdownRenderResult =
   | {
-    status: 'ready';
-    html: string;
-    outline: MarkdownOutlineEntry[];
-  }
+      status: 'ready';
+      html: string;
+      outline: MarkdownOutlineEntry[];
+    }
   | {
       status: 'empty';
       html: '';
@@ -215,58 +215,56 @@ function renderWithOutline(content: string, parser: MarkdownIt): ReadyMarkdownRe
   };
 }
 
-function removeUntrustedImages(html: string, localImageToken?: string): string {
-  if (!html.includes('<img') && !html.includes('<IMG')) {
-    return html;
-  }
-  const template = document.createElement('template');
-  template.innerHTML = html;
+function sanitizeHtml(html: string, localImageToken?: string): string {
+  const hasToken = typeof localImageToken === 'string' && localImageToken.length > 0;
 
-  const images = Array.from(template.content.querySelectorAll<HTMLImageElement>('img'));
-  for (const image of images) {
-    if (
-      !localImageToken ||
-      image.getAttribute('data-local-image-token') !== localImageToken ||
-      !image.hasAttribute('data-local-src')
-    ) {
-      image.remove();
-      continue;
+  const securityHook = (node: Element) => {
+    if (node.tagName === 'IMG') {
+      if (hasToken) {
+        const tokenAttr = node.getAttribute('data-local-image-token');
+        const localSrc = node.getAttribute('data-local-src');
+
+        if (tokenAttr !== localImageToken || !localSrc) {
+          node.remove();
+        } else {
+          node.removeAttribute('data-local-image-token');
+          node.removeAttribute('src');
+        }
+      } else {
+        node.removeAttribute('data-local-image-token');
+      }
     }
 
-    image.removeAttribute('data-local-image-token');
-    image.removeAttribute('src');
+    if (node.hasAttribute('id')) {
+      const idVal = node.getAttribute('id') || '';
+      const dangerousIds = ['app-shell', 'root', 'app', 'reader', 'sidebar'];
+      if (dangerousIds.includes(idVal.toLowerCase())) {
+        node.removeAttribute('id');
+      }
+    }
+  };
+
+  DOMPurify.addHook('afterSanitizeAttributes', securityHook);
+
+  try {
+    const allowedAttrs = [...ALLOWED_ATTR];
+    if (!hasToken) {
+      allowedAttrs.push('src');
+    }
+
+    return DOMPurify.sanitize(html, {
+      ALLOWED_TAGS,
+      ALLOWED_ATTR: allowedAttrs,
+      ALLOW_DATA_ATTR: false,
+      FORCE_BODY: true,
+      FORBID_TAGS: [
+        'base', 'button', 'embed', 'form', 'iframe', 'input', 'link',
+        'math', 'meta', 'object', 'script', 'select', 'style', 'svg', 'textarea'
+      ]
+    });
+  } finally {
+    DOMPurify.removeHook('afterSanitizeAttributes');
   }
-
-  return template.innerHTML;
-}
-
-function sanitizeHtml(html: string, localImageToken?: string): string {
-  let sanitized = '';
-  sanitized = DOMPurify.sanitize(html, {
-    ALLOWED_TAGS,
-    ALLOWED_ATTR,
-    ALLOW_DATA_ATTR: false,
-    FORBID_TAGS: [
-      'base',
-      'button',
-      'embed',
-      'form',
-      'iframe',
-      'input',
-      'link',
-      'math',
-      'meta',
-      'object',
-      'script',
-      'select',
-      'style',
-      'svg',
-      'textarea'
-    ]
-  });
-
-  const imageSafeHtml = removeUntrustedImages(sanitized, localImageToken);
-  return imageSafeHtml;
 }
 
 export function renderMarkdownDocument(
@@ -289,7 +287,7 @@ export function renderMarkdownDocument(
     return {
       status: 'ready',
       html: sanitizeHtml(unsafeHtml),
-      outline: [],
+      outline: []
     };
   } catch {
     return {

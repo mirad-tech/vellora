@@ -107,7 +107,7 @@ describe('IPC OPEN_MARKDOWN_BY_PATH security validation', () => {
   });
 
   test('rejects unauthorized paths and blocks fake isDropped true parameter', async () => {
-    const suffix = `case1-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const suffix = `case1_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const unauthorizedPath = await createUnauthorizedFile(suffix);
     try {
       const handler = mockHandlers.get(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH);
@@ -129,7 +129,7 @@ describe('IPC OPEN_MARKDOWN_BY_PATH security validation', () => {
   });
 
   test('allows unauthorized paths after explicit human dialog approval', async () => {
-    const suffix = `case2-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const suffix = `case2_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const unauthorizedPath = await createUnauthorizedFile(suffix);
     try {
       const handler = mockHandlers.get(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH);
@@ -150,24 +150,29 @@ describe('IPC OPEN_MARKDOWN_BY_PATH security validation', () => {
     }
   });
 
-  test('allows test temp directory files without prompting', async () => {
-    const tempDir = join(tmpdir(), `md-viewer-ipc-temp-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    await mkdir(tempDir, { recursive: true });
-    const tempPath = join(tempDir, 'notes.md');
-    await writeFile(tempPath, '# 临时测试文件', 'utf8');
+  test('does not prompt authorization for files inside test temporary directory', async () => {
+    // 创建一个位于系统临时目录 (os.tmpdir) 的临时测试文件
+    const suffix = `test_temp_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const testTempDir = join(tmpdir(), `test_temp_ipc_${suffix}`);
+    await mkdir(testTempDir, { recursive: true });
+    const tempFilePath = join(testTempDir, 'temp_notes.md');
+    await writeFile(tempFilePath, '# 临时测试文件', 'utf8');
 
     try {
       const handler = mockHandlers.get(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH);
       expect(handler).toBeDefined();
 
-      const result = await handler!({} as any, tempPath);
-
+      // 在测试模式下，临时目录文件应该无需授权框直接通过
+      const result = await handler!({} as any, tempFilePath);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.document.content).toBe('# 临时测试文件');
-      expect(mockShowMessageBox).not.toHaveBeenCalled();
+      // 应该没有弹出过 showMessageBox
+      expect(mockShowMessageBox).toHaveBeenCalledTimes(0);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      try {
+        await rm(testTempDir, { recursive: true, force: true });
+      } catch {}
     }
   });
 });

@@ -56,6 +56,15 @@ async function itemExists(item: RecentRecord): Promise<boolean> {
   }
 }
 
+function isSamePath(p1: string, p2: string): boolean {
+  const r1 = resolve(p1);
+  const r2 = resolve(p2);
+  if (process.platform === 'win32') {
+    return r1.toLowerCase() === r2.toLowerCase();
+  }
+  return r1 === r2;
+}
+
 export function createRecentStore(statePath: string, limit = DEFAULT_RECENT_LIMIT): RecentStore {
   let recordQueue: Promise<void> = Promise.resolve();
 
@@ -74,7 +83,7 @@ export function createRecentStore(statePath: string, limit = DEFAULT_RECENT_LIMI
       openedAt: Date.now()
     };
     const deduped = records.filter(
-      (record) => !(record.type === nextRecord.type && resolve(record.path) === resolvedPath)
+      (record) => !(record.type === nextRecord.type && isSamePath(record.path, resolvedPath))
     );
     await writeRecords([nextRecord, ...deduped].slice(0, limit));
   }
@@ -83,10 +92,11 @@ export function createRecentStore(statePath: string, limit = DEFAULT_RECENT_LIMI
     const resolvedPath = resolve(item.path);
     const records = await readRecords(statePath);
     const remaining = records.filter(
-      (record) => !(record.type === item.type && resolve(record.path) === resolvedPath)
+      (record) => !(record.type === item.type && isSamePath(record.path, resolvedPath))
     );
     await writeRecords(remaining);
   }
+
 
   return {
     async record(item) {
