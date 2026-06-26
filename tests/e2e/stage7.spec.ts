@@ -258,6 +258,28 @@ test('syncs source edits back into WYSIWYG reading mode', async () => {
   await closeAppDiscardingDrafts(electronApp);
 });
 
+test('refreshes WYSIWYG content when reopening the same file path', async () => {
+  const fixture = await createEditFixture('# 第一版\n\n旧正文。');
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  await expect(page.locator('.markdown-body h1')).toHaveText('第一版');
+
+  await writeFile(fixture.filePath, '# 第二版\n\n刷新正文。', 'utf8');
+  await electronApp.evaluate(
+    ({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('document:openRequested', filePath);
+    },
+    fixture.filePath
+  );
+
+  await expect(page.locator('.markdown-body h1')).toHaveText('第二版');
+  await expect(page.getByTestId('markdown-body')).toContainText('刷新正文。');
+
+  await closeAppDiscardingDrafts(electronApp);
+});
+
 test('asks before closing with unsaved WYSIWYG changes and can cancel the close', async () => {
   const fixture = await createEditFixture(complexMarkdown());
   const electronApp = await launchWithSelectedFile(fixture);

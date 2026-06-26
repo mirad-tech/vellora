@@ -84,6 +84,18 @@ async function verifyAndAuthorizeFromRecent(filePath: string, type: 'file' | 'fo
   return false;
 }
 
+function isTestMode(): boolean {
+  return (
+    process.env.NODE_ENV === 'test' ||
+    !!process.env.VITEST ||
+    !!process.env.PLAYWRIGHT_TEST
+  );
+}
+
+function isInsideTestTempDirectory(normPath: string): boolean {
+  return isTestMode() && isPathInsideDirectory(normPath, tmpdir());
+}
+
 function resolveRealPathAndCheckDanger(filePath: string): string | null {
   let targetPath = filePath;
   try {
@@ -95,7 +107,7 @@ function resolveRealPathAndCheckDanger(filePath: string): string | null {
     // ignore
   }
   const norm = normalizePath(targetPath);
-  if (isDangerousSystemDirectory(norm)) {
+  if (isDangerousSystemDirectory(norm) && !isInsideTestTempDirectory(norm)) {
     return null;
   }
   return norm;
@@ -109,13 +121,8 @@ async function handleUnresolvedFileAuthorization(
   if (!normPath) return false;
 
   const safeDirs = getSafeUserDirectories();
-  const isTestMode =
-    process.env.NODE_ENV === 'test' ||
-    !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST;
-  if (isTestMode) {
-    const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
-    safeDirs.push(tempDir);
+  if (isTestMode()) {
+    safeDirs.push(normalizePath(tmpdir()));
   }
 
   const isInsideSafeDir = safeDirs.some(dir => isPathInsideDirectory(normPath, dir));
@@ -167,15 +174,8 @@ async function isFileAuthorized(filePath: string): Promise<boolean> {
     }
   }
 
-  const isTestMode =
-    process.env.NODE_ENV === 'test' ||
-    !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST;
-  if (isTestMode) {
-    const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
-    if (normPath.startsWith(tempDir)) {
-      return true;
-    }
+  if (isInsideTestTempDirectory(normPath)) {
+    return true;
   }
 
   const isRecent = await verifyAndAuthorizeFromRecent(normPath, 'file');
@@ -199,15 +199,8 @@ async function isDirAuthorized(dirPath: string): Promise<boolean> {
     }
   }
 
-  const isTestMode =
-    process.env.NODE_ENV === 'test' ||
-    !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST;
-  if (isTestMode) {
-    const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
-    if (normPath.startsWith(tempDir)) {
-      return true;
-    }
+  if (isInsideTestTempDirectory(normPath)) {
+    return true;
   }
 
   const isRecent = await verifyAndAuthorizeFromRecent(normPath, 'folder');

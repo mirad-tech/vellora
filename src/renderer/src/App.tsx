@@ -234,7 +234,7 @@ export function App() {
   const readerRef = useRef<HTMLElement | null>(null);
   const markdownBodyRef = useRef<HTMLDivElement | null>(null);
   const mdxEditorRef = useRef<MDXEditorMethods | null>(null);
-  const mdxLoadedPathRef = useRef<string | null>(null);
+  const mdxLoadedDocumentRef = useRef<MarkdownDocument | null>(null);
   const draftContentRef = useRef('');
   const mdxEditorTouchedRef = useRef(false);
   const pendingMdxSyncFrameRef = useRef<number | null>(null);
@@ -606,16 +606,16 @@ export function App() {
   useEffect(() => {
     if (viewState.status !== 'ready' || editorMode !== 'read' || mdxEditorRef.current === null) {
       if (viewState.status !== 'ready' || editorMode !== 'read') {
-        mdxLoadedPathRef.current = null;
+        mdxLoadedDocumentRef.current = null;
       }
       return;
     }
 
-    if (mdxLoadedPathRef.current !== viewState.document.path) {
+    if (mdxLoadedDocumentRef.current !== viewState.document) {
       mdxEditorRef.current.setMarkdown(draftContentRef.current);
       mdxEditorTouchedRef.current = false;
       setEditorError(null);
-      mdxLoadedPathRef.current = viewState.document.path;
+      mdxLoadedDocumentRef.current = viewState.document;
     }
   }, [editorMode, viewState]);
 

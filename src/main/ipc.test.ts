@@ -107,7 +107,8 @@ describe('IPC OPEN_MARKDOWN_BY_PATH security validation', () => {
   });
 
   test('rejects unauthorized paths and blocks fake isDropped true parameter', async () => {
-    const unauthorizedPath = await createUnauthorizedFile('case1');
+    const suffix = `case1-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const unauthorizedPath = await createUnauthorizedFile(suffix);
     try {
       const handler = mockHandlers.get(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH);
       expect(handler).toBeDefined();
@@ -123,12 +124,13 @@ describe('IPC OPEN_MARKDOWN_BY_PATH security validation', () => {
       expect(result.code).toBe('READ_FAILED'); // 由于授权拦截并遭取消，应当返回 READ_FAILED
       expect(mockShowMessageBox).toHaveBeenCalledTimes(1); // 应弹出安全确认框
     } finally {
-      await cleanUnauthorizedFile('case1');
+      await cleanUnauthorizedFile(suffix);
     }
   });
 
   test('allows unauthorized paths after explicit human dialog approval', async () => {
-    const unauthorizedPath = await createUnauthorizedFile('case2');
+    const suffix = `case2-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const unauthorizedPath = await createUnauthorizedFile(suffix);
     try {
       const handler = mockHandlers.get(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH);
       expect(handler).toBeDefined();
@@ -144,7 +146,28 @@ describe('IPC OPEN_MARKDOWN_BY_PATH security validation', () => {
       expect(result.document.content).toBe('# 敏感外部文件');
       expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
     } finally {
-      await cleanUnauthorizedFile('case2');
+      await cleanUnauthorizedFile(suffix);
+    }
+  });
+
+  test('allows test temp directory files without prompting', async () => {
+    const tempDir = join(tmpdir(), `md-viewer-ipc-temp-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(tempDir, { recursive: true });
+    const tempPath = join(tempDir, 'notes.md');
+    await writeFile(tempPath, '# 临时测试文件', 'utf8');
+
+    try {
+      const handler = mockHandlers.get(IPC_CHANNELS.OPEN_MARKDOWN_BY_PATH);
+      expect(handler).toBeDefined();
+
+      const result = await handler!({} as any, tempPath);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.document.content).toBe('# 临时测试文件');
+      expect(mockShowMessageBox).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
     }
   });
 });
