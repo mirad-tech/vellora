@@ -1132,15 +1132,15 @@ input {
 
 /* Code Syntax Highlighter Styles overrides */
 /* 默认/暗色主题代码高亮 */
-.app-shell[data-theme="dark"] .hljs-comment, 
+.app-shell[data-theme="dark"] .hljs-comment,
 .app-shell[data-theme="dark"] .hljs-quote { color: #8b949e; font-style: italic; }
-.app-shell[data-theme="dark"] .hljs-keyword, 
+.app-shell[data-theme="dark"] .hljs-keyword,
 .app-shell[data-theme="dark"] .hljs-selector-tag { color: #ff7b72; font-weight: 600; }
-.app-shell[data-theme="dark"] .hljs-string, 
+.app-shell[data-theme="dark"] .hljs-string,
 .app-shell[data-theme="dark"] .hljs-regexp { color: #a5d6ff; }
-.app-shell[data-theme="dark"] .hljs-title, 
+.app-shell[data-theme="dark"] .hljs-title,
 .app-shell[data-theme="dark"] .hljs-section { color: #d2a8ff; font-weight: 600; }
-.app-shell[data-theme="dark"] .hljs-built_in, 
+.app-shell[data-theme="dark"] .hljs-built_in,
 .app-shell[data-theme="dark"] .hljs-type { color: #ffa657; }
 .app-shell[data-theme="dark"] .hljs-number,
 .app-shell[data-theme="dark"] .hljs-literal { color: #79c0ff; }

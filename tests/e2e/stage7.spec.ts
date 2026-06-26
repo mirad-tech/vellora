@@ -266,11 +266,12 @@ test('asks before closing with unsaved WYSIWYG changes and can cancel the close'
   await openFixture(page);
   const markdownBody = page.getByTestId('markdown-body');
   await replaceWithKeyboard(page, markdownBody.locator('td').filter({ hasText: '表格目标' }), '关闭前草稿');
+  await page.click('h1');
+  await expect(markdownBody).toContainText('关闭前草稿');
 
   await electronApp.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].close();
   });
-  await expect(markdownBody).toContainText('关闭前草稿');
   await expect
     .poll(() =>
       electronApp.evaluate(() => {
@@ -279,6 +280,7 @@ test('asks before closing with unsaved WYSIWYG changes and can cancel the close'
       })
     )
     .toBe(1);
+  await expect(markdownBody).toContainText('关闭前草稿');
 
   await closeAppDiscardingDrafts(electronApp);
 });
@@ -435,4 +437,26 @@ test('exports the current window as a PDF from the native menu', async () => {
   });
 
   await electronApp.close();
+});
+
+test('reloads the same file path and updates view when document:openRequested is received with a changed version', async () => {
+  const fixture = await createEditFixture('# 第一版');
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  await expect(page.locator('.markdown-body h1')).toHaveText('第一版');
+
+  await writeFile(fixture.filePath, '# 第二版', 'utf8');
+
+  await electronApp.evaluate(async ({ BrowserWindow }, pathToSend) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) {
+      win.webContents.send('document:openRequested', pathToSend);
+    }
+  }, fixture.filePath);
+
+  await expect(page.locator('.markdown-body h1')).toHaveText('第二版');
+
+  await closeAppDiscardingDrafts(electronApp);
 });

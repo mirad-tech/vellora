@@ -34,11 +34,11 @@ function collectTextNodes(root: ParentNode, query: string): Text[] {
 function highlightTextNode(textNode: Text, query: string, state: { count: number; activeIndex: number }): void {
   const source = textNode.textContent ?? '';
   const lowerSource = source.toLowerCase();
-  
+
   let cursor = 0;
   let matchIndex = lowerSource.indexOf(query, cursor);
   const matchesInNode: number[] = [];
-  
+
   while (matchIndex !== -1) {
     matchesInNode.push(matchIndex);
     cursor = matchIndex + query.length;
@@ -150,4 +150,3 @@ export function applySearchHighlights(
     activeIndex: state.activeIndex
   };
 }
-

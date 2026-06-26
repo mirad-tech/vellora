@@ -71,9 +71,7 @@ export function isDangerousSystemDirectory(filePath: string): boolean {
     }
   }
 
-  if (normPath.includes('/appdata/local/temp')) {
-    // Exclude Temp folder to let test frameworks function properly
-  } else if (normPath.includes('/appdata/local') || normPath.includes('/appdata/roaming')) {
+  if (normPath.includes('/appdata/local') || normPath.includes('/appdata/roaming')) {
     return true;
   }
 

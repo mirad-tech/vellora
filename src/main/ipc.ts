@@ -84,6 +84,20 @@ async function verifyAndAuthorizeFromRecent(filePath: string, type: 'file' | 'fo
   return false;
 }
 
+function isTestMode(): boolean {
+  return (
+    process.env.NODE_ENV === 'test' ||
+    !!process.env.VITEST ||
+    !!process.env.PLAYWRIGHT_TEST
+  );
+}
+
+function isInsideTestTempDirectory(normPath: string): boolean {
+  if (!isTestMode()) return false;
+  const tempDir = normalizePath(tmpdir());
+  return normPath === tempDir || isPathInsideDirectory(normPath, tempDir);
+}
+
 function resolveRealPathAndCheckDanger(filePath: string): string | null {
   let targetPath = filePath;
   try {
@@ -95,7 +109,7 @@ function resolveRealPathAndCheckDanger(filePath: string): string | null {
     // ignore
   }
   const norm = normalizePath(targetPath);
-  if (isDangerousSystemDirectory(norm)) {
+  if (isDangerousSystemDirectory(norm) && !isInsideTestTempDirectory(norm)) {
     return null;
   }
   return norm;
@@ -109,14 +123,11 @@ async function handleUnresolvedFileAuthorization(
   if (!normPath) return false;
 
   const safeDirs = getSafeUserDirectories();
-  const isTestMode =
-    process.env.NODE_ENV === 'test' ||
-    !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST;
-  if (isTestMode) {
-    const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
+  if (isTestMode()) {
+    const tempDir = normalizePath(tmpdir());
     safeDirs.push(tempDir);
   }
+
 
   const isInsideSafeDir = safeDirs.some(dir => isPathInsideDirectory(normPath, dir));
   const isInsideAuthWorkspace = Array.from(authorizedDirs).some(dir => isPathInsideDirectory(normPath, dir));
