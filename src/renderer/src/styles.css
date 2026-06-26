@@ -335,7 +335,9 @@ input {
 
 .outline-panel[aria-hidden="true"],
 .sidebar-panel[aria-hidden="true"] {
+  width: 0px;
   border-right-width: 0px;
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -1441,6 +1443,11 @@ input {
   color: var(--muted);
   font-size: 13px;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .theme-pick-btn:hover {
@@ -1601,6 +1608,8 @@ input {
   color: var(--muted);
   padding: 2px 4px;
   border-radius: 3px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .drawer-empty-state {
@@ -2093,6 +2102,8 @@ input {
   transition: all 0.2s ease;
   cursor: pointer;
   border: 1px solid transparent;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .save-badge.dirty {
   background: #fff8e1;
@@ -2157,6 +2168,7 @@ input {
   border: 1px solid transparent;
   border-radius: 6px;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 .mode-switch-btn:hover {
   color: var(--text);
