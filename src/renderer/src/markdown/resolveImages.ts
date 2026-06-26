@@ -22,7 +22,22 @@ function decodePath(value: string): string {
 }
 
 export function normalizeLocalImageSource(source: string): string {
-  return decodePath(removeUrlSuffix(source.trim()));
+  const trimmed = source.trim();
+
+  // 1. 安全过滤：阻断 UNC 路径（Windows 共享路径，如 \\attacker-ip\share...）
+  // 避免触发 Windows 的 NTLM 凭据自动网络连接泄露
+  if (/^[\\/]{2,}/.test(trimmed)) {
+    return '';
+  }
+
+  // 2. 伪协议过滤：阻断恶意跳转伪协议，仅允许 file:// 及本地相对路径
+  if (/^(javascript|data|vbscript|file):/i.test(trimmed)) {
+    if (!trimmed.toLowerCase().startsWith('file://')) {
+      return '';
+    }
+  }
+
+  return decodePath(removeUrlSuffix(trimmed));
 }
 
 export function collectLocalImageResolutionGroups(
@@ -54,6 +69,21 @@ export function collectLocalImageResolutionGroups(
   return Array.from(groups, ([normalizedSource, sources]) => ({ normalizedSource, sources }));
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, rejectMessage: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(rejectMessage)), timeoutMs);
+    promise
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 export async function resolveImageGroupsWithLimit(
   groups: LocalImageResolutionGroup[],
   resolveSource: (source: string) => Promise<ImageResolutionResult>,
@@ -71,9 +101,26 @@ export async function resolveImageGroupsWithLimit(
       if (index >= groups.length) return;
 
       const group = groups[index];
-      const resolution = await resolveSource(group.normalizedSource);
-      for (const source of group.sources) {
-        resolutions[source] = resolution;
+      try {
+        // 单个文件解析设置 10 秒超时，防范主进程卡死挂起
+        const resolution = await withTimeout(
+          resolveSource(group.normalizedSource),
+          10000,
+          `解析超时: ${group.normalizedSource}`
+        );
+        for (const source of group.sources) {
+          resolutions[source] = resolution;
+        }
+      } catch (error) {
+        // 异常隔离：单个图片解析失败仅记录在 resolutions 中，不导致整个并发崩溃
+        const failedResult: ImageResolutionResult = {
+          ok: false,
+          code: 'IMAGE_READ_FAILED',
+          message: error instanceof Error ? error.message : String(error)
+        };
+        for (const source of group.sources) {
+          resolutions[source] = failedResult;
+        }
       }
     }
   }
@@ -83,6 +130,11 @@ export async function resolveImageGroupsWithLimit(
 }
 
 export function applyImageResolutions(html: string, resolutions: ImageResolutionMap): string {
+  // 无图片映射，直接跳过 DOM 重构，提升速度
+  if (Object.keys(resolutions).length === 0) {
+    return html;
+  }
+
   const template = document.createElement('template');
   template.innerHTML = html;
 

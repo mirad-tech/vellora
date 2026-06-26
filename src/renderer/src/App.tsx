@@ -1,8 +1,10 @@
-import {
+import React, {
   useEffect,
   useMemo,
   useRef,
   useState,
+  memo,
+  useCallback,
   type CSSProperties,
   type DragEvent,
   type MouseEvent
@@ -180,8 +182,8 @@ function toWorkspaceState(result: WorkspaceOpenResult): WorkspaceState {
 function nodeMatchesFilter(node: WorkspaceTreeNode, normalizedFilter: string): boolean {
   if (!normalizedFilter) return true;
   return (
-    node.name.toLocaleLowerCase().includes(normalizedFilter) ||
-    node.relativePath.toLocaleLowerCase().includes(normalizedFilter)
+    node.name.toLowerCase().includes(normalizedFilter) ||
+    node.relativePath.toLowerCase().includes(normalizedFilter)
   );
 }
 
@@ -213,6 +215,83 @@ function filterWorkspaceNodes(
   return filteredNodes;
 }
 
+interface WorkspaceTreeProps {
+  nodes: WorkspaceTreeNode[];
+  level?: number;
+  collapsedPaths: Set<string>;
+  activePath: string;
+  onToggleCollapse: (path: string) => void;
+  onOpenFile: (path: string) => void;
+}
+
+const WorkspaceTree = memo(({
+  nodes,
+  level = 1,
+  collapsedPaths,
+  activePath,
+  onToggleCollapse,
+  onOpenFile
+}: WorkspaceTreeProps) => {
+  return (
+    <ol className="workspace-tree" role="group">
+      {nodes.map((node) => {
+        if (node.type === 'directory') {
+          const isCollapsed = collapsedPaths.has(node.path);
+          const ChevronIcon = isCollapsed ? ChevronRight : ChevronDown;
+
+          return (
+            <li key={node.path}>
+              <div className="workspace-directory">
+                <button
+                  className="workspace-directory-label"
+                  style={{ '--level': level } as CSSProperties}
+                  type="button"
+                  onClick={() => onToggleCollapse(node.path)}
+                  aria-expanded={!isCollapsed}
+                >
+                  <ChevronIcon aria-hidden="true" size={13} />
+                  <span>{node.name}</span>
+                </button>
+                {!isCollapsed && node.children.length > 0 && (
+                  <WorkspaceTree
+                    nodes={node.children}
+                    level={level + 1}
+                    collapsedPaths={collapsedPaths}
+                    activePath={activePath}
+                    onToggleCollapse={onToggleCollapse}
+                    onOpenFile={onOpenFile}
+                  />
+                )}
+              </div>
+            </li>
+          );
+        }
+
+        const isActive = activePath === node.path;
+
+        return (
+          <li key={node.path}>
+            <button
+              className={`workspace-file ${isActive ? 'active' : ''}`}
+              data-testid="workspace-file"
+              style={{ '--level': level } as CSSProperties}
+              title={node.relativePath}
+              type="button"
+              onClick={() => onOpenFile(node.path)}
+            >
+              <FileIcon aria-hidden="true" size={13} />
+              <span>{node.name}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+});
+
+WorkspaceTree.displayName = 'WorkspaceTree';
+
+
 export function App() {
   const { t, lang, setLang } = useI18n();
 
@@ -220,6 +299,7 @@ export function App() {
   const [viewState, setViewState] = useState<ViewState>({ status: 'empty' });
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>({ status: 'empty' });
   const [workspaceFilter, setWorkspaceFilter] = useState('');
+  const [debouncedWorkspaceFilter, setDebouncedWorkspaceFilter] = useState('');
   const [recentItems, setRecentItems] = useState<RecentItem[]>([]);
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [editorMode, setEditorMode] = useState<EditorMode>('read');
@@ -237,7 +317,7 @@ export function App() {
   const mdxLoadedPathRef = useRef<string | null>(null);
   const draftContentRef = useRef('');
   const mdxEditorTouchedRef = useRef(false);
-  const pendingMdxSyncFrameRef = useRef<number | null>(null);
+  const mdxDebounceTimerRef = useRef<number | null>(null);
   const syncReadEditorToDraftRef = useRef<(force?: boolean) => string>(() => '');
   const openMarkdownByPathRef = useRef<(filePath: string) => Promise<void>>(async () => {});
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -272,9 +352,9 @@ export function App() {
     setEditorError(null);
     mdxEditorTouchedRef.current = false;
     setCollapsedPaths(new Set());
-    if (pendingMdxSyncFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingMdxSyncFrameRef.current);
-      pendingMdxSyncFrameRef.current = null;
+    if (mdxDebounceTimerRef.current !== null) {
+      window.clearTimeout(mdxDebounceTimerRef.current);
+      mdxDebounceTimerRef.current = null;
     }
     setSaveState({ status: 'idle' });
   }
@@ -296,10 +376,19 @@ export function App() {
     setViewState(toViewState(result));
   }
 
-  const isDirty = viewState.status === 'ready' && draftContent !== viewState.document.content;
+  const isDirty =
+    viewState.status === 'ready' &&
+    (editorMode === 'source-edit'
+      ? draftContent !== viewState.document.content
+      : draftContent !== viewState.document.content || mdxEditorTouchedRef.current);
   const hasUnsavedChanges = isDirty;
 
   function syncReadEditorToDraft(force = false): string {
+    if (mdxDebounceTimerRef.current !== null) {
+      window.clearTimeout(mdxDebounceTimerRef.current);
+      mdxDebounceTimerRef.current = null;
+    }
+
     if (editorMode !== 'read' || viewState.status !== 'ready' || mdxEditorRef.current === null) {
       return draftContentRef.current;
     }
@@ -320,81 +409,112 @@ export function App() {
 
   syncReadEditorToDraftRef.current = syncReadEditorToDraft;
 
-  function scheduleReadEditorSync(): void {
-    if (editorMode !== 'read' || viewState.status !== 'ready' || mdxEditorRef.current === null) return;
-    mdxEditorTouchedRef.current = true;
-    if (pendingMdxSyncFrameRef.current !== null) return;
-
-    pendingMdxSyncFrameRef.current = window.requestAnimationFrame(() => {
-      pendingMdxSyncFrameRef.current = null;
-      syncReadEditorToDraftRef.current(true);
-    });
-  }
-
-  function isContentChangingKey(key: string): boolean {
-    return key.length === 1 || ['Backspace', 'Delete', 'Enter', 'Tab'].includes(key);
-  }
-
   async function confirmBeforeReplacingDocument(): Promise<boolean> {
-    const currentContent = syncReadEditorToDraft();
+    const currentContent = syncReadEditorToDraft(true);
     const dirty = viewState.status === 'ready' && currentContent !== viewState.document.content;
     if (!dirty) return true;
-    const result = await window.mdViewer.confirmDiscardChanges();
-    return result.action === 'discard';
+    try {
+      const result = await window.mdViewer.confirmDiscardChanges();
+      return result.action === 'discard';
+    } catch {
+      return false;
+    }
   }
 
   async function openMarkdownFile(): Promise<void> {
     if (!(await confirmBeforeReplacingDocument())) return;
-    setViewState({ status: 'loading' });
-    const result = await window.mdViewer.openMarkdownFile();
-    applyOpenResult(result);
-    await refreshRecentItems();
+    try {
+      setViewState({ status: 'loading' });
+      const result = await window.mdViewer.openMarkdownFile();
+      applyOpenResult(result);
+    } catch (error) {
+      setViewState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      await refreshRecentItems();
+    }
   }
 
   async function openDroppedFile(file: File): Promise<void> {
     if (!(await confirmBeforeReplacingDocument())) return;
-    setViewState({ status: 'loading' });
-    const result = await window.mdViewer.openDroppedMarkdownFile(file);
-    applyOpenResult(result);
-    await refreshRecentItems();
+    try {
+      setViewState({ status: 'loading' });
+      const result = await window.mdViewer.openDroppedMarkdownFile(file);
+      applyOpenResult(result);
+    } catch (error) {
+      setViewState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      await refreshRecentItems();
+    }
   }
 
   async function refreshRecentItems(): Promise<void> {
-    const result = await window.mdViewer.getRecentItems();
-    if (result.ok) {
-      setRecentItems(result.items);
-    }
+    try {
+      const result = await window.mdViewer.getRecentItems();
+      if (result.ok) {
+        setRecentItems(result.items);
+      }
+    } catch {}
   }
 
   async function openWorkspaceFolder(): Promise<void> {
-    setWorkspaceState({ status: 'loading' });
-    const result = await window.mdViewer.openWorkspaceFolder();
-    setWorkspaceState(toWorkspaceState(result));
-    if (result.ok) {
-      setSidebarTab('workspace');
-      setSidebarOpen(true);
+    try {
+      setWorkspaceState({ status: 'loading' });
+      const result = await window.mdViewer.openWorkspaceFolder();
+      setWorkspaceState(toWorkspaceState(result));
+      if (result.ok) {
+        setSidebarTab('workspace');
+        setSidebarOpen(true);
+      }
+    } catch (error) {
+      setWorkspaceState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      await refreshRecentItems();
     }
-    await refreshRecentItems();
   }
 
   async function openWorkspaceByPath(folderPath: string): Promise<void> {
-    setWorkspaceState({ status: 'loading' });
-    const result = await window.mdViewer.openWorkspaceByPath(folderPath);
-    setWorkspaceState(toWorkspaceState(result));
-    if (result.ok) {
-      setSidebarTab('workspace');
-      setSidebarOpen(true);
+    try {
+      setWorkspaceState({ status: 'loading' });
+      const result = await window.mdViewer.openWorkspaceByPath(folderPath);
+      setWorkspaceState(toWorkspaceState(result));
+      if (result.ok) {
+        setSidebarTab('workspace');
+        setSidebarOpen(true);
+      }
+    } catch (error) {
+      setWorkspaceState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      await refreshRecentItems();
     }
-    await refreshRecentItems();
   }
 
-  async function openMarkdownByPath(filePath: string): Promise<void> {
+  const openMarkdownByPath = useCallback(async (filePath: string) => {
     if (!(await confirmBeforeReplacingDocument())) return;
-    setViewState({ status: 'loading' });
-    const result = await window.mdViewer.openMarkdownByPath(filePath);
-    applyOpenResult(result);
-    await refreshRecentItems();
-  }
+    try {
+      setViewState({ status: 'loading' });
+      const result = await window.mdViewer.openMarkdownByPath(filePath);
+      applyOpenResult(result);
+    } catch (error) {
+      setViewState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      await refreshRecentItems();
+    }
+  }, [viewState]);
 
   openMarkdownByPathRef.current = openMarkdownByPath;
 
@@ -415,7 +535,9 @@ export function App() {
     if (!item.exists) {
       const confirmRemove = window.confirm(t.recent.removeConfirm);
       if (confirmRemove) {
-        await window.mdViewer.removeRecentItem(item.path, item.type);
+        try {
+          await window.mdViewer.removeRecentItem(item.path, item.type);
+        } catch {}
         await refreshRecentItems();
       }
       return;
@@ -428,6 +550,7 @@ export function App() {
 
     await openMarkdownByPath(item.path);
   }
+
 
   const fileStatus = useMemo(() => {
     if (viewState.status !== 'ready') {
@@ -453,10 +576,17 @@ export function App() {
   }, [draftContent, viewState]);
 
   const outline = renderedMarkdown?.status === 'ready' ? renderedMarkdown.outline : [];
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedWorkspaceFilter(workspaceFilter);
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [workspaceFilter]);
+
   const filteredWorkspaceNodes = useMemo(() => {
     if (workspaceState.status !== 'ready') return [];
-    return filterWorkspaceNodes(workspaceState.workspace.children, workspaceFilter.trim().toLocaleLowerCase());
-  }, [workspaceFilter, workspaceState]);
+    return filterWorkspaceNodes(workspaceState.workspace.children, debouncedWorkspaceFilter.trim().toLowerCase());
+  }, [debouncedWorkspaceFilter, workspaceState]);
 
   const resolvedMarkdownHtml = useMemo(() => {
     if (renderedMarkdown?.status !== 'ready') return '';
@@ -648,24 +778,64 @@ export function App() {
     reader.scrollTop = reader.scrollTop + offset - centerOffset;
   }
 
-  function updateActiveHeadingFromScroll(): void {
-    const reader = readerRef.current;
-    if (!reader || outline.length === 0) return;
-
-    const readerTop = reader.getBoundingClientRect().top;
-    let current = outline[0].id;
-
-    for (const entry of outline) {
-      const heading = document.getElementById(entry.id);
-      if (!heading) continue;
-      const relativeTop = heading.getBoundingClientRect().top - readerTop;
-      if (relativeTop <= 96) {
-        current = entry.id;
-      }
+  useEffect(() => {
+    if (editorMode !== 'read' || outline.length === 0) {
+      return;
     }
+    const reader = readerRef.current;
+    if (!reader) return;
 
-    setActiveHeadingId(current);
-  }
+    const body = markdownBodyRef.current;
+    if (!body) return;
+
+    const headingElements = Array.from(body.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6'))
+      .filter((el) => el.id && outline.some((entry) => entry.id === el.id));
+
+    if (headingElements.length === 0) return;
+
+    const visibilityMap = new Map<string, boolean>();
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          visibilityMap.set(entry.target.id, entry.isIntersecting);
+        });
+
+        let activeId = '';
+        for (const heading of headingElements) {
+          if (visibilityMap.get(heading.id)) {
+            activeId = heading.id;
+            break;
+          }
+        }
+
+        if (!activeId) {
+          const readerTop = reader.getBoundingClientRect().top;
+          for (const heading of headingElements) {
+            if (heading.getBoundingClientRect().top - readerTop <= 96) {
+              activeId = heading.id;
+            }
+          }
+        }
+
+        if (activeId) {
+          setActiveHeadingId(activeId);
+        }
+      },
+      {
+        root: reader,
+        rootMargin: '-10px 0px -85% 0px',
+        threshold: 0
+      }
+    );
+
+    headingElements.forEach((el) => observer.observe(el));
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [draftContent, editorMode, outline]);
+
 
   function scrollToHeading(id: string): void {
     const heading = document.getElementById(id);
@@ -699,9 +869,17 @@ export function App() {
   function handleMdxEditorChange(nextMarkdown: string, initialMarkdownNormalize: boolean): void {
     if (initialMarkdownNormalize && !mdxEditorTouchedRef.current) return;
     mdxEditorTouchedRef.current = true;
-    updateDraftContent(nextMarkdown);
     setEditorError(null);
     setSaveState({ status: 'idle' });
+
+    if (mdxDebounceTimerRef.current !== null) {
+      window.clearTimeout(mdxDebounceTimerRef.current);
+    }
+
+    mdxDebounceTimerRef.current = window.setTimeout(() => {
+      mdxDebounceTimerRef.current = null;
+      syncReadEditorToDraft(true);
+    }, 800);
   }
 
   async function openMarkdownHref(rawHref: string): Promise<void> {
@@ -771,40 +949,57 @@ export function App() {
   async function saveCurrentDocument(): Promise<void> {
     if (viewState.status !== 'ready') return;
 
-    const contentToSave = syncReadEditorToDraft();
-    if (contentToSave === viewState.document.content) {
+    const contentToSave = syncReadEditorToDraft(true);
+    if (contentToSave === viewState.document.content && !mdxEditorTouchedRef.current) {
       await syncUnsavedChanges(false);
       return;
     }
 
-    setSaveState({ status: 'saving' });
-    const result = await window.mdViewer.saveMarkdownFile(viewState.document.path, contentToSave);
+    try {
+      setSaveState({ status: 'saving' });
+      const result = await window.mdViewer.saveMarkdownFile(viewState.document.path, contentToSave);
 
-    if (result.ok) {
-      updateDraftContent(result.document.content);
-      mdxEditorTouchedRef.current = false;
-      setViewState({ status: 'ready', document: result.document });
-      setSaveState({ status: 'saved' });
-      await syncUnsavedChanges(false);
-      await refreshRecentItems();
-      return;
+      if (result.ok) {
+        updateDraftContent(result.document.content);
+        mdxEditorTouchedRef.current = false;
+        setViewState({ status: 'ready', document: result.document });
+        setSaveState({ status: 'saved' });
+        await syncUnsavedChanges(false);
+        await refreshRecentItems();
+        return;
+      }
+
+      setSaveState({ status: 'error', message: result.message });
+    } catch (error) {
+      setSaveState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
-
-    setSaveState({ status: 'error', message: result.message });
   }
 
   async function openCurrentInDefaultEditor(): Promise<void> {
     if (viewState.status !== 'ready') return;
-    const result = await window.mdViewer.openDefaultEditor(viewState.document.path);
-    if (!result.ok) {
-      setSaveState({ status: 'error', message: result.message });
+    try {
+      const result = await window.mdViewer.openDefaultEditor(viewState.document.path);
+      if (!result.ok) {
+        setSaveState({ status: 'error', message: result.message });
+      }
+    } catch (error) {
+      setSaveState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 
   async function loadSecurityDiagnostics(): Promise<void> {
-    const result = await window.mdViewer.getSecurityDiagnostics();
-    setSecurityDiagnostics(result);
+    try {
+      const result = await window.mdViewer.getSecurityDiagnostics();
+      setSecurityDiagnostics(result);
+    } catch {}
   }
+
 
   function openCommandPalette(): void {
     setCommandPaletteQuery('');
@@ -835,21 +1030,41 @@ export function App() {
 
   async function exportCurrentDocumentToPdf(): Promise<void> {
     if (viewState.status !== 'ready') return;
-    syncReadEditorToDraft(true);
-    await new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => {
+    try {
+      syncReadEditorToDraft(true);
+      await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => {
-          resolve();
+          window.requestAnimationFrame(() => {
+            resolve();
+          });
         });
       });
-    });
-    const result = await window.mdViewer.exportToPdf();
-    if (!result.ok && result.code !== 'CANCELED') {
-      setSaveState({ status: 'error', message: result.message ?? t.pdf.failed });
+      const result = await window.mdViewer.exportToPdf();
+      if (!result.ok && result.code !== 'CANCELED') {
+        setSaveState({ status: 'error', message: result.message ?? t.pdf.failed });
+      }
+    } catch (error) {
+      setSaveState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 
   menuActionHandlerRef.current = (action) => {
+    const hasOpenOverlay =
+      isSettingsOpen ||
+      isRecentOpen ||
+      isFileInfoOpen ||
+      isCommandPaletteOpen ||
+      isFindOpen ||
+      !!lightboxImageUrl ||
+      !!pendingExternalUrl;
+
+    if (hasOpenOverlay && action !== 'toggle-theme') {
+      return;
+    }
+
     switch (action) {
       case 'open-file':
         void openMarkdownFile();
@@ -912,18 +1127,34 @@ export function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      setLightboxImageUrl(null);
-      setPendingExternalUrl(null);
-      setIsSettingsOpen(false);
-      setIsRecentOpen(false);
-      setIsFileInfoOpen(false);
-      setIsCommandPaletteOpen(false);
-      setIsFindOpen(false);
+      if (lightboxImageUrl) {
+        setLightboxImageUrl(null);
+      } else if (pendingExternalUrl) {
+        setPendingExternalUrl(null);
+      } else if (isCommandPaletteOpen) {
+        setIsCommandPaletteOpen(false);
+      } else if (isFileInfoOpen) {
+        setIsFileInfoOpen(false);
+      } else if (isFindOpen) {
+        setIsFindOpen(false);
+      } else if (isSettingsOpen) {
+        setIsSettingsOpen(false);
+      } else if (isRecentOpen) {
+        setIsRecentOpen(false);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [
+    lightboxImageUrl,
+    pendingExternalUrl,
+    isCommandPaletteOpen,
+    isFileInfoOpen,
+    isFindOpen,
+    isSettingsOpen,
+    isRecentOpen
+  ]);
 
   // Command palette options list
   const commandList = useMemo(() => {
@@ -1037,7 +1268,7 @@ export function App() {
     }
   };
 
-  function toggleDirectoryCollapse(path: string): void {
+  const handleToggleCollapse = useCallback((path: string) => {
     setCollapsedPaths((prev) => {
       const next = new Set(prev);
       if (next.has(path)) {
@@ -1047,54 +1278,12 @@ export function App() {
       }
       return next;
     });
-  }
+  }, []);
 
-  function renderWorkspaceNodes(nodes: WorkspaceTreeNode[], level = 1) {
-    const isSearching = workspaceFilter.trim() !== '';
+  const handleOpenFile = useCallback((path: string) => {
+    void openMarkdownByPath(path);
+  }, [openMarkdownByPath]);
 
-    return (
-      <ol className="workspace-tree" data-level={level}>
-        {nodes.map((node) => {
-          if (node.type === 'directory') {
-            const isCollapsed = collapsedPaths.has(node.path) && !isSearching;
-            const ChevronIcon = isCollapsed ? ChevronRight : ChevronDown;
-
-            return (
-              <li key={node.path}>
-                <div className="workspace-directory">
-                  <span
-                    className="workspace-directory-label"
-                    style={{ '--level': level } as CSSProperties}
-                    onClick={() => toggleDirectoryCollapse(node.path)}
-                  >
-                    <ChevronIcon aria-hidden="true" size={13} />
-                    <span>{node.name}</span>
-                  </span>
-                  {!isCollapsed && node.children.length > 0 && renderWorkspaceNodes(node.children, level + 1)}
-                </div>
-              </li>
-            );
-          }
-
-          return (
-            <li key={node.path}>
-              <button
-                className="workspace-file"
-                data-testid="workspace-file"
-                style={{ '--level': level } as CSSProperties}
-                title={node.relativePath}
-                type="button"
-                onClick={() => openMarkdownByPath(node.path)}
-              >
-                <FileIcon aria-hidden="true" size={13} />
-                <span>{node.name}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
-    );
-  }
 
   return (
     <main
@@ -1233,7 +1422,7 @@ export function App() {
         <aside
           className="sidebar-panel outline-panel"
           data-testid="sidebar-panel"
-          hidden={!sidebarOpen}
+          aria-hidden={!sidebarOpen}
           aria-label={t.sidebar.ariaLabel}
         >
           <div className="sidebar-tabs-header" role="tablist" aria-label={t.sidebar.ariaView}>
@@ -1306,7 +1495,13 @@ export function App() {
                       </div>
                     )}
                     {filteredWorkspaceNodes.length > 0 ? (
-                      renderWorkspaceNodes(filteredWorkspaceNodes)
+                      <WorkspaceTree
+                        nodes={filteredWorkspaceNodes}
+                        collapsedPaths={collapsedPaths}
+                        activePath={activeDocumentPath}
+                        onToggleCollapse={handleToggleCollapse}
+                        onOpenFile={handleOpenFile}
+                      />
                     ) : (
                       <div className="sidebar-note">{t.workspace.noMatch}</div>
                     )}
@@ -1352,7 +1547,6 @@ export function App() {
           data-testid="reader-main"
           ref={readerRef}
           aria-live="polite"
-          onScroll={updateActiveHeadingFromScroll}
         >
           {/* 空状态视图 / Redesigned Dashboard */}
           {viewState.status === 'empty' && (
@@ -1456,6 +1650,7 @@ export function App() {
                 <>
                   <div className="source-editor-panel" data-testid="source-editor-panel">
                     <textarea
+                      autoFocus
                       className="source-editor"
                       data-testid="source-editor"
                       spellCheck={false}
@@ -1489,14 +1684,6 @@ export function App() {
                   data-testid="markdown-body"
                   ref={markdownBodyRef}
                   onClickCapture={handleMarkdownClick}
-                  onInputCapture={() => {
-                    scheduleReadEditorSync();
-                  }}
-                  onKeyDownCapture={(event) => {
-                    if (isContentChangingKey(event.key)) {
-                      scheduleReadEditorSync();
-                    }
-                  }}
                 >
                   <MDXEditor
                     ref={mdxEditorRef}
@@ -1819,10 +2006,9 @@ export function App() {
                   {recentItems.map((item) => (
                     <div className="recent-drawer-item-row" key={`${item.type}:${item.path}`}>
                       <button
-                        className="recent-drawer-item-btn"
+                        className={`recent-drawer-item-btn ${!item.exists ? 'expired' : ''}`}
                         title={item.path}
                         type="button"
-                        disabled={!item.exists}
                         onClick={() => {
                           setIsRecentOpen(false);
                           void openRecentItem(item);

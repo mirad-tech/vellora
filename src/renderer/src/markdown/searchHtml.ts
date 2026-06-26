@@ -5,16 +5,19 @@ export type SearchHighlightResult = {
 };
 
 function normalizeQuery(query: string): string {
-  return query.trim().toLocaleLowerCase();
+  return query.trim().toLowerCase();
 }
 
-function collectTextNodes(root: ParentNode): Text[] {
+function collectTextNodes(root: ParentNode, query: string): Text[] {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const parent = node.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
-      if (parent.closest('script, style')) return NodeFilter.FILTER_REJECT;
-      if (!node.textContent?.trim()) return NodeFilter.FILTER_REJECT;
+      if (parent.closest('script, style, mark')) return NodeFilter.FILTER_REJECT;
+      const text = node.textContent ?? '';
+      if (!text.trim()) return NodeFilter.FILTER_REJECT;
+      // Pre-filter: reject node if it does not contain the query string
+      if (!text.toLowerCase().includes(query)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }
   });
@@ -30,14 +33,37 @@ function collectTextNodes(root: ParentNode): Text[] {
 
 function highlightTextNode(textNode: Text, query: string, state: { count: number; activeIndex: number }): void {
   const source = textNode.textContent ?? '';
-  const lowerSource = source.toLocaleLowerCase();
-  const fragment = document.createDocumentFragment();
+  const lowerSource = source.toLowerCase();
+  
   let cursor = 0;
   let matchIndex = lowerSource.indexOf(query, cursor);
-
+  const matchesInNode: number[] = [];
+  
   while (matchIndex !== -1) {
-    if (matchIndex > cursor) {
-      fragment.append(document.createTextNode(source.slice(cursor, matchIndex)));
+    matchesInNode.push(matchIndex);
+    cursor = matchIndex + query.length;
+    matchIndex = lowerSource.indexOf(query, cursor);
+  }
+
+  if (matchesInNode.length === 0) return;
+
+  // Melt-down protection: count matches but do not render extra DOM if we exceed limit
+  if (state.count >= 1000) {
+    state.count += matchesInNode.length;
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  let lastCursor = 0;
+
+  for (const index of matchesInNode) {
+    if (state.count >= 1000) {
+      state.count += 1;
+      continue;
+    }
+
+    if (index > lastCursor) {
+      fragment.append(document.createTextNode(source.slice(lastCursor, index)));
     }
 
     const hitIndex = state.count;
@@ -47,21 +73,19 @@ function highlightTextNode(textNode: Text, query: string, state: { count: number
     if (hitIndex === state.activeIndex) {
       mark.dataset.activeSearch = 'true';
     }
-    mark.textContent = source.slice(matchIndex, matchIndex + query.length);
+    mark.textContent = source.slice(index, index + query.length);
     fragment.append(mark);
 
     state.count += 1;
-    cursor = matchIndex + query.length;
-    matchIndex = lowerSource.indexOf(query, cursor);
+    lastCursor = index + query.length;
   }
 
-  if (cursor === 0) return;
-
-  if (cursor < source.length) {
-    fragment.append(document.createTextNode(source.slice(cursor)));
+  if (lastCursor > 0) {
+    if (lastCursor < source.length) {
+      fragment.append(document.createTextNode(source.slice(lastCursor)));
+    }
+    textNode.replaceWith(fragment);
   }
-
-  textNode.replaceWith(fragment);
 }
 
 export function applySearchHighlights(
@@ -78,9 +102,21 @@ export function applySearchHighlights(
     };
   }
 
+  // Pre-filter on raw html string to avoid DOM parser overhead if query is completely absent
+  // Only apply pre-filter when query does not contain HTML entity characters like <, >, &, ", '
+  if (!/[<>&"']/.test(query)) {
+    if (!html.toLowerCase().includes(query)) {
+      return {
+        html,
+        count: 0,
+        activeIndex: -1
+      };
+    }
+  }
+
   const template = document.createElement('template');
   template.innerHTML = html;
-  const textNodes = collectTextNodes(template.content);
+  const textNodes = collectTextNodes(template.content, query);
   const state = {
     count: 0,
     activeIndex: Math.max(0, requestedActiveIndex)
@@ -114,3 +150,4 @@ export function applySearchHighlights(
     activeIndex: state.activeIndex
   };
 }
+
