@@ -128,7 +128,6 @@ async function handleUnresolvedFileAuthorization(
     safeDirs.push(tempDir);
   }
 
-
   const isInsideSafeDir = safeDirs.some(dir => isPathInsideDirectory(normPath, dir));
   const isInsideAuthWorkspace = Array.from(authorizedDirs).some(dir => isPathInsideDirectory(normPath, dir));
 
@@ -178,15 +177,8 @@ async function isFileAuthorized(filePath: string): Promise<boolean> {
     }
   }
 
-  const isTestMode =
-    process.env.NODE_ENV === 'test' ||
-    !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST;
-  if (isTestMode) {
-    const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
-    if (normPath.startsWith(tempDir)) {
-      return true;
-    }
+  if (isInsideTestTempDirectory(normPath)) {
+    return true;
   }
 
   const isRecent = await verifyAndAuthorizeFromRecent(normPath, 'file');
@@ -210,15 +202,8 @@ async function isDirAuthorized(dirPath: string): Promise<boolean> {
     }
   }
 
-  const isTestMode =
-    process.env.NODE_ENV === 'test' ||
-    !!process.env.VITEST ||
-    !!process.env.PLAYWRIGHT_TEST;
-  if (isTestMode) {
-    const tempDir = tmpdir().replace(/\\/g, '/').toLowerCase();
-    if (normPath.startsWith(tempDir)) {
-      return true;
-    }
+  if (isInsideTestTempDirectory(normPath)) {
+    return true;
   }
 
   const isRecent = await verifyAndAuthorizeFromRecent(normPath, 'folder');

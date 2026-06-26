@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { SECURE_WEB_PREFERENCES, createSecurityDiagnostics, resolveTrustedRendererUrl } from './security';
 
@@ -56,12 +56,28 @@ describe('Electron security defaults', () => {
 import { isDangerousSystemDirectory, getSafeUserDirectories, normalizePath } from './pathPolicy';
 
 describe('Path and Directory Security policy', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   test('correctly detects dangerous system folders', () => {
     expect(isDangerousSystemDirectory('C:/Windows/system32/cmd.exe')).toBe(true);
     expect(isDangerousSystemDirectory('/etc/passwd')).toBe(true);
     expect(isDangerousSystemDirectory('C:/Users/User/AppData/Local/Temp')).toBe(true);
     expect(isDangerousSystemDirectory('/var/log/syslog')).toBe(true);
     expect(isDangerousSystemDirectory('D:/Projects/App/notes.md')).toBe(false);
+  });
+
+  test('detects Windows system folders from configured environment roots', () => {
+    vi.stubEnv('SystemRoot', 'D:\\Windows');
+    vi.stubEnv('ProgramFiles', 'D:\\Program Files');
+    vi.stubEnv('ProgramFiles(x86)', 'D:\\Program Files (x86)');
+    vi.stubEnv('ProgramW6432', 'D:\\Program Files');
+
+    expect(isDangerousSystemDirectory('D:/Windows/System32/cmd.exe')).toBe(true);
+    expect(isDangerousSystemDirectory('D:/Program Files/App/app.exe')).toBe(true);
+    expect(isDangerousSystemDirectory('D:/Program Files (x86)/App/app.exe')).toBe(true);
+    expect(isDangerousSystemDirectory('E:/Projects/App/notes.md')).toBe(false);
   });
 
   test('retrieves user directories and normalizes path based on OS', () => {

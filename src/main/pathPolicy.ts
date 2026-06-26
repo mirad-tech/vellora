@@ -37,14 +37,24 @@ export function getSafeUserDirectories(): string[] {
   return Array.from(new Set(paths.map(p => normalizePath(p))));
 }
 
+function getWindowsDangerousDirectories(): string[] {
+  const dirs = [
+    process.env.SystemRoot,
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.ProgramW6432,
+    'C:/Windows',
+    'C:/Program Files',
+    'C:/Program Files (x86)'
+  ].filter((dir): dir is string => Boolean(dir));
+
+  return Array.from(new Set(dirs.map(dir => normalizePath(dir))));
+}
+
 export function isDangerousSystemDirectory(filePath: string): boolean {
   const normPath = normalizePath(filePath);
 
-  const winDangerousDirs = [
-    'c:/windows',
-    'c:/program files',
-    'c:/program files (x86)'
-  ];
+  const winDangerousDirs = getWindowsDangerousDirectories();
 
   const unixDangerousDirs = [
     '/etc',
