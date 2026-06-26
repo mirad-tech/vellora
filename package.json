@@ -1,9 +1,9 @@
 {
-  "name": "markdown-viewer",
-  "productName": "Markdown viewer",
-  "version": "1.2.0",
-  "description": "Markdown viewer desktop app",
-  "author": "Markdown viewer Contributors",
+  "name": "vellora-editor",
+  "productName": "Vellora",
+  "version": "1.2.1",
+  "description": "Vellora local-first Markdown writing app",
+  "author": "Vellora Contributors",
   "main": "out/main/index.js",
   "type": "module",
   "license": "MIT",
@@ -41,7 +41,7 @@
   },
   "build": {
     "appId": "app.markdown-viewer.desktop",
-    "productName": "Markdown viewer",
+    "productName": "Vellora",
     "asar": true,
     "afterPack": "build/afterPack.mjs",
     "electronDist": "node_modules/electron/dist",

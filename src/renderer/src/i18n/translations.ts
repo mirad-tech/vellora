@@ -2,9 +2,9 @@ export type I18nMessages = typeof zh;
 
 const zh = {
   app: {
-    title: 'Markdown查看器',
-    brand: 'Mirad MD',
-    tagline: '本地优先 Markdown 阅览器',
+    title: 'Vellora',
+    brand: 'Vellora',
+    tagline: '本地优先 Markdown 写作与阅读工具',
     emptyTitle: '未打开文件',
     emptyHint: '请选择 .md 或 .markdown 文件。',
     openFile: '打开文件',
@@ -146,9 +146,9 @@ const zh = {
 
 const en: I18nMessages = {
   app: {
-    title: 'Markdown Viewer',
-    brand: 'Mirad MD',
-    tagline: 'Local-First Markdown Reader',
+    title: 'Vellora',
+    brand: 'Vellora',
+    tagline: 'Local-First Markdown Writing App',
     emptyTitle: 'No file opened',
     emptyHint: 'Please select a .md or .markdown file.',
     openFile: 'Open File',

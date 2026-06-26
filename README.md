@@ -1,6 +1,6 @@
-# Markdown查看器 / Markdown viewer
+# Vellora
 
-Markdown查看器（Markdown viewer）是一个本地优先的 Markdown 桌面查看器，基于 Electron、React、TypeScript 和 Electron Vite 构建。它面向需要在本机打开 Markdown 文件、整理、搜索和轻量编辑 `.md` / `.markdown` 文件的用户。
+Vellora 是一个本地优先的 Markdown 桌面写作与阅读工具，基于 Electron、React、TypeScript 和 Electron Vite 构建。它面向需要在本机打开 Markdown 文件、整理、搜索和轻量编辑 `.md` / `.markdown` 文件的用户。
 
 其他语言： [English](README.en.md) | [日本語](README.ja.md) | [Русский](README.ru.md)
 

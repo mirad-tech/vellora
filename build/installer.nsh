@@ -17,7 +17,7 @@ Function MarkdownAssociationPageCreate
     Abort
   ${EndIf}
 
-  ${NSD_CreateCheckbox} 0u 20u 100% 16u "将 Markdown viewer 设为默认打开 .md 和 .markdown 文件的程序"
+  ${NSD_CreateCheckbox} 0u 20u 100% 16u "将 Vellora 设为默认打开 .md 和 .markdown 文件的程序"
   Pop $RegisterMarkdownAssociationCheckbox
   ${NSD_SetState} $RegisterMarkdownAssociationCheckbox ${BST_UNCHECKED}
 

@@ -5,7 +5,7 @@ import { findMarkdownPathInArgs } from './launchArguments';
 describe('Windows launch arguments', () => {
   test('finds the first Markdown path passed by the shell', () => {
     const result = findMarkdownPathInArgs([
-      'G:\\apps\\Markdown viewer.exe',
+      'G:\\apps\\Vellora.exe',
       '--some-electron-flag',
       'G:\\文档\\daily note.md'
     ]);
@@ -15,7 +15,7 @@ describe('Windows launch arguments', () => {
 
   test('ignores unsupported file types and flags', () => {
     const result = findMarkdownPathInArgs([
-      'G:\\apps\\Markdown viewer.exe',
+      'G:\\apps\\Vellora.exe',
       '--inspect',
       'G:\\文档\\notes.txt'
     ]);

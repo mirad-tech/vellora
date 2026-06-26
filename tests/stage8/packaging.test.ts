@@ -73,7 +73,7 @@ describe('stage 8 packaging configuration', () => {
     const pkg = await readPackageJson();
 
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(pkg.productName).toBe('Markdown viewer');
+    expect(pkg.productName).toBe('Vellora');
     expect(pkg.devDependencies).toHaveProperty('electron-builder');
     expect(pkg.devDependencies).toHaveProperty('resedit');
     expect(pkg.scripts).toMatchObject({
@@ -84,7 +84,7 @@ describe('stage 8 packaging configuration', () => {
     expect(pkg.scripts).not.toHaveProperty('dist:win:portable');
     expect(pkg.build).toMatchObject({
       appId: 'app.markdown-viewer.desktop',
-      productName: 'Markdown viewer',
+      productName: 'Vellora',
       directories: {
         output: 'release'
       }
@@ -150,8 +150,8 @@ describe('stage 8 packaging configuration', () => {
     ]));
 
     const guide = await readFile(join(root, 'README.md'), 'utf8');
-    expect(guide).toContain('Markdown查看器');
-    expect(guide).toContain('Markdown viewer');
+    expect(guide).toContain('Vellora');
+    expect(guide).toContain('Markdown 桌面写作与阅读工具');
     expect(guide).toContain('打开 Markdown 文件');
     expect(guide).toContain('打开文件夹');
     expect(guide).toContain('NSIS 安装包');
