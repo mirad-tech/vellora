@@ -88,6 +88,17 @@ type WorkspaceState =
   | { status: 'ready'; workspace: MarkdownWorkspace }
   | { status: 'error'; message: string };
 
+type MarkdownLinkTarget = {
+  text: string;
+  target: string;
+  start: number;
+};
+
+type LinkRecoveryContext = {
+  text?: string;
+  index?: number;
+};
+
 function formatModifiedTime(value: number, locale: string): string {
   return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', {
     dateStyle: 'medium',
@@ -111,46 +122,153 @@ function decodeMarkdownHref(value: string): string {
   }
 }
 
-function isProtocolLink(value: string): boolean {
-  return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
+function protocolOfHref(value: string): string | null {
+  const match = /^[a-zA-Z][a-zA-Z\d+.-]*:/.exec(value.trim());
+  return match ? match[0].toLowerCase() : null;
 }
 
-function collectLocalMarkdownLinkTargets(content: string): Set<string> {
-  const targets = new Set<string>();
-  const linkPattern = /(?<!!)\[[^\]]*]\(\s*<?([^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+function stripHrefSuffix(value: string): string {
+  return value.split(/[?#]/, 1)[0];
+}
+
+function isMarkdownHrefTarget(value: string): boolean {
+  const target = decodeMarkdownHref(stripHrefSuffix(value.trim())).toLowerCase();
+  return target.endsWith('.md') || target.endsWith('.markdown');
+}
+
+function isReadyViewDirty(state: ViewState, currentContent: string): boolean {
+  return state.status === 'ready' && currentContent !== state.document.content;
+}
+
+function isProtocolLink(value: string): boolean {
+  return protocolOfHref(value) !== null;
+}
+
+function normalizeLinkText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function collectMarkdownLinkTargets(content: string): MarkdownLinkTarget[] {
+  const targets: MarkdownLinkTarget[] = [];
+  const linkPattern = /(?<!!)\[([^\]]*)]\(\s*<?([^\)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
   let match: RegExpExecArray | null;
 
   while ((match = linkPattern.exec(content)) !== null) {
-    const target = decodeMarkdownHref(match[1] ?? '').trim();
-    if (target && !isProtocolLink(target)) {
-      targets.add(target);
+    const target = decodeMarkdownHref(match[2] ?? '').trim();
+    if (target) {
+      targets.push({
+        text: normalizeLinkText(match[1] ?? ''),
+        target,
+        start: match.index
+      });
     }
   }
 
   return targets;
 }
 
+function collectLocalMarkdownLinkTargets(content: string): Set<string> {
+  const targets = new Set<string>();
+
+  for (const link of collectMarkdownLinkTargets(content)) {
+    if (!isProtocolLink(link.target)) {
+      targets.add(link.target);
+    }
+  }
+
+  return targets;
+}
+
+function collectExplicitExternalLinkTargets(content: string): Set<string> {
+  const targets = new Set<string>();
+
+  for (const link of collectMarkdownLinkTargets(content)) {
+    const protocol = protocolOfHref(link.target);
+    if (protocol === 'http:' || protocol === 'https:') {
+      targets.add(link.target);
+    }
+  }
+
+  return targets;
+}
+
+function shouldRecoverExplicitExternalTarget(
+  content: string,
+  href: string,
+  candidate: string,
+  context: LinkRecoveryContext = {}
+): boolean {
+  const links = collectMarkdownLinkTargets(content);
+  const normalizedLinkText = context.text === undefined ? undefined : normalizeLinkText(context.text);
+
+  if (context.index !== undefined) {
+    const sourceLink = links[context.index];
+    return (
+      sourceLink?.target === candidate &&
+      !isProtocolLink(sourceLink.target) &&
+      (normalizedLinkText === undefined || sourceLink.text === normalizedLinkText)
+    );
+  }
+
+  if (normalizedLinkText === undefined) return false;
+
+  const decodedHref = decodeMarkdownHref(href).trim();
+  const localMatches = links.filter((link) => {
+    return link.target === candidate && !isProtocolLink(link.target) && link.text === normalizedLinkText;
+  });
+  const externalMatches = links.filter((link) => {
+    const protocol = protocolOfHref(link.target);
+    return (
+      link.target === decodedHref &&
+      (protocol === 'http:' || protocol === 'https:') &&
+      link.text === normalizedLinkText
+    );
+  });
+
+  return localMatches.length === 1 && externalMatches.length === 0;
+}
+
 function stripTrailingSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
 }
 
-function recoverMdxNormalizedLocalHref(href: string, referenceContent: string): string {
+function recoverMdxNormalizedLocalHref(
+  href: string,
+  referenceContent: string,
+  context: LinkRecoveryContext = {}
+): string {
   if (!href.startsWith('https://')) return href;
 
   const candidate = decodeMarkdownHref(stripTrailingSlash(href.slice('https://'.length)));
   const localTargets = collectLocalMarkdownLinkTargets(referenceContent);
+  if (!localTargets.has(candidate)) return href;
+
+  const explicitExternalTargets = collectExplicitExternalLinkTargets(referenceContent);
+  if (
+    explicitExternalTargets.has(decodeMarkdownHref(href).trim()) &&
+    !shouldRecoverExplicitExternalTarget(referenceContent, href, candidate, context)
+  ) {
+    return href;
+  }
+
   return localTargets.has(candidate) ? candidate : href;
 }
 
 function restoreMdxNormalizedLocalLinks(markdown: string, referenceContent: string): string {
   const localTargets = collectLocalMarkdownLinkTargets(referenceContent);
   if (localTargets.size === 0) return markdown;
+  const markdownLinks = collectMarkdownLinkTargets(markdown);
 
   return markdown.replace(
-    /(?<!!)(\[[^\]]+]\()https:\/\/([^)]+)(\))/g,
-    (full, prefix: string, target: string, suffix: string) => {
-      const candidate = decodeMarkdownHref(stripTrailingSlash(target));
-      return localTargets.has(candidate) ? `${prefix}${candidate}${suffix}` : full;
+    /(?<!!)(\[([^\]]+)]\()https:\/\/([^)]+)(\))/g,
+    (full, prefix: string, linkText: string, target: string, suffix: string, offset: number) => {
+      const linkIndex = markdownLinks.findIndex((link) => link.start === offset);
+      const href = `https://${target}`;
+      const recoveredHref = recoverMdxNormalizedLocalHref(href, referenceContent, {
+        text: linkText,
+        index: linkIndex >= 0 ? linkIndex : undefined
+      });
+      return recoveredHref === href ? full : `${prefix}${recoveredHref}${suffix}`;
     }
   );
 }
@@ -377,6 +495,21 @@ export function App() {
     setViewState(toViewState(result));
   }
 
+  async function applyReplaceOpenResult(
+    result: MarkdownOpenResult,
+    previousViewState: ViewState,
+    previousWasDirty: boolean
+  ): Promise<void> {
+    if (!result.ok && result.code === 'CANCELED') {
+      setViewState(previousViewState);
+      if (previousWasDirty) {
+        await syncUnsavedChanges(true);
+      }
+      return;
+    }
+    applyOpenResult(result);
+  }
+
   const isDirty =
     viewState.status === 'ready' &&
     (editorMode === 'source-edit'
@@ -394,11 +527,11 @@ export function App() {
       return draftContentRef.current;
     }
 
-    if (!force && !mdxEditorTouchedRef.current) {
+    if (!mdxEditorTouchedRef.current) {
       return draftContentRef.current;
     }
 
-    const referenceContent = `${viewState.document.content}\n${draftContentRef.current}`;
+    const referenceContent = draftContentRef.current || viewState.document.content;
     const nextContent = restoreMdxNormalizedLocalLinks(mdxEditorRef.current.getMarkdown(), referenceContent);
     if (nextContent !== draftContentRef.current) {
       updateDraftContent(nextContent);
@@ -412,7 +545,7 @@ export function App() {
 
   async function confirmBeforeReplacingDocument(): Promise<boolean> {
     const currentContent = syncReadEditorToDraft(true);
-    const dirty = viewState.status === 'ready' && currentContent !== viewState.document.content;
+    const dirty = isReadyViewDirty(viewState, currentContent);
     if (!dirty) return true;
     try {
       const result = await window.mdViewer.confirmDiscardChanges();
@@ -424,10 +557,12 @@ export function App() {
 
   async function openMarkdownFile(): Promise<void> {
     if (!(await confirmBeforeReplacingDocument())) return;
+    const previousViewState = viewState;
+    const previousWasDirty = isReadyViewDirty(previousViewState, draftContentRef.current);
     try {
       setViewState({ status: 'loading' });
       const result = await window.mdViewer.openMarkdownFile();
-      applyOpenResult(result);
+      await applyReplaceOpenResult(result, previousViewState, previousWasDirty);
     } catch (error) {
       setViewState({
         status: 'error',
@@ -440,10 +575,12 @@ export function App() {
 
   async function openDroppedFile(file: File): Promise<void> {
     if (!(await confirmBeforeReplacingDocument())) return;
+    const previousViewState = viewState;
+    const previousWasDirty = isReadyViewDirty(previousViewState, draftContentRef.current);
     try {
       setViewState({ status: 'loading' });
       const result = await window.mdViewer.openDroppedMarkdownFile(file);
-      applyOpenResult(result);
+      await applyReplaceOpenResult(result, previousViewState, previousWasDirty);
     } catch (error) {
       setViewState({
         status: 'error',
@@ -464,9 +601,14 @@ export function App() {
   }
 
   async function openWorkspaceFolder(): Promise<void> {
+    const previousWorkspaceState = workspaceState;
     try {
       setWorkspaceState({ status: 'loading' });
       const result = await window.mdViewer.openWorkspaceFolder();
+      if (!result.ok && result.code === 'CANCELED') {
+        setWorkspaceState(previousWorkspaceState);
+        return;
+      }
       setWorkspaceState(toWorkspaceState(result));
       if (result.ok) {
         setSidebarTab('workspace');
@@ -483,9 +625,14 @@ export function App() {
   }
 
   async function openWorkspaceByPath(folderPath: string): Promise<void> {
+    const previousWorkspaceState = workspaceState;
     try {
       setWorkspaceState({ status: 'loading' });
       const result = await window.mdViewer.openWorkspaceByPath(folderPath);
+      if (!result.ok && result.code === 'CANCELED') {
+        setWorkspaceState(previousWorkspaceState);
+        return;
+      }
       setWorkspaceState(toWorkspaceState(result));
       if (result.ok) {
         setSidebarTab('workspace');
@@ -503,10 +650,12 @@ export function App() {
 
   const openMarkdownByPath = useCallback(async (filePath: string) => {
     if (!(await confirmBeforeReplacingDocument())) return;
+    const previousViewState = viewState;
+    const previousWasDirty = isReadyViewDirty(previousViewState, draftContentRef.current);
     try {
       setViewState({ status: 'loading' });
       const result = await window.mdViewer.openMarkdownByPath(filePath);
-      applyOpenResult(result);
+      await applyReplaceOpenResult(result, previousViewState, previousWasDirty);
     } catch (error) {
       setViewState({
         status: 'error',
@@ -887,15 +1036,28 @@ export function App() {
     }, 800);
   }
 
-  async function openMarkdownHref(rawHref: string): Promise<void> {
+  function handleMdxEditorInput(): void {
+    if (editorMode !== 'read' || viewState.status !== 'ready') return;
+    mdxEditorTouchedRef.current = true;
+    setEditorError(null);
+    setSaveState({ status: 'idle' });
+  }
+
+  async function openMarkdownHref(rawHref: string, context: LinkRecoveryContext = {}): Promise<void> {
     if (viewState.status !== 'ready') return;
 
-    const href = recoverMdxNormalizedLocalHref(rawHref, `${viewState.document.content}\n${draftContentRef.current}`);
-    const isExternal = href.startsWith('http://') || href.startsWith('https://');
-    if (isExternal) {
+    const href = recoverMdxNormalizedLocalHref(
+      rawHref,
+      draftContentRef.current || viewState.document.content,
+      context
+    );
+    const protocol = protocolOfHref(href);
+    if (protocol === 'http:' || protocol === 'https:') {
       setPendingExternalUrl(href);
       return;
     }
+
+    if (!protocol && isMarkdownHrefTarget(href) && !(await confirmBeforeReplacingDocument())) return;
 
     const result = await window.mdViewer.openMarkdownLink(
       viewState.document.path,
@@ -906,7 +1068,9 @@ export function App() {
       applyOpenResult({ ok: true, document: result.document });
       await refreshRecentItems();
     } else if (!result.ok) {
+      const currentContent = syncReadEditorToDraft(true);
       setSaveState({ status: 'error', message: result.message });
+      await syncUnsavedChanges(currentContent !== viewState.document.content);
     }
   }
 
@@ -933,7 +1097,12 @@ export function App() {
     event.preventDefault();
     event.stopPropagation();
     const href = anchor.getAttribute('href') ?? '';
-    await openMarkdownHref(href);
+    const anchors = Array.from(event.currentTarget.querySelectorAll('a[href]'));
+    const linkIndex = anchors.indexOf(anchor);
+    await openMarkdownHref(href, {
+      text: anchor.textContent ?? undefined,
+      index: linkIndex >= 0 ? linkIndex : undefined
+    });
   }
 
   async function handleConfirmExternalLink(): Promise<void> {
@@ -955,7 +1124,7 @@ export function App() {
     if (viewState.status !== 'ready') return;
 
     const contentToSave = syncReadEditorToDraft(true);
-    if (contentToSave === viewState.document.content && !mdxEditorTouchedRef.current) {
+    if (contentToSave === viewState.document.content) {
       await syncUnsavedChanges(false);
       return;
     }
@@ -1684,12 +1853,13 @@ export function App() {
                   onClick={handleMarkdownClick}
                 />
               ) : (
-                <div
-                  className="mdx-wysiwyg-host"
-                  data-testid="markdown-body"
-                  ref={markdownBodyRef}
-                  onClickCapture={handleMarkdownClick}
-                >
+                  <div
+                    className="mdx-wysiwyg-host"
+                    data-testid="markdown-body"
+                    ref={markdownBodyRef}
+                    onClickCapture={handleMarkdownClick}
+                    onInputCapture={handleMdxEditorInput}
+                  >
                   <MDXEditor
                     ref={mdxEditorRef}
                     className="mdx-wysiwyg-editor-root"

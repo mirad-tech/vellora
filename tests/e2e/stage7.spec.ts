@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { _electron as electron, type ElectronApplication, type Locator, type Page } from 'playwright';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -157,6 +157,7 @@ async function clickNativeMenuItem(
         File: ['File', '文件'],
         View: ['View', '查看'],
         Save: ['Save', '保存'],
+        'Close Document': ['Close Document', '关闭文档'],
         'Source Edit': ['Source Edit', '源码编辑'],
         'Open in Default Editor': ['Open in Default Editor', '用默认编辑器打开'],
         'Export as PDF': ['Export as PDF', '导出为 PDF']
@@ -184,6 +185,46 @@ async function enterSourceEditMode(electronApp: ElectronApplication, page: Page)
 
 async function saveFromNativeMenu(electronApp: ElectronApplication): Promise<void> {
   await clickNativeMenuItem(electronApp, 'File', 'Save');
+}
+
+async function closeDocumentFromNativeMenu(electronApp: ElectronApplication): Promise<void> {
+  await clickNativeMenuItem(electronApp, 'File', 'Close Document');
+}
+
+async function expectMessageBoxCount(electronApp: ElectronApplication, expected: number): Promise<void> {
+  await expect
+    .poll(() =>
+      electronApp.evaluate(() => {
+        const state = globalThis as typeof globalThis & { __stage7MessageBoxCount?: number };
+        return state.__stage7MessageBoxCount ?? 0;
+      })
+    )
+    .toBe(expected);
+}
+
+async function setMessageBoxResponse(electronApp: ElectronApplication, response: number): Promise<void> {
+  await electronApp.evaluate((_app, nextResponse) => {
+    const state = globalThis as typeof globalThis & { __stage7MessageBoxResponse?: number };
+    state.__stage7MessageBoxResponse = nextResponse;
+  }, response);
+}
+
+async function sendOpenRequested(electronApp: ElectronApplication, filePath: string): Promise<void> {
+  await electronApp.evaluate(async ({ BrowserWindow }, pathToSend) => {
+    BrowserWindow.getAllWindows()[0]?.webContents.send('document:openRequested', pathToSend);
+  }, filePath);
+}
+
+async function expectCleanSaveBadge(page: Page): Promise<void> {
+  const saveBadge = page.locator('button.save-badge');
+  await expect(saveBadge).toBeDisabled();
+  await expect(saveBadge).toHaveText(/^(已保存|Saved)$/);
+}
+
+async function expectDirtySaveBadge(page: Page): Promise<void> {
+  const saveBadge = page.locator('button.save-badge');
+  await expect(saveBadge).toBeEnabled();
+  await expect(saveBadge).toHaveText(/(未保存|Draft)/);
 }
 
 async function closeAppDiscardingDrafts(electronApp: ElectronApplication): Promise<void> {
@@ -240,6 +281,27 @@ test('syncs latest WYSIWYG edits into source mode before showing the textarea', 
   await closeAppDiscardingDrafts(electronApp);
 });
 
+test('does not ask after opening and switching to source mode without edits before closing document', async () => {
+  const original = '# 原始\n\n正文。';
+  const fixture = await createEditFixture(original);
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  await enterSourceEditMode(electronApp, page);
+
+  await expect(page.getByTestId('source-editor')).toHaveValue(original);
+  await expectCleanSaveBadge(page);
+
+  await closeDocumentFromNativeMenu(electronApp);
+
+  await expect(page.getByRole('button', { name: '打开文件', exact: true })).toBeVisible();
+  await expect(page.getByTestId('source-editor')).toHaveCount(0);
+  await expectMessageBoxCount(electronApp, 0);
+
+  await electronApp.close();
+});
+
 test('syncs source edits back into WYSIWYG reading mode', async () => {
   const fixture = await createEditFixture(complexMarkdown());
   const electronApp = await launchWithSelectedFile(fixture);
@@ -256,6 +318,32 @@ test('syncs source edits back into WYSIWYG reading mode', async () => {
   await expect(page.locator('.markdown-body td').filter({ hasText: '已同步' })).toBeVisible();
 
   await closeAppDiscardingDrafts(electronApp);
+});
+
+test('does not write the file when saving a clean document', async () => {
+  const original = '# 原始\n\n正文。';
+  const fixture = await createEditFixture(original);
+  const stableTime = new Date('2020-01-01T00:00:00.000Z');
+  await utimes(fixture.filePath, stableTime, stableTime);
+  const beforeContent = await readFile(fixture.filePath, 'utf8');
+  const beforeStat = await stat(fixture.filePath);
+
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  await expectCleanSaveBadge(page);
+  await saveFromNativeMenu(electronApp);
+  await page.waitForTimeout(500);
+
+  const afterContent = await readFile(fixture.filePath, 'utf8');
+  const afterStat = await stat(fixture.filePath);
+  expect(afterContent).toBe(beforeContent);
+  expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
+  await expect(page.getByTestId('save-error')).toHaveCount(0);
+  await expectMessageBoxCount(electronApp, 0);
+
+  await electronApp.close();
 });
 
 test('refreshes WYSIWYG content when reopening the same file path', async () => {
@@ -276,6 +364,38 @@ test('refreshes WYSIWYG content when reopening the same file path', async () => 
 
   await expect(page.locator('.markdown-body h1')).toHaveText('第二版');
   await expect(page.getByTestId('markdown-body')).toContainText('刷新正文。');
+
+  await closeAppDiscardingDrafts(electronApp);
+});
+
+test('asks before same-path document:openRequested replaces a dirty source draft', async () => {
+  const fixture = await createEditFixture('# 第一版\n\n原文。');
+  const electronApp = await launchWithSelectedFile(fixture);
+  const page = await electronApp.firstWindow();
+
+  await openFixture(page);
+  await enterSourceEditMode(electronApp, page);
+
+  const localDraft = '# 本地草稿\n\n未保存';
+  await page.getByTestId('source-editor').fill(localDraft);
+  await expect(page.getByTestId('source-editor')).toHaveValue(localDraft);
+  await expectDirtySaveBadge(page);
+
+  await writeFile(fixture.filePath, '# 磁盘新版\n\n来自 openRequested。', 'utf8');
+  await setMessageBoxResponse(electronApp, 0);
+  await sendOpenRequested(electronApp, fixture.filePath);
+
+  await expectMessageBoxCount(electronApp, 1);
+  await expect(page.getByTestId('source-editor')).toHaveValue(localDraft);
+  await expectDirtySaveBadge(page);
+
+  await setMessageBoxResponse(electronApp, 1);
+  await sendOpenRequested(electronApp, fixture.filePath);
+
+  await expectMessageBoxCount(electronApp, 2);
+  await expect(page.getByTestId('source-editor')).toHaveCount(0);
+  await expect(page.locator('.markdown-body h1')).toHaveText('磁盘新版');
+  await expect(page.getByTestId('markdown-body')).toContainText('来自 openRequested。');
 
   await closeAppDiscardingDrafts(electronApp);
 });
