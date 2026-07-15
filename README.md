@@ -89,4 +89,3 @@ tests/fixtures/      Markdown 样本
 ## 贡献与问题
 
 - Issues：<https://github.com/mirad-tech/markdown-viewer/issues>
-- 给 Agent / 协作者的工程约定见 [AGENTS.md](AGENTS.md)
