@@ -8,9 +8,24 @@ playwright-report/
 *.stdout.log
 *.stderr.log
 *.log
-.claude/*.json
 .DS_Store
 Thumbs.db
 *.local
 .env
 .env.*
+
+# Local AI / coding-agent instruction files (keep on machine, not public repo)
+AGENTS.md
+CLAUDE.md
+Claude.md
+Agents.md
+.claude/
+.agents/
+.codex/
+.cursor/
+.cursorrules
+.clinerules
+GEMINI.md
+CODEX.md
+.opencode/
+.grok/
