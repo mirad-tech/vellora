@@ -1,0 +1,39 @@
+[package]
+name = "vellora"
+version = "2.0.0"
+description = "Vellora lightweight Markdown viewer and editor"
+authors = ["Vellora Contributors"]
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "vellora_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+open = "5"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+# Embedded WebDriver + invoke mock helpers for @wdio/tauri-service E2E.
+# The WebDriver server only listens when TAURI_WEBDRIVER_PORT (or service) enables it.
+tauri-plugin-wdio = "1.2.0"
+tauri-plugin-wdio-webdriver = "1.2.0"
+thiserror = "2"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

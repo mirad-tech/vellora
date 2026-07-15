@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.0.0 - 2026-07-15
+
+### 架构
+
+- **从 Electron 完整迁移到 Tauri 2 + React + Vite**；安装包与运行体积大幅下降。
+- 产品版本 **2.0.0**，应用标识保持 `app.markdown-viewer.desktop`。
+- Windows NSIS；WebView2 使用 download bootstrapper（不内嵌运行时）。
+- 单实例：第二次启动转发 Markdown 路径并聚焦已有窗口。
+
+### 功能（保留）
+
+- 打开 / 拖放 / 文件关联；阅读渲染与源码编辑切换；`Ctrl+S` 保存。
+- 未保存确认；文档搜索；折叠标题目录；相对图片；本地 Markdown 链接；外链确认。
+
+### 功能（移除）
+
+- 工作区文件树、最近记录、WYSIWYG（MDXEditor）、命令面板、PDF 导出。
+- 主题切换、多语言 UI、复杂原生菜单、字数统计 / 文件详情、默认编辑器跳转等。
+
+### 安全
+
+- 图片与本地链接限制在当前文档目录；`canonicalize` 防符号链接逃逸。
+- 文档会话绑定保存 / 图片 / 链接命令；外链命令命名为 `open_external_url`（HTTP/HTTPS）。
+- 关闭保护：脏状态同步、一次性 `allow_close`、前端无响应时原生二次确认。
+- Capability 仅自定义命令；CSP 限制本地脚本/样式与 `data:` 图片。
+
+### 修复
+
+- 编辑区布局：搜索栏未打开时正文只剩窄条的问题（flex 占满剩余高度）。
+
+### 测试与工程
+
+- 前端 Vitest、Rust `cargo test`、浏览器 E2E（Edge + puppeteer-core）。
+- 可选桌面 WDIO 配置与 `tauri-plugin-wdio` / `wdio-webdriver` 集成。
+
+### 迁移
+
+- 建议先卸载 Electron 1.x，再安装 2.0；不自动调用旧卸载器。
+
 ## 1.2.1 - 2026-06-26
 
 ### 品牌更新

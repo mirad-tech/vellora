@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "Main window capability — custom commands only; no generic FS/shell/HTTP",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:webview:allow-internal-toggle-devtools",
+    "allow-choose-markdown-file",
+    "allow-open-markdown-file",
+    "allow-save-markdown-file",
+    "allow-resolve-local-image",
+    "allow-inspect-markdown-link",
+    "allow-open-external-url",
+    "allow-get-initial-document",
+    "allow-set-unsaved-changes",
+    "allow-confirm-close",
+    "wdio:default",
+    "wdio-webdriver:default"
+  ]
+}

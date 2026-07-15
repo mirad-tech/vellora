@@ -1,0 +1,44 @@
+[[permission]]
+identifier = "allow-choose-markdown-file"
+description = "Allow choosing a Markdown file via native dialog"
+commands.allow = ["choose_markdown_file"]
+
+[[permission]]
+identifier = "allow-open-markdown-file"
+description = "Allow opening a Markdown file by path"
+commands.allow = ["open_markdown_file"]
+
+[[permission]]
+identifier = "allow-save-markdown-file"
+description = "Allow saving the current Markdown file"
+commands.allow = ["save_markdown_file"]
+
+[[permission]]
+identifier = "allow-resolve-local-image"
+description = "Allow resolving document-relative local images"
+commands.allow = ["resolve_local_image"]
+
+[[permission]]
+identifier = "allow-inspect-markdown-link"
+description = "Allow inspecting Markdown and external links"
+commands.allow = ["inspect_markdown_link"]
+
+[[permission]]
+identifier = "allow-open-external-url"
+description = "Allow opening confirmed HTTP or HTTPS external links"
+commands.allow = ["open_external_url"]
+
+[[permission]]
+identifier = "allow-get-initial-document"
+description = "Allow reading the launch-argument initial document"
+commands.allow = ["get_initial_document"]
+
+[[permission]]
+identifier = "allow-set-unsaved-changes"
+description = "Allow syncing unsaved state for close protection"
+commands.allow = ["set_unsaved_changes"]
+
+[[permission]]
+identifier = "allow-confirm-close"
+description = "Allow confirming window close after discard dialog"
+commands.allow = ["confirm_close"]

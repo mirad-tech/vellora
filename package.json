@@ -1,10 +1,9 @@
 {
   "name": "vellora-editor",
   "productName": "Vellora",
-  "version": "1.2.1",
-  "description": "Vellora local-first Markdown writing app",
+  "version": "2.0.0",
+  "description": "Vellora lightweight Markdown viewer and editor",
   "author": "Vellora Contributors",
-  "main": "out/main/index.js",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -16,108 +15,51 @@
   },
   "homepage": "https://github.com/mirad-tech/markdown-viewer#readme",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
-    "generate:icon": "node build/generate-icon.mjs",
-    "dist": "npm run build && electron-builder",
-    "preview": "electron-vite preview",
+    "dev": "tauri dev",
+    "dev:web": "vite",
+    "build": "npm run typecheck && npm run build:web && tauri build --bundles nsis",
+    "build:web": "vite build",
+    "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run src tests/stage8",
-    "test:stage1": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts",
-    "test:stage2": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/renderer/src/markdown/renderMarkdown.test.ts",
-    "test:stage4": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts",
-    "test:stage5": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/main/imageAccess.test.ts src/main/linkAccess.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts src/renderer/src/markdown/resolveImages.test.ts",
-    "test:stage6": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/main/imageAccess.test.ts src/main/linkAccess.test.ts src/main/workspaceAccess.test.ts src/main/recentStore.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts src/renderer/src/markdown/resolveImages.test.ts",
-    "test:stage7": "vitest run src/main/fileAccess.test.ts src/main/openDialog.test.ts src/main/security.test.ts src/main/paths.test.ts src/shared/ipcChannels.test.ts src/main/imageAccess.test.ts src/main/linkAccess.test.ts src/main/workspaceAccess.test.ts src/main/recentStore.test.ts src/main/documentWrite.test.ts src/renderer/src/markdown/renderMarkdown.test.ts src/renderer/src/markdown/searchHtml.test.ts src/renderer/src/markdown/resolveImages.test.ts",
-    "test:stage8": "vitest run tests/stage8/packaging.test.ts",
-    "test:e2e:stage1": "playwright test tests/e2e/stage1.spec.ts",
-    "test:e2e:stage2": "playwright test tests/e2e/stage2.spec.ts",
-    "test:e2e:stage3": "playwright test tests/e2e/stage3.spec.ts",
-    "test:e2e:stage4": "playwright test tests/e2e/stage4.spec.ts",
-    "test:e2e:stage5": "playwright test tests/e2e/stage5.spec.ts",
-    "test:e2e:stage6": "playwright test tests/e2e/stage6.spec.ts",
-    "test:e2e:stage7": "playwright test tests/e2e/stage7.spec.ts",
-    "test:e2e:stage8": "playwright test tests/e2e/stage8.spec.ts"
-  },
-  "build": {
-    "appId": "app.markdown-viewer.desktop",
-    "productName": "Vellora",
-    "asar": true,
-    "afterPack": "build/afterPack.mjs",
-    "electronDist": "node_modules/electron/dist",
-    "directories": {
-      "buildResources": "build",
-      "output": "release"
-    },
-    "files": [
-      "out/**",
-      "package.json"
-    ],
-    "win": {
-      "icon": "build/icon.ico",
-      "signAndEditExecutable": false,
-      "signExecutable": false,
-      "target": [
-        "nsis"
-      ]
-    },
-    "fileAssociations": [
-      {
-        "ext": "md",
-        "name": "Markdown File",
-        "role": "Editor"
-      },
-      {
-        "ext": "markdown",
-        "name": "Markdown File",
-        "role": "Editor"
-      }
-    ],
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "multiLanguageInstaller": true,
-      "displayLanguageSelector": true,
-      "installerLanguages": [
-        "en_US",
-        "zh_CN"
-      ],
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "runAfterFinish": true,
-      "include": "build/installer.nsh",
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
-    }
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:e2e": "node tests/e2e/smoke.mjs",
+    "test:e2e:ci": "node tests/e2e/smoke.mjs",
+    "test:e2e:desktop": "npm run build:web && cargo build --manifest-path src-tauri/Cargo.toml --release && wdio run wdio.desktop.conf.js",
+    "tauri": "tauri",
+    "dist": "npm run build",
+    "generate:icon": "node build/generate-icon.mjs"
   },
   "dependencies": {
-    "@mdxeditor/editor": "^4.0.3",
+    "@tauri-apps/api": "^2.5.0",
     "dompurify": "^3.4.9",
     "highlight.js": "^11.11.1",
-    "lucide-react": "^1.17.0",
     "markdown-it": "^14.2.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
+    "@tauri-apps/cli": "^2.5.0",
+    "@testing-library/react": "^16.3.0",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^24.3.0",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.0",
-    "@vitest/coverage-v8": "^4.1.8",
-    "electron": "^42.4.0",
-    "electron-builder": "^26.15.2",
-    "electron-vite": "^5.0.0",
-    "esbuild": "0.28.1",
+    "@wdio/cli": "^9.12.0",
+    "@wdio/local-runner": "^9.12.0",
+    "@wdio/mocha-framework": "^9.12.0",
+    "@wdio/native-utils": "2.5.0",
+    "@wdio/spec-reporter": "^9.12.0",
+    "@wdio/tauri-plugin": "^1.2.0",
+    "@wdio/tauri-service": "^1.2.0",
     "jsdom": "^29.1.1",
-    "resedit": "^1.7.2",
+    "puppeteer-core": "^24.43.1",
     "typescript": "^5.9.2",
     "vite": "^7.3.5",
     "vitest": "^4.1.8"
   },
   "overrides": {
-    "esbuild": "0.28.1"
+    "@wdio/native-utils": "2.5.0"
   }
 }

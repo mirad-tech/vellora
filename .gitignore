@@ -2,9 +2,15 @@ node_modules/
 out/
 dist/
 release/
+src-tauri/target/
 test-results/
 playwright-report/
 *.stdout.log
 *.stderr.log
 *.log
 .claude/*.json
+.DS_Store
+Thumbs.db
+*.local
+.env
+.env.*
