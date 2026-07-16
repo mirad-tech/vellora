@@ -3,16 +3,16 @@
 **Windows-only**, local-first lightweight Markdown viewer and source editor.  
 **2.0** is built with **Tauri 2 + React + TypeScript + Vite** — open a `.md` file, read, edit, and save.
 
-> Platform: **Windows only** (NSIS + WebView2). Repository path: `markdown-viewer`; product name: **Vellora**.
+> Platform: **Windows only** (NSIS + WebView2). Repository: [`mirad-tech/vellora`](https://github.com/mirad-tech/vellora).
 
 [中文](README.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
 ## Download (Windows x64)
 
-[**Vellora 2.0.0 setup (NSIS)**](https://github.com/mirad-tech/markdown-viewer/releases/download/v2.0.0/Vellora_2.0.0_x64-setup.exe)
+[**Vellora 2.0.0 setup (NSIS)**](https://github.com/mirad-tech/vellora/releases/download/v2.0.0/Vellora_2.0.0_x64-setup.exe)
 
 - Asset name: `Vellora_2.0.0_x64-setup.exe` (~1.5 MiB)
-- All versions: [Releases](https://github.com/mirad-tech/markdown-viewer/releases)
+- All versions: [Releases](https://github.com/mirad-tech/vellora/releases)
 - Requires **WebView2** (usually preinstalled on Windows 10/11; installer can bootstrap if missing — runtime is not bundled)
 
 Upgrading from 1.x (Electron): **uninstall 1.x first, then install 2.0**.
@@ -76,4 +76,5 @@ tests/e2e/     E2E (browser mock; optional desktop WDIO)
 
 MIT — see [LICENSE](LICENSE). Version **2.0.0**. Changelog: [CHANGELOG.md](CHANGELOG.md).
 
-Issues: <https://github.com/mirad-tech/markdown-viewer/issues>
+App id: `app.markdown-viewer.desktop` (Windows package identity; kept across 1.x→2.0).  
+Issues: <https://github.com/mirad-tech/vellora/issues>

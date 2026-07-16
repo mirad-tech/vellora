@@ -5,7 +5,7 @@
 ### 架构
 
 - **从 Electron 完整迁移到 Tauri 2 + React + Vite**；安装包与运行体积大幅下降。
-- 产品版本 **2.0.0**，应用标识保持 `app.markdown-viewer.desktop`。
+- 产品版本 **2.0.0**，应用标识保持 `app.markdown-viewer.desktop`（Windows 包身份；GitHub 仓库现为 `mirad-tech/vellora`）。
 - Windows NSIS；WebView2 使用 download bootstrapper（不内嵌运行时）。
 - 单实例：第二次启动转发 Markdown 路径并聚焦已有窗口。
 

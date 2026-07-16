@@ -8,12 +8,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mirad-tech/markdown-viewer.git"
+    "url": "https://github.com/mirad-tech/vellora.git"
   },
   "bugs": {
-    "url": "https://github.com/mirad-tech/markdown-viewer/issues"
+    "url": "https://github.com/mirad-tech/vellora/issues"
   },
-  "homepage": "https://github.com/mirad-tech/markdown-viewer#readme",
+  "homepage": "https://github.com/mirad-tech/vellora#readme",
   "scripts": {
     "dev": "tauri dev",
     "dev:web": "vite",

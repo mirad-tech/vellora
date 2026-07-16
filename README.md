@@ -3,16 +3,16 @@
 **Windows** 上的本地优先、轻量 Markdown 查看 / 源码编辑器。  
 **2.0** 基于 **Tauri 2 + React + TypeScript + Vite**，面向「打开一个 `.md` 文件后快速阅读、编辑并保存」。
 
-> 当前平台：**仅 Windows**（NSIS 安装包 + WebView2）。仓库路径名为 `markdown-viewer`，产品名为 **Vellora**。
+> 当前平台：**仅 Windows**（NSIS 安装包 + WebView2）。仓库：[`mirad-tech/vellora`](https://github.com/mirad-tech/vellora)。
 
 [English](README.en.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
 
 ## 下载（Windows x64）
 
-[**Vellora 2.0.0 安装包（NSIS）**](https://github.com/mirad-tech/markdown-viewer/releases/download/v2.0.0/Vellora_2.0.0_x64-setup.exe)
+[**Vellora 2.0.0 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.0.0/Vellora_2.0.0_x64-setup.exe)
 
 - 资产文件名：`Vellora_2.0.0_x64-setup.exe`（约 1.5 MiB）
-- 全部版本：[Releases](https://github.com/mirad-tech/markdown-viewer/releases)
+- 全部版本：[Releases](https://github.com/mirad-tech/vellora/releases)
 - 需要 **WebView2**（多数 Windows 10/11 已自带；否则安装程序会引导下载，运行时不打进安装包）
 
 从 1.x（Electron）升级时，建议 **先卸载 1.x，再安装 2.0**（干净迁移）。
@@ -85,10 +85,10 @@ tests/fixtures/      Markdown 样本
 ## 版本与许可证
 
 - 当前版本：**2.0.0**
-- 应用标识：`app.markdown-viewer.desktop`
+- 应用标识：`app.markdown-viewer.desktop`（Windows 应用身份，与仓库名无关，便于 1.x→2.0 延续）
 - 许可证：[MIT](LICENSE)
 - 变更记录：[CHANGELOG.md](CHANGELOG.md)
 
 ## 贡献与问题
 
-- Issues：<https://github.com/mirad-tech/markdown-viewer/issues>
+- Issues：<https://github.com/mirad-tech/vellora/issues>
