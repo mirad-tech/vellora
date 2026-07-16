@@ -88,6 +88,52 @@ fn map_empty_err<T: serde::Serialize>(err: CommandResult<EmptyPayload>) -> Comma
   }
 }
 
+/// Pure inspect: does not mutate session, unsaved flag, or close flags.
+fn inspect_link_session(
+  state: &AppState,
+  document_path: &str,
+  href: &str,
+) -> CommandResult<LinkInspectData> {
+  let session = match require_session_document(state, document_path) {
+    Ok(p) => p,
+    Err(e) => return map_empty_err(e),
+  };
+  link_access::inspect_markdown_link(session.to_string_lossy().as_ref(), href)
+}
+
+/// Open a local Markdown link only after the caller has confirmed discard.
+/// Re-validates session and href; switches current_document only on success.
+fn open_link_session(
+  state: &AppState,
+  document_path: &str,
+  href: &str,
+) -> CommandResult<DocumentPayload> {
+  let session = match require_session_document(state, document_path) {
+    Ok(p) => p,
+    Err(e) => return map_empty_err(e),
+  };
+
+  match link_access::inspect_markdown_link(session.to_string_lossy().as_ref(), href) {
+    CommandResult::Ok {
+      data: LinkInspectData::Markdown { document, .. },
+      ..
+    } => {
+      set_current_document(state, &document.path);
+      *lock_mutex(&state.has_unsaved_changes) = false;
+      clear_close_flags(state);
+      CommandResult::success(DocumentPayload { document })
+    }
+    CommandResult::Ok {
+      data: LinkInspectData::External { .. },
+      ..
+    } => CommandResult::failure(
+      "UNSUPPORTED_LINK",
+      "请使用外链确认流程打开 HTTP(S) 链接。",
+    ),
+    CommandResult::Err { code, message, .. } => CommandResult::failure(code, message),
+  }
+}
+
 #[tauri::command]
 fn choose_markdown_file(state: State<'_, AppState>) -> CommandResult<DocumentPayload> {
   let result = file_access::choose_markdown_file();
@@ -140,22 +186,16 @@ fn inspect_markdown_link(
   href: String,
   state: State<'_, AppState>,
 ) -> CommandResult<LinkInspectData> {
-  let session = match require_session_document(&state, &document_path) {
-    Ok(p) => p,
-    Err(e) => return map_empty_err(e),
-  };
+  inspect_link_session(&state, &document_path, &href)
+}
 
-  let result = link_access::inspect_markdown_link(session.to_string_lossy().as_ref(), &href);
-  if let CommandResult::Ok {
-    data: LinkInspectData::Markdown { document, .. },
-    ..
-  } = &result
-  {
-    set_current_document(&state, &document.path);
-    *lock_mutex(&state.has_unsaved_changes) = false;
-    clear_close_flags(&state);
-  }
-  result
+#[tauri::command]
+fn open_markdown_link(
+  document_path: String,
+  href: String,
+  state: State<'_, AppState>,
+) -> CommandResult<DocumentPayload> {
+  open_link_session(&state, &document_path, &href)
 }
 
 #[tauri::command]
@@ -205,7 +245,6 @@ fn confirm_close(
   *lock_mutex(&state.close_prompt_pending) = false;
 
   if let Some(window) = app.get_webview_window("main") {
-    // Prefer close() so CloseRequested re-enters with one-shot allow_close.
     if window.close().is_err() {
       *lock_mutex(&state.allow_close) = false;
       return CommandResult::failure("CLOSE_FAILED", "无法关闭窗口。");
@@ -254,11 +293,6 @@ pub fn run() {
     handle_second_instance(app, args);
   }));
 
-  // WebdriverIO E2E: execute/mock + embedded WebDriver (port only when service starts it).
-  builder = builder
-    .plugin(tauri_plugin_wdio::init())
-    .plugin(tauri_plugin_wdio_webdriver::init());
-
   builder
     .manage(AppState::default())
     .setup(|app| {
@@ -274,7 +308,6 @@ pub fn run() {
         let app = window.app_handle();
         let state = app.state::<AppState>();
 
-        // One-shot: consume allow_close so a failed/aborted close cannot stick.
         let allow = {
           let mut guard = lock_mutex(&state.allow_close);
           let value = *guard;
@@ -296,7 +329,6 @@ pub fn run() {
 
         let mut pending = lock_mutex(&state.close_prompt_pending);
         if *pending {
-          // Second close attempt while frontend may be unresponsive: native fallback.
           drop(pending);
           if native_discard_dialog() {
             *lock_mutex(&state.allow_close) = true;
@@ -320,6 +352,7 @@ pub fn run() {
       save_markdown_file,
       resolve_local_image,
       inspect_markdown_link,
+      open_markdown_link,
       open_external_url,
       get_initial_document,
       set_unsaved_changes,
@@ -327,4 +360,153 @@ pub fn run() {
     ])
     .run(tauri::generate_context!())
     .expect("error while running Vellora");
+}
+
+#[cfg(test)]
+mod session_link_tests {
+  use super::*;
+  use std::fs;
+  use tempfile::tempdir;
+
+  /// Open and return the session path as stored by the backend (canonical).
+  fn open_session(state: &AppState, path: &str, content: &str) -> String {
+    fs::write(path, content).unwrap();
+    let result = file_access::read_markdown_file(path);
+    remember_opened(state, &result);
+    match result {
+      CommandResult::Ok { data, .. } => data.document.path,
+      CommandResult::Err { code, message, .. } => panic!("{code}: {message}"),
+    }
+  }
+
+  #[test]
+  fn inspect_does_not_change_session_or_unsaved() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.md");
+    let target = dir.path().join("target.md");
+    fs::write(&target, "# target").unwrap();
+
+    let state = AppState::default();
+    let session_path = open_session(
+      &state,
+      source.to_str().unwrap(),
+      "# source\n\n[t](target.md)\n",
+    );
+    *lock_mutex(&state.has_unsaved_changes) = true;
+
+    let before = lock_mutex(&state.current_document).clone();
+    let result = inspect_link_session(&state, &session_path, "target.md");
+    assert!(
+      matches!(
+        result,
+        CommandResult::Ok {
+          data: LinkInspectData::Markdown { .. },
+          ..
+        }
+      ),
+      "unexpected: {result:?}"
+    );
+    assert_eq!(*lock_mutex(&state.current_document), before);
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+  }
+
+  #[test]
+  fn open_link_switches_session_only_on_success() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.md");
+    let target = dir.path().join("target.md");
+    fs::write(&target, "# target body").unwrap();
+
+    let state = AppState::default();
+    let session_path = open_session(&state, source.to_str().unwrap(), "# source");
+    *lock_mutex(&state.has_unsaved_changes) = true;
+
+    let result = open_link_session(&state, &session_path, "target.md");
+    match result {
+      CommandResult::Ok { data, .. } => {
+        assert_eq!(data.document.content, "# target body");
+        let current = lock_mutex(&state.current_document).clone().unwrap();
+        assert!(path_policy::paths_equal(
+          &current,
+          std::path::Path::new(&data.document.path)
+        ));
+        assert!(!*lock_mutex(&state.has_unsaved_changes));
+      }
+      CommandResult::Err { code, message, .. } => panic!("{code}: {message}"),
+    }
+  }
+
+  #[test]
+  fn open_fails_after_inspect_when_target_deleted_keeps_session_and_dirty() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.md");
+    let target = dir.path().join("target.md");
+    fs::write(&target, "# target").unwrap();
+
+    let state = AppState::default();
+    let session_path = open_session(
+      &state,
+      source.to_str().unwrap(),
+      "# source\n\n[t](target.md)\n",
+    );
+    *lock_mutex(&state.has_unsaved_changes) = true;
+    *lock_mutex(&state.close_prompt_pending) = true;
+
+    let inspected = inspect_link_session(&state, &session_path, "target.md");
+    assert!(matches!(
+      inspected,
+      CommandResult::Ok {
+        data: LinkInspectData::Markdown { .. },
+        ..
+      }
+    ));
+
+    fs::remove_file(&target).unwrap();
+
+    let opened = open_link_session(&state, &session_path, "target.md");
+    match &opened {
+      CommandResult::Err { code, .. } => assert_eq!(code, "NOT_FOUND"),
+      other => panic!("expected NOT_FOUND, got {other:?}"),
+    }
+
+    let current = lock_mutex(&state.current_document).clone().unwrap();
+    assert!(path_policy::paths_equal(
+      &current,
+      std::path::Path::new(&session_path)
+    ));
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+    // Failure must not clear close-protection flags
+    assert!(*lock_mutex(&state.close_prompt_pending));
+  }
+
+  #[test]
+  fn external_and_failures_keep_session() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.md");
+    let state = AppState::default();
+    let session_path = open_session(&state, source.to_str().unwrap(), "# source");
+    let before = lock_mutex(&state.current_document).clone();
+    *lock_mutex(&state.has_unsaved_changes) = true;
+
+    let ext = open_link_session(&state, &session_path, "https://example.com/");
+    assert!(matches!(ext, CommandResult::Err { .. }));
+    assert_eq!(*lock_mutex(&state.current_document), before);
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+
+    let dang = open_link_session(&state, &session_path, "javascript:alert(1)");
+    assert!(matches!(dang, CommandResult::Err { .. }));
+    assert_eq!(*lock_mutex(&state.current_document), before);
+
+    let trav = open_link_session(&state, &session_path, "../secret.md");
+    assert!(matches!(trav, CommandResult::Err { .. }));
+    assert_eq!(*lock_mutex(&state.current_document), before);
+
+    let mismatch = open_link_session(&state, r"C:\other\not-session.md", "target.md");
+    assert!(matches!(
+      mismatch,
+      CommandResult::Err { code, .. } if code == "SESSION_MISMATCH"
+    ));
+    assert_eq!(*lock_mutex(&state.current_document), before);
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+  }
 }

@@ -14,6 +14,9 @@ Thumbs.db
 .env
 .env.*
 
+# Local WebDriver binaries (npm run tools:msedgedriver)
+tools/webdriver/
+
 # Local AI / coding-agent instruction files (keep on machine, not public repo)
 AGENTS.md
 CLAUDE.md

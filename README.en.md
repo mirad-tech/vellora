@@ -52,6 +52,34 @@ npm run test:e2e
 npm run dist
 ```
 
+### Desktop E2E (real IPC, external drivers)
+
+Release builds **do not** embed WebDriver. Desktop E2E uses external drivers and **never** falls back to mocks:
+
+1. **Close every running Vellora window first.** Before driver checks / build, and again after the release build, if any `vellora.exe` is found the script **aborts safely** without ending those processes.
+2. If process status cannot be queried (PowerShell/CIM failure, invalid response, etc.), the script also **aborts safely** and does not treat a query failure as “no processes”.
+3. `cargo install tauri-driver --locked` (on PATH)
+4. Install `msedgedriver` matching your Edge major version (required native driver for `tauri-driver`; cannot be omitted):
+   - Recommended: `npm run tools:msedgedriver` (installs to `tools/webdriver/msedgedriver.exe`; the launcher finds it automatically)
+   - Or download from [Edge WebDriver](https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/) and put it on PATH / set `MSEDGEDRIVER_PATH`
+5. Docs: [Tauri WebDriver](https://v2.tauri.app/develop/tests/webdriver/)
+
+```bash
+npm run test:e2e:desktop
+```
+
+**Process safety (verifiable):**
+
+- Each run generates a unique session token `VELLORA_E2E_SESSION` (UUID) and passes `--vellora-e2e-session=<UUID>` to the test app instance.
+- Cleanup only stops: the WDIO and `tauri-driver` processes this script spawned, plus Vellora processes that, on **re-query**, match both the release `vellora.exe` path and the full session token in the command line.
+- It does not use `taskkill /IM vellora.exe`, bulk-kill by name/path, or infer ownership from “appeared after the test started”.
+- If re-query fails during cleanup: WDIO / `tauri-driver` may still be stopped, but **no** unverified Vellora PID is killed, and the E2E run is marked failed.
+
+Missing drivers, version mismatch, a pre-existing Vellora process, or a process-query failure fails the run with a non-zero exit code.
+
+Desktop E2E builds with `cargo build --release --features custom-protocol` so the app loads embedded frontend assets (not the dev server at `http://localhost:1420`). For installers use `npm run build` / `tauri build`.
+
+
 Installer output:
 
 `src-tauri/target/release/bundle/nsis/Vellora_2.0.0_x64-setup.exe`

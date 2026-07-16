@@ -8,6 +8,8 @@
 - 产品版本 **2.0.0**，应用标识保持 `app.markdown-viewer.desktop`（Windows 包身份；GitHub 仓库现为 `mirad-tech/vellora`）。
 - Windows NSIS；WebView2 使用 download bootstrapper（不内嵌运行时）。
 - 单实例：第二次启动转发 Markdown 路径并聚焦已有窗口。
+- **正式 release 不嵌入 WebDriver / WDIO 插件**；桌面 E2E 仅使用外置 `tauri-driver` + `msedgedriver`。
+- 本地 Markdown 链接：`inspect_markdown_link` 不改会话；用户确认放弃后才 `open_markdown_link` 切换文档。
 
 ### 功能（保留）
 
@@ -33,7 +35,10 @@
 ### 测试与工程
 
 - 前端 Vitest、Rust `cargo test`、浏览器 E2E（Edge + puppeteer-core）。
-- 可选桌面 WDIO 配置与 `tauri-plugin-wdio` / `wdio-webdriver` 集成。
+- 桌面 E2E 使用外置 `tauri-driver` + `msedgedriver`（正式 release **不**嵌入 WebDriver）。
+- 桌面 E2E 进程安全：PowerShell/CIM 查询 fail-closed；每次运行唯一 `VELLORA_E2E_SESSION` 令牌识别测试实例；清理仅结束 WDIO、`tauri-driver` 与携带本次令牌的 Vellora。
+- 桌面 E2E 驱动：`npm run tools:msedgedriver` 安装匹配 Edge 的本地驱动；release 构建启用 `custom-protocol`；WDIO 强制经典 WebDriver（禁用 BiDi `about:blank`）；兼容 WebDriver 将路径写成 `--C:\…` 的启动参数。
+- 跳转失败（`openMarkdownLink` NOT_FOUND）后的关闭保护有前端回归测试。
 
 ### 迁移
 

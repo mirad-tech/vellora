@@ -18,6 +18,7 @@ import {
   onOpenFilePath,
   openExternalUrl,
   openMarkdownFile,
+  openMarkdownLink,
   resolveLocalImage,
   saveMarkdownFile,
   setUnsavedChanges
@@ -73,10 +74,13 @@ export default function App() {
     null | { reason: 'open' | 'close' | 'switch'; proceed: () => void }
   >(null);
   const [statusMessage, setStatusMessage] = useState('');
+  const [documentOpenPending, setDocumentOpenPending] = useState(false);
 
   const readerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const imageRequestId = useRef(0);
+  const documentRequestId = useRef(0);
+  const documentOpenPendingRef = useRef(false);
   const viewStateRef = useRef(viewState);
   const draftRef = useRef(draftContent);
   const initialLoadStarted = useRef(false);
@@ -93,6 +97,7 @@ export default function App() {
 
   const updateDraft = useCallback(
     (value: string) => {
+      if (documentOpenPendingRef.current) return;
       setDraftContent(value);
       draftRef.current = value;
       const dirty = isReadyDirty(viewStateRef.current, value);
@@ -101,6 +106,19 @@ export default function App() {
     },
     [syncUnsaved]
   );
+
+  const beginDocumentRequest = useCallback(() => {
+    const requestId = ++documentRequestId.current;
+    documentOpenPendingRef.current = true;
+    setDocumentOpenPending(true);
+    return requestId;
+  }, []);
+
+  const finishDocumentRequest = useCallback((requestId: number) => {
+    if (requestId !== documentRequestId.current) return;
+    documentOpenPendingRef.current = false;
+    setDocumentOpenPending(false);
+  }, []);
 
   // Keep backend in sync on non-edit transitions (open / save / apply).
   useEffect(() => {
@@ -184,41 +202,108 @@ export default function App() {
     []
   );
 
+  /** Restore non-ready UI after a failed open; a ready document is preserved in place. */
+  const restoreAfterFailedOpen = useCallback(
+    (prevView: ViewState, message?: string) => {
+      if (prevView.status === 'ready') {
+        // The ready document remains visible while opening. Preserve any edits or save
+        // that happened while the request was pending instead of restoring a stale snapshot.
+        const currentView = viewStateRef.current;
+        const currentDraft = draftRef.current;
+        if (currentView.status === 'ready') {
+          syncUnsaved(isReadyDirty(currentView, currentDraft));
+        }
+        if (message) setStatusMessage(message);
+        return;
+      }
+      if (prevView.status === 'loading' || prevView.status === 'empty') {
+        setViewState({ status: 'empty' });
+        syncUnsaved(false);
+        return;
+      }
+      setViewState(prevView);
+      if (message) setStatusMessage(message);
+    },
+    [syncUnsaved]
+  );
+
+  const applyOpenResult = useCallback(
+    (requestId: number, document: MarkdownDocument) => {
+      if (requestId !== documentRequestId.current) return;
+      finishDocumentRequest(requestId);
+      applyDocument(document);
+    },
+    [applyDocument, finishDocumentRequest]
+  );
+
   const openPath = useCallback(
     (path: string) => {
       confirmIfDirty('open', () => {
-        setViewState({ status: 'loading' });
+        const requestId = beginDocumentRequest();
+        const prevView = viewStateRef.current;
+        if (prevView.status !== 'ready') {
+          setViewState({ status: 'loading' });
+        }
         void openMarkdownFile(path).then((result) => {
+          if (requestId !== documentRequestId.current) return;
           if (result.ok) {
-            applyDocument(result.document);
-          } else if (result.code !== 'CANCELED') {
-            setViewState({ status: 'error', message: result.message });
-          } else {
-            setViewState({ status: 'empty' });
+            applyOpenResult(requestId, result.document);
+            return;
           }
-        });
+          if (result.code === 'CANCELED') {
+            restoreAfterFailedOpen(prevView);
+            return;
+          }
+          restoreAfterFailedOpen(prevView, result.message);
+          if (prevView.status !== 'ready') {
+            setViewState({ status: 'error', message: result.message });
+          }
+        }).finally(() => finishDocumentRequest(requestId));
       });
     },
-    [applyDocument, confirmIfDirty]
+    [
+      applyOpenResult,
+      beginDocumentRequest,
+      confirmIfDirty,
+      finishDocumentRequest,
+      restoreAfterFailedOpen
+    ]
   );
 
   const handleChooseFile = useCallback(() => {
+    if (documentOpenPendingRef.current) return;
     confirmIfDirty('open', () => {
-      setViewState((prev) => (prev.status === 'ready' ? prev : { status: 'loading' }));
+      const requestId = beginDocumentRequest();
+      const prevView = viewStateRef.current;
+      if (prevView.status !== 'ready') {
+        setViewState({ status: 'loading' });
+      }
       void chooseMarkdownFile().then((result) => {
+        if (requestId !== documentRequestId.current) return;
         if (result.ok) {
-          applyDocument(result.document);
-        } else if (result.code === 'CANCELED') {
-          setViewState((prev) => (prev.status === 'loading' ? { status: 'empty' } : prev));
-        } else {
+          applyOpenResult(requestId, result.document);
+          return;
+        }
+        if (result.code === 'CANCELED') {
+          restoreAfterFailedOpen(prevView);
+          return;
+        }
+        restoreAfterFailedOpen(prevView, result.message);
+        if (prevView.status !== 'ready') {
           setViewState({ status: 'error', message: result.message });
         }
-      });
+      }).finally(() => finishDocumentRequest(requestId));
     });
-  }, [applyDocument, confirmIfDirty]);
+  }, [
+    applyOpenResult,
+    beginDocumentRequest,
+    confirmIfDirty,
+    finishDocumentRequest,
+    restoreAfterFailedOpen
+  ]);
 
   const handleSave = useCallback(async () => {
-    if (viewState.status !== 'ready') return;
+    if (viewState.status !== 'ready' || documentOpenPendingRef.current) return;
     setSaveState({ status: 'saving' });
     const result = await saveMarkdownFile(viewState.document.path, draftContent);
     if (result.ok) {
@@ -243,6 +328,7 @@ export default function App() {
 
   const handleMarkdownNavigation = useCallback(
     async (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (documentOpenPendingRef.current) return;
       const target = event.target as HTMLElement | null;
       const anchor = target?.closest('a');
       if (!anchor || viewState.status !== 'ready') return;
@@ -272,7 +358,8 @@ export default function App() {
         return;
       }
 
-      const result = await inspectMarkdownLink(viewState.document.path, href);
+      const sourcePath = viewState.document.path;
+      const result = await inspectMarkdownLink(sourcePath, href);
       if (!result.ok) {
         setStatusMessage(result.message);
         return;
@@ -283,11 +370,23 @@ export default function App() {
         return;
       }
 
+      // Local Markdown: only switch session after user confirms discard (if dirty).
       confirmIfDirty('switch', () => {
-        applyDocument(result.document);
+        const requestId = beginDocumentRequest();
+        void openMarkdownLink(sourcePath, href).then((opened) => {
+          if (requestId !== documentRequestId.current) return;
+          if (opened.ok) {
+            applyOpenResult(requestId, opened.document);
+            return;
+          }
+          // Failed open must not clear dirty / replace document.
+          const stillDirty = isReadyDirty(viewStateRef.current, draftRef.current);
+          syncUnsaved(stillDirty);
+          setStatusMessage(opened.message);
+        }).finally(() => finishDocumentRequest(requestId));
       });
     },
-    [applyDocument, confirmIfDirty, viewState]
+    [applyOpenResult, beginDocumentRequest, confirmIfDirty, finishDocumentRequest, syncUnsaved, viewState]
   );
 
   const handleConfirmExternal = useCallback(async () => {
@@ -302,8 +401,11 @@ export default function App() {
   useEffect(() => {
     if (initialLoadStarted.current) return;
     initialLoadStarted.current = true;
+    // Initial CLI probing must not block the Open button. A manual request increments
+    // the same sequence and makes a late initial result stale.
+    const requestId = ++documentRequestId.current;
     void getInitialDocument().then((result) => {
-      if (result.ok) {
+      if (requestId === documentRequestId.current && result.ok) {
         applyDocument(result.document);
       }
     });
@@ -323,7 +425,7 @@ export default function App() {
 
     void onCloseRequested(() => {
       confirmIfDirty('close', () => {
-        syncUnsaved(false);
+        // allow_close one-shot closes without requiring dirty=false first
         void confirmClose(true);
       });
     }).then((u) => unsubs.push(u));
@@ -331,7 +433,7 @@ export default function App() {
     return () => {
       for (const u of unsubs) u();
     };
-  }, [confirmIfDirty, openPath, syncUnsaved]);
+  }, [confirmIfDirty, openPath]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -392,7 +494,13 @@ export default function App() {
   return (
     <div className="app-shell" data-testid="app-shell">
       <header className="toolbar" data-testid="toolbar">
-        <button type="button" className="toolbar-btn" data-testid="btn-open" onClick={handleChooseFile}>
+        <button
+          type="button"
+          className="toolbar-btn"
+          data-testid="btn-open"
+          disabled={documentOpenPending}
+          onClick={handleChooseFile}
+        >
           打开
         </button>
         <div className="mode-toggle" role="group" aria-label="模式">
@@ -400,7 +508,7 @@ export default function App() {
             type="button"
             className={editorMode === 'read' ? 'toolbar-btn active' : 'toolbar-btn'}
             data-testid="btn-read"
-            disabled={viewState.status !== 'ready'}
+            disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => setEditorMode('read')}
           >
             阅读
@@ -409,7 +517,7 @@ export default function App() {
             type="button"
             className={editorMode === 'edit' ? 'toolbar-btn active' : 'toolbar-btn'}
             data-testid="btn-edit"
-            disabled={viewState.status !== 'ready'}
+            disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => setEditorMode('edit')}
           >
             编辑
@@ -419,7 +527,9 @@ export default function App() {
           type="button"
           className="toolbar-btn"
           data-testid="btn-save"
-          disabled={viewState.status !== 'ready' || saveState.status === 'saving'}
+          disabled={
+            viewState.status !== 'ready' || saveState.status === 'saving' || documentOpenPending
+          }
           onClick={() => void handleSave()}
         >
           {saveLabel}
@@ -551,7 +661,12 @@ export default function App() {
             <div className="empty-state" data-testid="empty-state">
               <p>未打开文件</p>
               <p className="muted">请选择 .md 或 .markdown 文件。</p>
-              <button type="button" className="toolbar-btn primary" onClick={handleChooseFile}>
+              <button
+                type="button"
+                className="toolbar-btn primary"
+                disabled={documentOpenPending}
+                onClick={handleChooseFile}
+              >
                 打开
               </button>
             </div>
@@ -567,7 +682,12 @@ export default function App() {
             <div className="empty-state" data-testid="error-state">
               <p>打开失败</p>
               <p className="muted">{viewState.message}</p>
-              <button type="button" className="toolbar-btn primary" onClick={handleChooseFile}>
+              <button
+                type="button"
+                className="toolbar-btn primary"
+                disabled={documentOpenPending}
+                onClick={handleChooseFile}
+              >
                 重新选择
               </button>
             </div>
@@ -578,6 +698,7 @@ export default function App() {
               className="source-editor"
               data-testid="source-editor"
               value={draftContent}
+              disabled={documentOpenPending}
               spellCheck={false}
               onChange={(e) => updateDraft(e.target.value)}
             />
@@ -653,14 +774,9 @@ export default function App() {
                 className="toolbar-btn danger"
                 data-testid="discard-confirm"
                 onClick={() => {
-                  const { proceed, reason } = discardDialog;
+                  const { proceed } = discardDialog;
                   setDiscardDialog(null);
-                  if (reason === 'close' || reason === 'open' || reason === 'switch') {
-                    // Dropping dirty state before proceeding keeps backend close guard in sync.
-                    if (reason !== 'close') {
-                      syncUnsaved(false);
-                    }
-                  }
+                  // Do not clear dirty here — only successful document replace clears it.
                   proceed();
                 }}
               >

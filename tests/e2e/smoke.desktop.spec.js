@@ -1,104 +1,134 @@
 /**
- * Desktop E2E against release binary (see wdio.desktop.conf.js).
- * Same scenarios as browser-mode smoke; uses real IPC where possible.
+ * Real desktop E2E: no invoke mocks, no __TAURI_INTERNALS__ overrides.
+ * App is launched with VELLORA_E2E_SOURCE as CLI arg (set by run-desktop.mjs).
  */
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
-const sampleContent =
-  '# 标题一\n\n正文搜索词 hello\n\n## 标题二\n\n[外链](https://example.com/path)\n';
+const sourcePath = process.env.VELLORA_E2E_SOURCE;
+const targetPath = process.env.VELLORA_E2E_TARGET;
 
-function writeTempMarkdown() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vellora-e2e-'));
-  const filePath = path.join(dir, 'sample.md');
-  fs.writeFileSync(filePath, sampleContent, 'utf8');
-  return filePath;
-}
-
-async function waitForAppReady() {
-  await $('[data-testid="app-shell"]').waitForDisplayed({ timeout: 60000 });
-}
-
-async function installBridge(filePath) {
-  return browser.execute((p) => {
-    const internals = window.__TAURI_INTERNALS__;
-    if (!internals?.invoke) return { ok: false, reason: 'no-invoke' };
-    if (!internals.__velloraOriginalInvoke) {
-      internals.__velloraOriginalInvoke = internals.invoke.bind(internals);
+async function clickLinkByHrefFragment(fragment) {
+  const anchors = await $$('[data-testid="markdown-body"] a');
+  for (const a of anchors) {
+    const href = (await a.getAttribute('data-md-href')) || (await a.getAttribute('href')) || '';
+    if (href.includes(fragment)) {
+      await a.click();
+      return true;
     }
-    const original = internals.__velloraOriginalInvoke;
-    internals.invoke = async (cmd, args) => {
-      if (cmd === 'choose_markdown_file') {
-        return original('open_markdown_file', { path: p });
-      }
-      if (cmd === 'open_external_url') return { ok: true };
-      return original(cmd, args);
-    };
-    return { ok: true };
-  }, filePath);
-}
-
-async function openSample() {
-  const openBtn = await $('[data-testid="btn-open"]');
-  await openBtn.click();
-  const discard = await $('[data-testid="discard-modal"]');
-  if (await discard.isDisplayed().catch(() => false)) {
-    await $('[data-testid="discard-confirm"]').click();
-    await openBtn.click();
   }
-  await $('[data-testid="markdown-body"]').waitForDisplayed({ timeout: 20000 });
+  return false;
 }
 
-describe('Vellora 2.0 desktop smoke', () => {
-  let tempMd;
+async function enterEditAndSetValue(value) {
+  await $('[data-testid="btn-edit"]').click();
+  const editor = await $('[data-testid="source-editor"]');
+  await editor.waitForDisplayed({ timeout: 10000 });
+  await editor.setValue(value);
+  return editor;
+}
 
-  before(async () => {
-    tempMd = writeTempMarkdown();
-    await waitForAppReady();
-    const bridge = await installBridge(tempMd);
-    if (!bridge?.ok) throw new Error(`bridge: ${bridge?.reason}`);
-  });
+describe('Vellora desktop E2E (real IPC)', () => {
+  it('CLI open, save, failed link, success link, search, outline, external cancel', async () => {
+    expect(Boolean(sourcePath && fs.existsSync(sourcePath))).toBe(true);
+    expect(Boolean(targetPath && fs.existsSync(targetPath))).toBe(true);
 
-  beforeEach(() => {
-    fs.writeFileSync(tempMd, sampleContent, 'utf8');
-  });
+    // 1) Launch arg opens source.md
+    const body = await $('[data-testid="markdown-body"]');
+    await body.waitForDisplayed({ timeout: 60000 });
+    expect(await body.getText()).toContain('源文档');
 
-  after(() => {
-    try {
-      fs.unlinkSync(tempMd);
-      fs.rmdirSync(path.dirname(tempMd));
-    } catch {
-      // ignore
-    }
-  });
-
-  it('opens, edits, searches, outlines, and confirms external links', async () => {
-    await openSample();
-    expect(await $('[data-testid="markdown-body"]').getText()).toContain('标题一');
-
-    await $('[data-testid="btn-edit"]').click();
-    await (await $('[data-testid="source-editor"]')).setValue('# 保存测试\n');
+    // 2) Edit + save source on disk
+    let sourceText = fs.readFileSync(sourcePath, 'utf8');
+    await enterEditAndSetValue(sourceText.replace('正文搜索词 alpha', '正文搜索词 alpha 已保存'));
     await $('[data-testid="btn-save"]').click();
-    await browser.waitUntil(async () => fs.readFileSync(tempMd, 'utf8').includes('保存测试'), {
-      timeout: 10000
+    await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('已保存'), {
+      timeout: 15000,
+      timeoutMsg: 'disk content not updated after save'
     });
 
-    fs.writeFileSync(tempMd, sampleContent, 'utf8');
-    await openSample();
+    // 3) Dirty + local link + cancel discard: stay on source; save still works
+    sourceText = fs.readFileSync(sourcePath, 'utf8');
+    await enterEditAndSetValue(`${sourceText}\n草稿`);
+    await $('[data-testid="btn-read"]').click();
+    await body.waitForDisplayed();
+    expect(await clickLinkByHrefFragment('target.md')).toBe(true);
+    const discard = await $('[data-testid="discard-modal"]');
+    await discard.waitForDisplayed({ timeout: 10000 });
+    await $('[data-testid="discard-cancel"]').click();
+    await discard.waitForDisplayed({ reverse: true, timeout: 5000 });
+
+    await enterEditAndSetValue(`${fs.readFileSync(sourcePath, 'utf8')}\n草稿 再保存`);
+    await $('[data-testid="btn-save"]').click();
+    await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('再保存'), {
+      timeout: 15000,
+      timeoutMsg: 'save after cancel local-link failed (session mismatch?)'
+    });
+
+    // 3b) Dirty + delete target before discard confirm -> stay on source, can save
+    sourceText = fs.readFileSync(sourcePath, 'utf8');
+    const draftKeep = `${sourceText}\n失败跳转草稿`;
+    await enterEditAndSetValue(draftKeep);
+    await $('[data-testid="btn-read"]').click();
+    await body.waitForDisplayed();
+    expect(await clickLinkByHrefFragment('target.md')).toBe(true);
+    await discard.waitForDisplayed({ timeout: 10000 });
+    fs.unlinkSync(targetPath);
+    await $('[data-testid="discard-confirm"]').click();
+    // Should remain on source with draft
+    await browser.waitUntil(
+      async () => {
+        const status = await $('[data-testid="status-text"]').getText();
+        return status.includes('不存在') || status.includes('失败') || status.includes('找不到');
+      },
+      { timeout: 15000, timeoutMsg: 'expected open failure status message' }
+    );
+    await enterEditAndSetValue(draftKeep + ' 仍可保存');
+    await $('[data-testid="btn-save"]').click();
+    await browser.waitUntil(
+      async () => fs.readFileSync(sourcePath, 'utf8').includes('仍可保存'),
+      { timeout: 15000, timeoutMsg: 'save after failed open_markdown_link failed' }
+    );
+
+    // Recreate target for success path
+    fs.writeFileSync(
+      targetPath,
+      '# 目标文档\n\n来自链接跳转。\n\n[外链](https://example.com/path)\n',
+      'utf8'
+    );
+
+    // 4) Local link + 放弃更改 -> target.md
+    sourceText = fs.readFileSync(sourcePath, 'utf8');
+    await enterEditAndSetValue(`${sourceText}\n临时`);
+    await $('[data-testid="btn-read"]').click();
+    await body.waitForDisplayed();
+    expect(await clickLinkByHrefFragment('target.md')).toBe(true);
+    await discard.waitForDisplayed({ timeout: 10000 });
+    await $('[data-testid="discard-confirm"]').click();
+    await browser.waitUntil(async () => (await body.getText()).includes('目标文档'), {
+      timeout: 20000,
+      timeoutMsg: 'did not open target.md after discard'
+    });
+
+    // 5) Search + outline on target
     await $('[data-testid="btn-search"]').click();
-    await (await $('[data-testid="search-input"]')).setValue('搜索词');
+    const input = await $('[data-testid="search-input"]');
+    await input.waitForDisplayed();
+    await input.setValue('链接跳转');
     await browser.waitUntil(
       async () => (await $('[data-testid="search-count"]').getText()).includes('/'),
       { timeout: 8000 }
     );
 
     await $('[data-testid="btn-outline"]').click();
+    await $('[data-testid="outline-panel"]').waitForDisplayed();
     expect((await $$('[data-testid="outline-item"]')).length).toBeGreaterThanOrEqual(1);
 
-    const link = await $('[data-testid="markdown-body"] a');
-    await link.click();
-    await $('[data-testid="external-link-modal"]').waitForDisplayed({ timeout: 8000 });
+    // 6) External link confirm + cancel
+    expect(await clickLinkByHrefFragment('example.com')).toBe(true);
+    const external = await $('[data-testid="external-link-modal"]');
+    await external.waitForDisplayed({ timeout: 10000 });
     await $('[data-testid="external-cancel"]').click();
+    await external.waitForDisplayed({ reverse: true, timeout: 5000 });
+    expect(await body.getText()).toContain('目标文档');
   });
 });

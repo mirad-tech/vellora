@@ -19,6 +19,7 @@ const {
   saveMarkdownFile,
   resolveLocalImage,
   inspectMarkdownLink,
+  openMarkdownLink,
   openExternalUrl,
   getInitialDocument,
   setUnsavedChanges,
@@ -32,6 +33,7 @@ const {
   saveMarkdownFile: vi.fn(),
   resolveLocalImage: vi.fn(),
   inspectMarkdownLink: vi.fn(),
+  openMarkdownLink: vi.fn(),
   openExternalUrl: vi.fn(),
   getInitialDocument: vi.fn(),
   setUnsavedChanges: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock('./api/tauri', () => ({
   saveMarkdownFile,
   resolveLocalImage,
   inspectMarkdownLink,
+  openMarkdownLink,
   openExternalUrl,
   getInitialDocument,
   setUnsavedChanges,
@@ -59,8 +62,14 @@ vi.mock('./api/tauri', () => ({
 import App from './App';
 
 describe('App', () => {
+  /** Captured from onCloseRequested so tests can invoke close protection. */
+  let closeRequestedHandler: (() => void) | null = null;
+  let openFilePathHandler: ((path: string) => void) | null = null;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    closeRequestedHandler = null;
+    openFilePathHandler = null;
     getInitialDocument.mockResolvedValue({ ok: false, code: 'NO_INITIAL', message: '没有初始文档。' });
     setUnsavedChanges.mockResolvedValue({ ok: true });
     confirmClose.mockResolvedValue({ ok: true });
@@ -80,13 +89,39 @@ describe('App', () => {
       action: 'external',
       url: 'https://example.com/'
     });
+    openMarkdownLink.mockResolvedValue({
+      ok: true,
+      document: {
+        path: 'C:\\docs\\other.md',
+        name: 'other.md',
+        content: '# 目标文档\n',
+        modifiedAt: 2,
+        size: 16
+      }
+    });
     openExternalUrl.mockResolvedValue({ ok: true });
-    onOpenFilePath.mockResolvedValue(() => undefined);
-    onCloseRequested.mockResolvedValue(() => undefined);
+    onOpenFilePath.mockImplementation((handler: (path: string) => void) => {
+      openFilePathHandler = handler;
+      return Promise.resolve(() => {
+        if (openFilePathHandler === handler) {
+          openFilePathHandler = null;
+        }
+      });
+    });
+    onCloseRequested.mockImplementation((handler: () => void) => {
+      closeRequestedHandler = handler;
+      return Promise.resolve(() => {
+        if (closeRequestedHandler === handler) {
+          closeRequestedHandler = null;
+        }
+      });
+    });
     onDragDropPaths.mockResolvedValue(() => undefined);
   });
 
   afterEach(() => {
+    closeRequestedHandler = null;
+    openFilePathHandler = null;
     cleanup();
   });
 
@@ -239,6 +274,426 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalled();
+    });
+  });
+
+  test('dirty local link cancel does not call openMarkdownLink; save still uses source path', async () => {
+    const localDoc: MarkdownDocument = {
+      path: 'C:\\docs\\source.md',
+      name: 'source.md',
+      content: '# 源\n\n[本地](./other.md)\n',
+      modifiedAt: 1,
+      size: 24
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: localDoc });
+    inspectMarkdownLink.mockResolvedValueOnce({
+      ok: true,
+      action: 'markdown',
+      document: {
+        path: 'C:\\docs\\other.md',
+        name: 'other.md',
+        content: '# 目标\n',
+        modifiedAt: 2,
+        size: 8
+      }
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 源\n\n[本地](./other.md)\n\n草稿\n' }
+    });
+    fireEvent.click(screen.getByTestId('btn-read'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    const link = screen.getByTestId('markdown-body').querySelector('a');
+    expect(link).toBeTruthy();
+    fireEvent.click(link!);
+
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('discard-cancel'));
+    expect(openMarkdownLink).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('btn-save'));
+    await waitFor(() => {
+      expect(saveMarkdownFile).toHaveBeenCalledWith(
+        'C:\\docs\\source.md',
+        '# 源\n\n[本地](./other.md)\n\n草稿\n'
+      );
+    });
+  });
+
+  test('openMarkdownLink NOT_FOUND keeps source draft, dirty state, and close protection', async () => {
+    const localDoc: MarkdownDocument = {
+      path: 'C:\\docs\\source.md',
+      name: 'source.md',
+      content: '# 源\n\n[本地](./other.md)\n',
+      modifiedAt: 1,
+      size: 24
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: localDoc });
+    inspectMarkdownLink.mockResolvedValueOnce({
+      ok: true,
+      action: 'markdown',
+      document: {
+        path: 'C:\\docs\\other.md',
+        name: 'other.md',
+        content: '# 目标\n',
+        modifiedAt: 2,
+        size: 8
+      }
+    });
+    openMarkdownLink.mockResolvedValueOnce({
+      ok: false,
+      code: 'NOT_FOUND',
+      message: '文件不存在或已被移动。'
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    const draft = '# 源\n\n[本地](./other.md)\n\n草稿保留\n';
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: draft } });
+    fireEvent.click(screen.getByTestId('btn-read'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('a')!);
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    setUnsavedChanges.mockClear();
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+
+    await waitFor(() => {
+      expect(inspectMarkdownLink).toHaveBeenCalledWith('C:\\docs\\source.md', './other.md');
+      expect(openMarkdownLink).toHaveBeenCalledWith('C:\\docs\\source.md', './other.md');
+    });
+    await waitFor(() => {
+      const calls = setUnsavedChanges.mock.calls.map((c) => c[0]);
+      expect(calls[calls.length - 1]).toBe(true);
+    });
+    expect(screen.getByTestId('markdown-body').textContent).toContain('源');
+    expect(screen.getByTestId('markdown-body').textContent).toContain('草稿保留');
+    expect(screen.queryByText('目标')).toBeNull();
+    // Failed open surfaces the error message but must not switch the document session.
+    expect(screen.getByTestId('status-text').textContent).toContain('文件不存在或已被移动');
+
+    // Source path + draft still present in editor.
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe(draft);
+    fireEvent.click(screen.getByTestId('btn-read'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    // Close protection must still treat the session as dirty.
+    expect(closeRequestedHandler).toBeTypeOf('function');
+    await act(async () => {
+      closeRequestedHandler!();
+    });
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('discard-cancel'));
+    expect(screen.queryByTestId('discard-modal')).toBeNull();
+    expect(confirmClose).not.toHaveBeenCalled();
+
+    await act(async () => {
+      closeRequestedHandler!();
+    });
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+    await waitFor(() => {
+      expect(confirmClose).toHaveBeenCalledTimes(1);
+      expect(confirmClose).toHaveBeenCalledWith(true);
+    });
+
+    // Failed open must still save back to the source path, never a dead target path.
+    fireEvent.click(screen.getByTestId('btn-save'));
+    await waitFor(() => {
+      expect(saveMarkdownFile).toHaveBeenCalledWith('C:\\docs\\source.md', draft);
+    });
+  });
+
+  test('openMarkdownFile failure after discard keeps source draft and dirty', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 标题\n\n草稿打开失败\n' }
+    });
+
+    // Simulate single-instance / path open after discard
+    openMarkdownFile.mockResolvedValueOnce({
+      ok: false,
+      code: 'NOT_FOUND',
+      message: '文件不存在或已被移动。'
+    });
+
+    // Trigger openPath via onOpenFilePath handler registered on mount — call choose flow:
+    // Use discard then failed choose is separate; here fire path open by re-using open API:
+    // Click open, discard, then mock choose to fail... use openMarkdownFile via drop:
+    // Easiest: confirm dirty open file with choose that fails
+    chooseMarkdownFile.mockResolvedValueOnce({
+      ok: false,
+      code: 'READ_FAILED',
+      message: '无法读取文件，请检查权限或文件状态。'
+    });
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    setUnsavedChanges.mockClear();
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+
+    await waitFor(() => {
+      expect(chooseMarkdownFile).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      const calls = setUnsavedChanges.mock.calls.map((c) => c[0]);
+      expect(calls[calls.length - 1]).toBe(true);
+    });
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toContain(
+      '草稿打开失败'
+    );
+  });
+
+  test('pending open disables editing and failed open preserves the current draft', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 标题\n\n请求前草稿\n' }
+    });
+
+    type FailedOpen = { ok: false; code: 'READ_FAILED'; message: string };
+    let resolveOpen!: (value: FailedOpen) => void;
+    chooseMarkdownFile.mockReturnValueOnce(
+      new Promise<FailedOpen>((resolve) => {
+        resolveOpen = resolve;
+      })
+    );
+
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+    await waitFor(() => expect(chooseMarkdownFile).toHaveBeenCalledTimes(2));
+
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).disabled).toBe(true);
+
+    await act(async () => {
+      resolveOpen({
+        ok: false,
+        code: 'READ_FAILED',
+        message: '无法读取文件，请检查权限或文件状态。'
+      });
+    });
+
+    await waitFor(() => {
+      expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe(
+        '# 标题\n\n请求前草稿\n'
+      );
+      expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).disabled).toBe(false);
+      expect(screen.getByTestId('status-text').textContent).toContain('无法读取文件');
+    });
+    const dirtyCalls = setUnsavedChanges.mock.calls.map((call) => call[0]);
+    expect(dirtyCalls[dirtyCalls.length - 1]).toBe(true);
+  });
+
+  test('an older open result cannot replace a newer opened document', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    const oldDoc: MarkdownDocument = {
+      path: 'C:\\docs\\old.md',
+      name: 'old.md',
+      content: '# 旧请求结果\n',
+      modifiedAt: 2,
+      size: 10
+    };
+    const newDoc: MarkdownDocument = {
+      path: 'C:\\docs\\new.md',
+      name: 'new.md',
+      content: '# 新请求结果\n',
+      modifiedAt: 3,
+      size: 10
+    };
+
+    type SuccessfulOpen = { ok: true; document: MarkdownDocument };
+    let resolveOldOpen!: (value: SuccessfulOpen) => void;
+    openMarkdownFile
+      .mockReset()
+      .mockReturnValueOnce(
+        new Promise<SuccessfulOpen>((resolve) => {
+          resolveOldOpen = resolve;
+        })
+      )
+      .mockResolvedValueOnce({ ok: true, document: newDoc });
+
+    await waitFor(() => expect(openFilePathHandler).toBeTypeOf('function'));
+    act(() => {
+      openFilePathHandler!('C:\\docs\\old.md');
+    });
+    await waitFor(() => expect(openMarkdownFile).toHaveBeenCalledTimes(1));
+    act(() => {
+      openFilePathHandler!('C:\\docs\\new.md');
+    });
+    await waitFor(() => expect(openMarkdownFile).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByTestId('markdown-body').textContent).toContain('新请求结果');
+    });
+
+    await act(async () => {
+      resolveOldOpen({ ok: true, document: oldDoc });
+    });
+
+    expect(screen.getByTestId('markdown-body').textContent).toContain('新请求结果');
+    expect(screen.queryByText('旧请求结果')).toBeNull();
+  });
+
+  test('chooseMarkdownFile CANCELED after discard keeps dirty document', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 标题\n\n取消选择草稿\n' }
+    });
+
+    chooseMarkdownFile.mockResolvedValueOnce({
+      ok: false,
+      code: 'CANCELED',
+      message: '已取消。'
+    });
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    setUnsavedChanges.mockClear();
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+
+    await waitFor(() => {
+      expect(chooseMarkdownFile).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      const calls = setUnsavedChanges.mock.calls.map((c) => c[0]);
+      expect(calls[calls.length - 1]).toBe(true);
+    });
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toContain(
+      '取消选择草稿'
+    );
+  });
+
+  test('clean local link opens via openMarkdownLink without discard modal', async () => {
+    const localDoc: MarkdownDocument = {
+      path: 'C:\\docs\\source.md',
+      name: 'source.md',
+      content: '# 源\n\n[本地](./other.md)\n',
+      modifiedAt: 1,
+      size: 24
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: localDoc });
+    let openResolved = false;
+    inspectMarkdownLink.mockResolvedValueOnce({
+      ok: true,
+      action: 'markdown',
+      document: {
+        path: 'C:\\docs\\other.md',
+        name: 'other.md',
+        content: '# 目标文档\n',
+        modifiedAt: 2,
+        size: 16
+      }
+    });
+    openMarkdownLink.mockImplementationOnce(async () => {
+      // Document must not switch from inspect alone before open resolves.
+      expect(screen.getByTestId('markdown-body').textContent).toContain('源');
+      expect(screen.queryByText('目标文档')).toBeNull();
+      openResolved = true;
+      return {
+        ok: true as const,
+        document: {
+          path: 'C:\\docs\\other.md',
+          name: 'other.md',
+          content: '# 目标文档\n',
+          modifiedAt: 2,
+          size: 16
+        }
+      };
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('a')!);
+    expect(screen.queryByTestId('discard-modal')).toBeNull();
+
+    await waitFor(() => {
+      expect(inspectMarkdownLink).toHaveBeenCalledWith('C:\\docs\\source.md', './other.md');
+      expect(openMarkdownLink).toHaveBeenCalledWith('C:\\docs\\source.md', './other.md');
+    });
+    await waitFor(() => {
+      expect(openResolved).toBe(true);
+      expect(screen.getByTestId('markdown-body').textContent).toContain('目标文档');
+    });
+  });
+
+  test('dirty local link discard calls openMarkdownLink and shows target', async () => {
+    const localDoc: MarkdownDocument = {
+      path: 'C:\\docs\\source.md',
+      name: 'source.md',
+      content: '# 源\n\n[本地](./other.md)\n',
+      modifiedAt: 1,
+      size: 24
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: localDoc });
+    inspectMarkdownLink.mockResolvedValueOnce({
+      ok: true,
+      action: 'markdown',
+      document: {
+        path: 'C:\\docs\\other.md',
+        name: 'other.md',
+        content: '# 目标文档\n',
+        modifiedAt: 2,
+        size: 16
+      }
+    });
+    openMarkdownLink.mockResolvedValueOnce({
+      ok: true,
+      document: {
+        path: 'C:\\docs\\other.md',
+        name: 'other.md',
+        content: '# 目标文档\n',
+        modifiedAt: 2,
+        size: 16
+      }
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 源\n\n[本地](./other.md)\n\n草稿\n' }
+    });
+    fireEvent.click(screen.getByTestId('btn-read'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('a')!);
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+
+    await waitFor(() => {
+      expect(openMarkdownLink).toHaveBeenCalledWith('C:\\docs\\source.md', './other.md');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('markdown-body').textContent).toContain('目标文档');
     });
   });
 });

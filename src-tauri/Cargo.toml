@@ -21,15 +21,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
-# Embedded WebDriver + invoke mock helpers for @wdio/tauri-service E2E.
-# The WebDriver server only listens when TAURI_WEBDRIVER_PORT (or service) enables it.
-tauri-plugin-wdio = "1.2.0"
-tauri-plugin-wdio-webdriver = "1.2.0"
 thiserror = "2"
 url = "2"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Production / desktop E2E must enable this so the app loads embedded frontendDist
+# instead of devUrl (http://localhost:1420). `tauri build` enables it; plain
+# `cargo build --release` must pass `--features custom-protocol` (see run-desktop.mjs).
+[features]
+custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
 panic = "abort"

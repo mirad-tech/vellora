@@ -53,9 +53,36 @@ npm run dev          # 开发
 npm run typecheck
 npm test             # 前端单测
 npm run test:rust    # Rust 单测
-npm run test:e2e     # 浏览器 E2E（本机 Edge + puppeteer-core）
+npm run test:e2e     # 浏览器 E2E（本机 Edge + puppeteer-core，mock IPC）
 npm run dist         # 类型检查 + 前端构建 + NSIS 安装包
 ```
+
+### 桌面 E2E（真实 Tauri IPC，外置驱动）
+
+正式安装包**不包含** WebDriver。桌面 E2E 使用外置驱动，失败时**不会**降级为 mock：
+
+1. **先关闭所有已打开的 Vellora 窗口**。启动前（驱动检查 / 构建前，以及 release 构建完成后再次检查）若检测到任意 `vellora.exe`，脚本会**安全中止**，不会结束这些进程。
+2. 若无法查询进程状态（PowerShell/CIM 失败、返回非法结构等），同样**安全中止**，不会把查询失败当成“没有进程”。
+3. `cargo install tauri-driver --locked`（需在 PATH）
+4. 安装与本机 **Edge 主版本一致** 的 `msedgedriver`（`tauri-driver` 的 native driver，不能省略）：
+   - 推荐：`npm run tools:msedgedriver`（下载到 `tools/webdriver/msedgedriver.exe`，脚本会自动识别）
+   - 或手动从 [Edge WebDriver](https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/) 下载，加入 PATH / 设 `MSEDGEDRIVER_PATH`
+5. 文档：[Tauri WebDriver](https://v2.tauri.app/develop/tests/webdriver/)
+
+```bash
+npm run test:e2e:desktop
+```
+
+**进程保护机制（可验证）：**
+
+- 每次运行生成唯一会话令牌 `VELLORA_E2E_SESSION`（UUID），并以启动参数 `--vellora-e2e-session=<UUID>` 传给测试实例。
+- 清理阶段只结束：本次脚本直接 `spawn` 的 WDIO、`tauri-driver`，以及**重新查询后**可证明同时满足「可执行路径与 release `vellora.exe` 一致」且「命令行包含本次完整会话令牌」的 Vellora。
+- 不会使用 `taskkill /IM vellora.exe`、按进程名/路径批量结束，或按“测试启动后出现”推测归属。
+- 清理时若无法重新查询进程：仍可结束 WDIO / `tauri-driver`，但**不会**对未验证归属的 Vellora 调用 `taskkill`，并将本次 E2E 记为失败。
+
+驱动缺失、版本不符、已有 Vellora 在运行、或进程查询失败时，脚本直接以非零状态退出。
+
+桌面 E2E 会以 `cargo build --release --features custom-protocol` 构建，确保应用加载嵌入的前端资源（而不是开发用的 `http://localhost:1420`）。正式安装包请使用 `npm run build` / `tauri build`。
 
 安装包输出路径：
 
@@ -80,7 +107,7 @@ tests/fixtures/      Markdown 样本
 
 后端命令（Result：`{ ok: true, ... } | { ok: false, code, message }`）：
 
-`choose_markdown_file` · `open_markdown_file` · `save_markdown_file` · `resolve_local_image` · `inspect_markdown_link` · `open_external_url` · `get_initial_document` · `set_unsaved_changes` · `confirm_close`
+`choose_markdown_file` · `open_markdown_file` · `save_markdown_file` · `resolve_local_image` · `inspect_markdown_link` · `open_markdown_link` · `open_external_url` · `get_initial_document` · `set_unsaved_changes` · `confirm_close`
 
 ## 版本与许可证
 

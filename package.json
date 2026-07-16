@@ -26,7 +26,8 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:e2e": "node tests/e2e/smoke.mjs",
     "test:e2e:ci": "node tests/e2e/smoke.mjs",
-    "test:e2e:desktop": "npm run build:web && cargo build --manifest-path src-tauri/Cargo.toml --release && wdio run wdio.desktop.conf.js",
+    "test:e2e:desktop": "node tests/e2e/run-desktop.mjs",
+    "tools:msedgedriver": "node tools/fetch-msedgedriver.mjs",
     "tauri": "tauri",
     "dist": "npm run build",
     "generate:icon": "node build/generate-icon.mjs"
@@ -49,17 +50,11 @@
     "@wdio/cli": "^9.12.0",
     "@wdio/local-runner": "^9.12.0",
     "@wdio/mocha-framework": "^9.12.0",
-    "@wdio/native-utils": "2.5.0",
     "@wdio/spec-reporter": "^9.12.0",
-    "@wdio/tauri-plugin": "^1.2.0",
-    "@wdio/tauri-service": "^1.2.0",
     "jsdom": "^29.1.1",
     "puppeteer-core": "^24.43.1",
     "typescript": "^5.9.2",
     "vite": "^7.3.5",
     "vitest": "^4.1.8"
-  },
-  "overrides": {
-    "@wdio/native-utils": "2.5.0"
   }
 }

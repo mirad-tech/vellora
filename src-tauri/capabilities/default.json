@@ -17,11 +17,10 @@
     "allow-save-markdown-file",
     "allow-resolve-local-image",
     "allow-inspect-markdown-link",
+    "allow-open-markdown-link",
     "allow-open-external-url",
     "allow-get-initial-document",
     "allow-set-unsaved-changes",
-    "allow-confirm-close",
-    "wdio:default",
-    "wdio-webdriver:default"
+    "allow-confirm-close"
   ]
 }

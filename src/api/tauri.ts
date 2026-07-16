@@ -45,6 +45,17 @@ export async function inspectMarkdownLink(
   });
 }
 
+/** Open a local Markdown link after the user has confirmed discard of unsaved edits. */
+export async function openMarkdownLink(
+  documentPath: string,
+  href: string
+): Promise<MarkdownOpenResult> {
+  return invoke<MarkdownOpenResult>('open_markdown_link', {
+    documentPath,
+    href
+  });
+}
+
 export async function openExternalUrl(url: string): Promise<EmptyResult> {
   return invoke<EmptyResult>('open_external_url', { url });
 }
