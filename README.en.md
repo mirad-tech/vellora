@@ -1,8 +1,21 @@
 # Vellora
 
-Local-first lightweight Markdown viewer and source editor. **2.0** is built with **Tauri 2 + React + TypeScript + Vite** for opening a `.md` file, reading, editing, and saving quickly.
+**Windows-only**, local-first lightweight Markdown viewer and source editor.  
+**2.0** is built with **Tauri 2 + React + TypeScript + Vite** — open a `.md` file, read, edit, and save.
+
+> Platform: **Windows only** (NSIS + WebView2). Repository path: `markdown-viewer`; product name: **Vellora**.
 
 [中文](README.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
+
+## Download (Windows x64)
+
+[**Vellora 2.0.0 setup (NSIS)**](https://github.com/mirad-tech/markdown-viewer/releases/download/v2.0.0/Vellora_2.0.0_x64-setup.exe)
+
+- Asset name: `Vellora_2.0.0_x64-setup.exe` (~1.5 MiB)
+- All versions: [Releases](https://github.com/mirad-tech/markdown-viewer/releases)
+- Requires **WebView2** (usually preinstalled on Windows 10/11; installer can bootstrap if missing — runtime is not bundled)
+
+Upgrading from 1.x (Electron): **uninstall 1.x first, then install 2.0**.
 
 ## Features
 
@@ -13,31 +26,21 @@ Local-first lightweight Markdown viewer and source editor. **2.0** is built with
 - Unsaved-change confirm on close or open another file
 - In-document search (`Ctrl+F`) and collapsible outline
 - Relative local Markdown links; HTTP(S) external links open only after confirm
-- Single-instance on Windows: second launch forwards path to the existing window
-- NSIS installer; WebView2 via download bootstrapper (runtime not bundled)
+- Single-instance: second launch forwards path to the existing window
 
 ## What’s new in 2.0
 
-Keeps core read/edit/security paths from 1.x (Electron). Removes workspace tree, recents, WYSIWYG (MDXEditor), command palette, PDF export, themes/i18n, complex native menus, etc.
+| | 1.x Electron | 2.0 Tauri |
+|--|--------------|-----------|
+| Installer (approx.) | ~100+ MiB | ~1.5 MiB |
+| App binary (approx.) | ~200+ MiB | a few MiB |
+| Focus | Workspace, recents, WYSIWYG, PDF, … | Single-document read / source edit |
 
-Migration: **uninstall 1.x, then install 2.0** (clean migration).
+**Removed:** workspace tree, recents, WYSIWYG (MDXEditor), command palette, PDF export, themes/i18n, complex native menus, etc.
 
-| Approx. size | 1.x Electron | 2.0 Tauri |
-|--------------|--------------|-----------|
-| Installer    | ~100+ MiB    | ~1.5 MiB  |
-| App binary   | ~200+ MiB    | a few MiB |
+## Build from source
 
-## Install
-
-### Prebuilt (Windows)
-
-Download `Vellora_2.0.0_x64-setup.exe` from [Releases](https://github.com/mirad-tech/markdown-viewer/releases).
-
-**WebView2** is required (usually preinstalled on Windows 10/11).
-
-### From source
-
-**Prerequisites (Windows):** Node.js 20+, Rust MSVC toolchain, VS C++ Build Tools, WebView2.
+**Prerequisites (Windows):** Node.js 20+, [Rust MSVC](https://rustup.rs/), VS C++ Build Tools, WebView2.
 
 ```bash
 npm install

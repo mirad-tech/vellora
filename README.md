@@ -1,8 +1,21 @@
 # Vellora
 
-本地优先的轻量 Markdown 查看 / 源码编辑器。**2.0** 起基于 **Tauri 2 + React + TypeScript + Vite**，面向「打开一个 `.md` 文件后快速阅读、编辑并保存」。
+**Windows** 上的本地优先、轻量 Markdown 查看 / 源码编辑器。  
+**2.0** 基于 **Tauri 2 + React + TypeScript + Vite**，面向「打开一个 `.md` 文件后快速阅读、编辑并保存」。
+
+> 当前平台：**仅 Windows**（NSIS 安装包 + WebView2）。仓库路径名为 `markdown-viewer`，产品名为 **Vellora**。
 
 [English](README.en.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
+
+## 下载（Windows x64）
+
+[**Vellora 2.0.0 安装包（NSIS）**](https://github.com/mirad-tech/markdown-viewer/releases/download/v2.0.0/Vellora_2.0.0_x64-setup.exe)
+
+- 资产文件名：`Vellora_2.0.0_x64-setup.exe`（约 1.5 MiB）
+- 全部版本：[Releases](https://github.com/mirad-tech/markdown-viewer/releases)
+- 需要 **WebView2**（多数 Windows 10/11 已自带；否则安装程序会引导下载，运行时不打进安装包）
+
+从 1.x（Electron）升级时，建议 **先卸载 1.x，再安装 2.0**（干净迁移）。
 
 ## 功能
 
@@ -13,29 +26,19 @@
 - 未保存关闭 / 切换文件前确认
 - 文档内搜索（`Ctrl+F`）与可折叠标题目录
 - 相对路径本地 Markdown 链接；HTTP(S) 外链二次确认后打开
-- Windows 单实例：第二次启动会把路径交给已有窗口
-- NSIS 安装包；WebView2 使用系统 bootstrapper（不内嵌运行时）
+- 单实例：第二次启动会把路径交给已有窗口
 
-## 2.0 变更摘要
+## 2.0 相对 1.x
 
-相对 1.x（Electron）**保留**核心阅读/编辑/安全能力，**移除**工作区文件树、最近项目、WYSIWYG（MDXEditor）、命令面板、PDF 导出、主题/多语言、复杂原生菜单等。
+| | 1.x Electron | 2.0 Tauri |
+|--|--------------|-----------|
+| 安装包（约） | ~100+ MiB | ~1.5 MiB |
+| 主程序（约） | ~200+ MiB | 数 MiB 量级 |
+| 能力 | 工作区、最近、WYSIWYG、PDF 等 | 单文档阅读 / 源码编辑为核心 |
 
-安装建议：**先卸载 1.x，再安装 2.0**（干净迁移，不自动改写旧安装）。
+**已移除**：工作区文件树、最近项目、WYSIWYG（MDXEditor）、命令面板、PDF 导出、主题切换、多语言 UI、复杂原生菜单等。
 
-| 指标（约） | 1.x Electron | 2.0 Tauri |
-|-----------|--------------|-----------|
-| 安装包    | ~100+ MiB    | ~1.5 MiB  |
-| 主程序    | ~200+ MiB    | ~数 MiB   |
-
-## 安装
-
-### 预构建（Windows）
-
-从 [GitHub Releases](https://github.com/mirad-tech/markdown-viewer/releases) 下载 `Vellora_2.0.0_x64-setup.exe`（或 `Vellora Setup 2.0.0.exe`），运行安装即可。
-
-系统需可用 **WebView2**（多数 Windows 10/11 已自带；否则安装程序会引导下载）。
-
-### 从源码构建
+## 从源码构建
 
 **前置条件（Windows）**
 
@@ -54,7 +57,7 @@ npm run test:e2e     # 浏览器 E2E（本机 Edge + puppeteer-core）
 npm run dist         # 类型检查 + 前端构建 + NSIS 安装包
 ```
 
-安装包默认输出：
+安装包输出路径：
 
 `src-tauri/target/release/bundle/nsis/Vellora_2.0.0_x64-setup.exe`
 
