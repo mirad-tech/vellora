@@ -27,8 +27,21 @@ async function enterEditAndSetValue(value) {
   return editor;
 }
 
+async function setReactTextareaValue(selector, value) {
+  await browser.execute((targetSelector, nextValue) => {
+    const element = document.querySelector(targetSelector);
+    if (!(element instanceof HTMLTextAreaElement)) {
+      throw new Error(`textarea not found: ${targetSelector}`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    descriptor?.set?.call(element, nextValue);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, selector, value);
+}
+
 describe('Vellora desktop E2E (real IPC)', () => {
-  it('CLI open, save, failed link, success link, search, outline, external cancel', async () => {
+  it('CLI open, quick edit, save, failed link, success link, search, outline, external cancel', async () => {
     expect(Boolean(sourcePath && fs.existsSync(sourcePath))).toBe(true);
     expect(Boolean(targetPath && fs.existsSync(targetPath))).toBe(true);
 
@@ -37,7 +50,21 @@ describe('Vellora desktop E2E (real IPC)', () => {
     await body.waitForDisplayed({ timeout: 60000 });
     expect(await body.getText()).toContain('源文档');
 
-    // 2) Edit + save source on disk
+    // 2) Quick edit in read mode + save source on disk
+    await $('[data-testid="markdown-body"] h1').click();
+    const quickEditor = await $('[data-testid="quick-edit-textarea"]');
+    await quickEditor.waitForDisplayed({ timeout: 10000 });
+    await setReactTextareaValue(
+      '[data-testid="quick-edit-textarea"]',
+      '# 源文档（阅读模式修改）'
+    );
+    await $('[data-testid="btn-save"]').click();
+    await browser.waitUntil(
+      async () => fs.readFileSync(sourcePath, 'utf8').includes('阅读模式修改'),
+      { timeout: 15000, timeoutMsg: 'quick edit was not saved to disk' }
+    );
+
+    // 3) Full source edit + save
     let sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(sourceText.replace('正文搜索词 alpha', '正文搜索词 alpha 已保存'));
     await $('[data-testid="btn-save"]').click();
@@ -46,7 +73,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
       timeoutMsg: 'disk content not updated after save'
     });
 
-    // 3) Dirty + local link + cancel discard: stay on source; save still works
+    // 4) Dirty + local link + cancel discard: stay on source; save still works
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n草稿`);
     await $('[data-testid="btn-read"]').click();
@@ -64,7 +91,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
       timeoutMsg: 'save after cancel local-link failed (session mismatch?)'
     });
 
-    // 3b) Dirty + delete target before discard confirm -> stay on source, can save
+    // 4b) Dirty + delete target before discard confirm -> stay on source, can save
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     const draftKeep = `${sourceText}\n失败跳转草稿`;
     await enterEditAndSetValue(draftKeep);
@@ -96,7 +123,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
       'utf8'
     );
 
-    // 4) Local link + 放弃更改 -> target.md
+    // 5) Local link + 放弃更改 -> target.md
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n临时`);
     await $('[data-testid="btn-read"]').click();
@@ -109,7 +136,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
       timeoutMsg: 'did not open target.md after discard'
     });
 
-    // 5) Search + outline on target
+    // 6) Search + outline on target
     await $('[data-testid="btn-search"]').click();
     const input = await $('[data-testid="search-input"]');
     await input.waitForDisplayed();
@@ -123,7 +150,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     await $('[data-testid="outline-panel"]').waitForDisplayed();
     expect((await $$('[data-testid="outline-item"]')).length).toBeGreaterThanOrEqual(1);
 
-    // 6) External link confirm + cancel
+    // 7) External link confirm + cancel
     expect(await clickLinkByHrefFragment('example.com')).toBe(true);
     const external = await $('[data-testid="external-link-modal"]');
     await external.waitForDisplayed({ timeout: 10000 });

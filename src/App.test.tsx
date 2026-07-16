@@ -696,4 +696,206 @@ describe('App', () => {
       expect(screen.getByTestId('markdown-body').textContent).toContain('目标文档');
     });
   });
+
+  test('quick edit supports headings, paragraphs, list items, and blockquotes by source range', async () => {
+    const document: MarkdownDocument = {
+      ...sampleDoc,
+      content: '# 标题\r\n\r\n相同内容\r\n\r\n相同内容\r\n\r\n- 列表项\r\n\r\n> 引用内容\r\n'
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    const body = screen.getByTestId('markdown-body');
+    for (const kind of ['heading', 'paragraph', 'list-item', 'blockquote']) {
+      const block = body.querySelector<HTMLElement>(`[data-edit-block-kind="${kind}"]`);
+      expect(block).toBeTruthy();
+      fireEvent.click(block!);
+      expect(screen.getByTestId('quick-edit-textarea').getAttribute('data-edit-kind')).toBe(kind);
+      fireEvent.keyDown(screen.getByTestId('quick-edit-textarea'), {
+        key: 'Enter',
+        ctrlKey: true
+      });
+      expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    }
+
+    const duplicateParagraphs = body.querySelectorAll<HTMLElement>(
+      '[data-edit-block-kind="paragraph"]'
+    );
+    const editedPreviewNode = duplicateParagraphs[1];
+    fireEvent.click(editedPreviewNode);
+    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
+      target: { value: '只修改第二处' }
+    });
+    expect(
+      body.querySelectorAll<HTMLElement>('[data-edit-block-kind="paragraph"]')[1]
+    ).toBe(editedPreviewNode);
+    expect(body.textContent).not.toContain('只修改第二处');
+    fireEvent.blur(screen.getByTestId('quick-edit-textarea'));
+
+    fireEvent.click(screen.getByTestId('btn-save'));
+    await waitFor(() => {
+      expect(saveMarkdownFile).toHaveBeenCalledWith(
+        sampleDoc.path,
+        '# 标题\r\n\r\n相同内容\r\n\r\n只修改第二处\r\n\r\n- 列表项\r\n\r\n> 引用内容\r\n'
+      );
+    });
+  });
+
+  test('quick edit preserves CRLF inside a multiline block', async () => {
+    const document: MarkdownDocument = {
+      ...sampleDoc,
+      content: '# 标题\r\n\r\n第一行\r\n第二行\r\n'
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
+    expect((screen.getByTestId('quick-edit-textarea') as HTMLTextAreaElement).value).toBe(
+      '第一行\n第二行'
+    );
+    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
+      target: { value: '第一行已修改\n第二行' }
+    });
+    fireEvent.blur(screen.getByTestId('quick-edit-textarea'));
+    fireEvent.click(screen.getByTestId('btn-save'));
+
+    await waitFor(() => {
+      expect(saveMarkdownFile).toHaveBeenCalledWith(
+        sampleDoc.path,
+        '# 标题\r\n\r\n第一行已修改\r\n第二行\r\n'
+      );
+    });
+  });
+
+  test('Escape cancels quick edit and restores the previous dirty state', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
+    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
+      target: { value: '# 临时标题' }
+    });
+    await waitFor(() => expect(setUnsavedChanges).toHaveBeenCalledWith(true));
+
+    fireEvent.keyDown(screen.getByTestId('quick-edit-textarea'), { key: 'Escape' });
+    expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId('markdown-body').textContent).toContain('标题');
+      const calls = setUnsavedChanges.mock.calls.map((call) => call[0]);
+      expect(calls[calls.length - 1]).toBe(false);
+    });
+  });
+
+  test('quick edits use existing close protection and save flow', async () => {
+    saveMarkdownFile.mockImplementationOnce(async (path: string, content: string) => ({
+      ok: true,
+      document: { ...sampleDoc, path, content }
+    }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
+    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
+      target: { value: '阅读模式修改' }
+    });
+    await act(async () => closeRequestedHandler?.());
+    expect(screen.getByTestId('discard-modal')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('discard-cancel'));
+
+    fireEvent.click(screen.getByTestId('btn-save'));
+    await waitFor(() => {
+      expect(saveMarkdownFile).toHaveBeenCalledWith(
+        sampleDoc.path,
+        '# 标题\n\n阅读模式修改\n\n[外链](https://example.com)\n'
+      );
+      const calls = setUnsavedChanges.mock.calls.map((call) => call[0]);
+      expect(calls[calls.length - 1]).toBe(false);
+    });
+  });
+
+  test('links navigate normally until their containing block enters quick edit', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    const body = screen.getByTestId('markdown-body');
+    const link = body.querySelector('a')!;
+    fireEvent.click(link);
+    await waitFor(() => expect(screen.getByTestId('external-link-modal')).toBeTruthy());
+    expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    fireEvent.click(screen.getByTestId('external-cancel'));
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelectorAll('p')[1]);
+    const quickEditor = screen.getByTestId('quick-edit-textarea');
+    fireEvent.click(quickEditor);
+    expect(inspectMarkdownLink).toHaveBeenCalledTimes(1);
+  });
+
+  test('complex Markdown structures remain read-only', async () => {
+    const document: MarkdownDocument = {
+      ...sampleDoc,
+      content: '- 父项\n  - 子项\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n```text\ncode\n```\n'
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    const body = screen.getByTestId('markdown-body');
+    for (const selector of ['li', 'td', 'pre']) {
+      fireEvent.click(body.querySelector(selector)!);
+      expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    }
+  });
+
+  test('pending document open blocks quick edit', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    type FailedOpen = { ok: false; code: 'READ_FAILED'; message: string };
+    let resolveOpen!: (value: FailedOpen) => void;
+    chooseMarkdownFile.mockReturnValueOnce(
+      new Promise<FailedOpen>((resolve) => {
+        resolveOpen = resolve;
+      })
+    );
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('btn-open')).toHaveProperty('disabled', true));
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
+    expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    await act(async () => {
+      resolveOpen({ ok: false, code: 'READ_FAILED', message: '读取失败' });
+    });
+  });
+
+  test('opening another document clears the active quick editor', async () => {
+    const nextDocument: MarkdownDocument = {
+      ...sampleDoc,
+      path: 'C:\\docs\\next.md',
+      name: 'next.md',
+      content: '# 下一个文档\n'
+    };
+    openMarkdownFile.mockResolvedValueOnce({ ok: true, document: nextDocument });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
+    expect(screen.getByTestId('quick-edit-textarea')).toBeTruthy();
+
+    await waitFor(() => expect(openFilePathHandler).toBeTypeOf('function'));
+    act(() => openFilePathHandler?.('C:\\docs\\next.md'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+      expect(screen.getByTestId('markdown-body').textContent).toContain('下一个文档');
+    });
+  });
 });

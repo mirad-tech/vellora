@@ -162,7 +162,22 @@ async function run() {
     const body1 = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
     assert(body1.includes('标题一'), 'render heading');
 
-    // 3 edit mode
+    // 3 quick edit in read mode + save through the existing draft flow
+    await page.click('[data-testid="markdown-body"] h1');
+    await page.waitForSelector('[data-testid="quick-edit-textarea"]');
+    await setTextareaValue(page, '[data-testid="quick-edit-textarea"]', '# 阅读模式标题');
+    await page.keyboard.down('Control');
+    await page.keyboard.press('Enter');
+    await page.keyboard.up('Control');
+    await page.waitForSelector('[data-testid="quick-edit-textarea"]', { hidden: true });
+    const quickEdited = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
+    assert(quickEdited.includes('阅读模式标题'), 'quick edit reflected in read mode');
+    await page.click('[data-testid="btn-save"]');
+    await page.waitForFunction(() => {
+      return String(window.__e2eSavedContent || '').includes('阅读模式标题');
+    }, { timeout: 10000 });
+
+    // 4 edit mode
     await page.click('[data-testid="btn-edit"]');
     await page.waitForSelector('[data-testid="source-editor"]');
     await setTextareaValue(page, '[data-testid="source-editor"]', '# 新标题\n\n编辑内容');
@@ -175,7 +190,7 @@ async function run() {
     await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
     await openSample(page);
 
-    // 4 save
+    // 5 save
     await page.click('[data-testid="btn-edit"]');
     await setTextareaValue(page, '[data-testid="source-editor"]', '# 保存测试\n');
     await page.click('[data-testid="btn-save"]');
@@ -186,7 +201,7 @@ async function run() {
     const saved = await page.evaluate(() => window.__e2eSavedContent);
     assert(typeof saved === 'string' && saved.includes('保存测试'), `save content got: ${saved}`);
 
-    // 5 discard
+    // 6 discard
     await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
     await openSample(page);
     await page.click('[data-testid="btn-edit"]');
@@ -196,7 +211,7 @@ async function run() {
     await page.click('[data-testid="discard-cancel"]');
     await page.waitForSelector('[data-testid="discard-modal"]', { hidden: true, timeout: 5000 });
 
-    // 6 search
+    // 7 search
     await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
     await openSample(page);
     await page.click('[data-testid="btn-search"]');
@@ -207,19 +222,19 @@ async function run() {
       return t.includes('/');
     }, { timeout: 5000 });
 
-    // 7 outline
+    // 8 outline
     await page.click('[data-testid="btn-outline"]');
     await page.waitForSelector('[data-testid="outline-panel"]');
     const outlineCount = await page.$$eval('[data-testid="outline-item"]', (els) => els.length);
     assert(outlineCount >= 1, 'outline items');
 
-    // 8 external link
+    // 9 external link
     await page.click('[data-testid="markdown-body"] a');
     await page.waitForSelector('[data-testid="external-link-modal"]', { timeout: 5000 });
     await page.click('[data-testid="external-cancel"]');
     await page.waitForSelector('[data-testid="external-link-modal"]', { hidden: true, timeout: 5000 });
 
-    console.log('E2E OK: 8 scenarios passed');
+    console.log('E2E OK: 9 scenarios passed');
   } catch (err) {
     failures.push(err);
     console.error('E2E FAILED:', err);

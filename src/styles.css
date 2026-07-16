@@ -259,8 +259,13 @@ textarea:focus-visible {
   box-sizing: border-box;
 }
 
-.markdown-body {
+.reader-stage {
   flex: 1 1 auto;
+  width: 100%;
+  position: relative;
+}
+
+.markdown-body {
   width: 100%;
   max-width: 860px;
   margin: 0 auto;
@@ -268,6 +273,40 @@ textarea:focus-visible {
   font-size: 15px;
   line-height: 1.7;
   color: var(--text);
+}
+
+.markdown-body [data-edit-block-id] {
+  cursor: text;
+  border-radius: 4px;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.markdown-body [data-edit-block-id]:hover {
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 4px var(--accent-bg);
+}
+
+.markdown-body .quick-edit-source-hidden {
+  visibility: hidden;
+}
+
+.quick-edit-textarea {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  max-height: 60vh;
+  padding: 6px 8px;
+  resize: none;
+  overflow: auto;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  outline: none;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 10%);
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .markdown-body h1,

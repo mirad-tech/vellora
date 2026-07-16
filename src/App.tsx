@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,7 +24,10 @@ import {
   saveMarkdownFile,
   setUnsavedChanges
 } from './api/tauri';
-import { renderMarkdownDocument } from './markdown/renderMarkdown';
+import {
+  renderMarkdownDocument,
+  type MarkdownEditableBlockKind
+} from './markdown/renderMarkdown';
 import {
   applyImageResolutions,
   collectLocalImageResolutionGroups,
@@ -48,6 +52,18 @@ type SaveState =
 
 type PendingExternalLink = { url: string } | null;
 
+type QuickEditState = {
+  blockId: string;
+  kind: MarkdownEditableBlockKind;
+  start: number;
+  end: number;
+  value: string;
+  originalDraft: string;
+  candidateDraft: string;
+  lineEnding: '\r\n' | '\n';
+  layout: { top: number; left: number; width: number; minHeight: number };
+};
+
 const IMAGE_RESOLVE_DEBOUNCE_MS = 300;
 
 function isReadyDirty(state: ViewState, draft: string): boolean {
@@ -57,6 +73,15 @@ function isReadyDirty(state: ViewState, draft: string): boolean {
 function isMarkdownFilePath(path: string): boolean {
   const lower = path.toLowerCase();
   return lower.endsWith('.md') || lower.endsWith('.markdown');
+}
+
+function detectLineEnding(content: string): '\r\n' | '\n' {
+  const firstLineFeed = content.indexOf('\n');
+  return firstLineFeed > 0 && content[firstLineFeed - 1] === '\r' ? '\r\n' : '\n';
+}
+
+function normalizeLineEndings(value: string, lineEnding: '\r\n' | '\n'): string {
+  return value.replace(/\r\n|\r|\n/g, lineEnding);
 }
 
 export default function App() {
@@ -75,8 +100,12 @@ export default function App() {
   >(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [documentOpenPending, setDocumentOpenPending] = useState(false);
+  const [quickEdit, setQuickEdit] = useState<QuickEditState | null>(null);
 
   const readerRef = useRef<HTMLDivElement | null>(null);
+  const readerStageRef = useRef<HTMLDivElement | null>(null);
+  const quickEditRef = useRef<HTMLTextAreaElement | null>(null);
+  const quickEditStateRef = useRef<QuickEditState | null>(quickEdit);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const imageRequestId = useRef(0);
   const documentRequestId = useRef(0);
@@ -85,10 +114,12 @@ export default function App() {
   const draftRef = useRef(draftContent);
   const initialLoadStarted = useRef(false);
 
+  const effectiveDraftContent = quickEdit?.candidateDraft ?? draftContent;
   viewStateRef.current = viewState;
-  draftRef.current = draftContent;
+  draftRef.current = effectiveDraftContent;
+  quickEditStateRef.current = quickEdit;
 
-  const hasUnsaved = isReadyDirty(viewState, draftContent);
+  const hasUnsaved = isReadyDirty(viewState, effectiveDraftContent);
 
   /** Sync dirty flag immediately (do not wait for useEffect) to avoid close races. */
   const syncUnsaved = useCallback((dirty: boolean) => {
@@ -107,12 +138,22 @@ export default function App() {
     [syncUnsaved]
   );
 
+  const commitQuickEdit = useCallback(() => {
+    const current = quickEditStateRef.current;
+    if (!current) return;
+    draftRef.current = current.candidateDraft;
+    setDraftContent(current.candidateDraft);
+    quickEditStateRef.current = null;
+    setQuickEdit(null);
+  }, []);
+
   const beginDocumentRequest = useCallback(() => {
     const requestId = ++documentRequestId.current;
+    commitQuickEdit();
     documentOpenPendingRef.current = true;
     setDocumentOpenPending(true);
     return requestId;
-  }, []);
+  }, [commitQuickEdit]);
 
   const finishDocumentRequest = useCallback((requestId: number) => {
     if (requestId !== documentRequestId.current) return;
@@ -139,6 +180,7 @@ export default function App() {
     () => applySearchHighlights(htmlWithImages, searchOpen ? searchQuery : '', searchActiveIndex),
     [htmlWithImages, searchOpen, searchQuery, searchActiveIndex]
   );
+  const readerHtml = useMemo(() => ({ __html: searchResult.html }), [searchResult.html]);
 
   useEffect(() => {
     if (rendered.status !== 'ready' || viewState.status !== 'ready') {
@@ -181,6 +223,8 @@ export default function App() {
       draftRef.current = document.content;
       viewStateRef.current = { status: 'ready', document };
       setEditorMode('read');
+      quickEditStateRef.current = null;
+      setQuickEdit(null);
       setSaveState({ status: 'idle' });
       setStatusMessage(document.name);
       setSearchQuery('');
@@ -304,8 +348,10 @@ export default function App() {
 
   const handleSave = useCallback(async () => {
     if (viewState.status !== 'ready' || documentOpenPendingRef.current) return;
+    const contentToSave = draftRef.current;
+    commitQuickEdit();
     setSaveState({ status: 'saving' });
-    const result = await saveMarkdownFile(viewState.document.path, draftContent);
+    const result = await saveMarkdownFile(viewState.document.path, contentToSave);
     if (result.ok) {
       setViewState({ status: 'ready', document: result.document });
       setDraftContent(result.document.content);
@@ -317,7 +363,7 @@ export default function App() {
     } else {
       setSaveState({ status: 'error', message: result.message });
     }
-  }, [draftContent, syncUnsaved, viewState]);
+  }, [commitQuickEdit, syncUnsaved, viewState]);
 
   const resolveAnchorHref = (anchor: HTMLAnchorElement): string | null => {
     const fromData = anchor.getAttribute('data-md-href');
@@ -326,12 +372,115 @@ export default function App() {
     return href;
   };
 
+  const beginQuickEdit = useCallback(
+    (target: HTMLElement) => {
+      if (
+        editorMode !== 'read' ||
+        viewState.status !== 'ready' ||
+        documentOpenPendingRef.current ||
+        rendered.status !== 'ready'
+      ) {
+        return;
+      }
+
+      const blockElement = target.closest<HTMLElement>('[data-edit-block-id]');
+      const blockId = blockElement?.dataset.editBlockId;
+      if (!blockElement || !blockId) return;
+      const block = rendered.editableBlocks.find((entry) => entry.id === blockId);
+      const stage = readerStageRef.current;
+      if (!block || !stage) return;
+
+      const blockRect = blockElement.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      const source = draftRef.current.slice(block.start, block.end);
+      const nextQuickEdit: QuickEditState = {
+        blockId,
+        kind: block.kind,
+        start: block.start,
+        end: block.end,
+        value: source.replace(/\r\n|\r/g, '\n'),
+        originalDraft: draftRef.current,
+        candidateDraft: draftRef.current,
+        lineEnding: detectLineEnding(draftRef.current),
+        layout: {
+          top: blockRect.top - stageRect.top,
+          left: blockRect.left - stageRect.left,
+          width: blockRect.width,
+          minHeight: blockRect.height
+        }
+      };
+      quickEditStateRef.current = nextQuickEdit;
+      setQuickEdit(nextQuickEdit);
+      window.setTimeout(() => {
+        quickEditRef.current?.focus();
+        quickEditRef.current?.select();
+      }, 0);
+    },
+    [editorMode, rendered, viewState.status]
+  );
+
+  const updateQuickEdit = useCallback(
+    (value: string) => {
+      const current = quickEditStateRef.current;
+      if (!current || documentOpenPendingRef.current) return;
+      const replacement = normalizeLineEndings(value, current.lineEnding);
+      const nextDraft =
+        current.candidateDraft.slice(0, current.start) +
+        replacement +
+        current.candidateDraft.slice(current.end);
+      draftRef.current = nextDraft;
+      const dirty = isReadyDirty(viewStateRef.current, nextDraft);
+      syncUnsaved(dirty);
+      setSaveState({ status: 'idle' });
+      const nextQuickEdit: QuickEditState = {
+        ...current,
+        value,
+        candidateDraft: nextDraft,
+        end: current.start + replacement.length
+      };
+      quickEditStateRef.current = nextQuickEdit;
+      setQuickEdit(nextQuickEdit);
+    },
+    [syncUnsaved]
+  );
+
+  const cancelQuickEdit = useCallback(() => {
+    const current = quickEditStateRef.current;
+    if (!current) return;
+    draftRef.current = current.originalDraft;
+    syncUnsaved(isReadyDirty(viewStateRef.current, current.originalDraft));
+    setSaveState({ status: 'idle' });
+    quickEditStateRef.current = null;
+    setQuickEdit(null);
+  }, [syncUnsaved]);
+
+  const activeQuickEditBlockId = quickEdit?.blockId ?? null;
+  useEffect(() => {
+    if (!activeQuickEditBlockId) return;
+    const target = Array.from(
+      readerRef.current?.querySelectorAll<HTMLElement>('[data-edit-block-id]') ?? []
+    ).find((element) => element.dataset.editBlockId === activeQuickEditBlockId);
+    target?.classList.add('quick-edit-source-hidden');
+    return () => target?.classList.remove('quick-edit-source-hidden');
+  }, [activeQuickEditBlockId, searchResult.html]);
+
+  useLayoutEffect(() => {
+    const textarea = quickEditRef.current;
+    if (!textarea || !quickEdit) return;
+    textarea.style.height = '0px';
+    textarea.style.height = `${Math.max(quickEdit.layout.minHeight, textarea.scrollHeight)}px`;
+  }, [quickEdit]);
+
   const handleMarkdownNavigation = useCallback(
     async (event: ReactMouseEvent<HTMLDivElement>) => {
       if (documentOpenPendingRef.current) return;
       const target = event.target as HTMLElement | null;
       const anchor = target?.closest('a');
-      if (!anchor || viewState.status !== 'ready') return;
+      if (!anchor) {
+        if (event.button === 0 && target) beginQuickEdit(target);
+        return;
+      }
+      if (viewState.status !== 'ready') return;
 
       // Intercept primary and auxiliary (middle) clicks.
       if (event.button !== 0 && event.button !== 1) return;
@@ -386,7 +535,15 @@ export default function App() {
         }).finally(() => finishDocumentRequest(requestId));
       });
     },
-    [applyOpenResult, beginDocumentRequest, confirmIfDirty, finishDocumentRequest, syncUnsaved, viewState]
+    [
+      applyOpenResult,
+      beginDocumentRequest,
+      beginQuickEdit,
+      confirmIfDirty,
+      finishDocumentRequest,
+      syncUnsaved,
+      viewState
+    ]
   );
 
   const handleConfirmExternal = useCallback(async () => {
@@ -509,7 +666,10 @@ export default function App() {
             className={editorMode === 'read' ? 'toolbar-btn active' : 'toolbar-btn'}
             data-testid="btn-read"
             disabled={viewState.status !== 'ready' || documentOpenPending}
-            onClick={() => setEditorMode('read')}
+            onClick={() => {
+              commitQuickEdit();
+              setEditorMode('read');
+            }}
           >
             阅读
           </button>
@@ -518,7 +678,10 @@ export default function App() {
             className={editorMode === 'edit' ? 'toolbar-btn active' : 'toolbar-btn'}
             data-testid="btn-edit"
             disabled={viewState.status !== 'ready' || documentOpenPending}
-            onClick={() => setEditorMode('edit')}
+            onClick={() => {
+              commitQuickEdit();
+              setEditorMode('edit');
+            }}
           >
             编辑
           </button>
@@ -714,14 +877,49 @@ export default function App() {
                 文件为空
               </div>
             ) : (
-              <div
-                ref={readerRef}
-                className="markdown-body"
-                data-testid="markdown-body"
-                onClick={handleMarkdownNavigation}
-                onAuxClick={handleMarkdownNavigation}
-                dangerouslySetInnerHTML={{ __html: searchResult.html }}
-              />
+              <div ref={readerStageRef} className="reader-stage">
+                <div
+                  ref={readerRef}
+                  className="markdown-body"
+                  data-testid="markdown-body"
+                  onClick={handleMarkdownNavigation}
+                  onAuxClick={handleMarkdownNavigation}
+                  dangerouslySetInnerHTML={readerHtml}
+                />
+                {quickEdit ? (
+                  <textarea
+                    ref={quickEditRef}
+                    className="quick-edit-textarea"
+                    data-testid="quick-edit-textarea"
+                    data-edit-kind={quickEdit.kind}
+                    aria-label="编辑当前 Markdown 块"
+                    value={quickEdit.value}
+                    spellCheck={false}
+                    style={{
+                      top: quickEdit.layout.top,
+                      left: quickEdit.layout.left,
+                      width: quickEdit.layout.width,
+                      minHeight: quickEdit.layout.minHeight
+                    }}
+                    onChange={(event) => updateQuickEdit(event.target.value)}
+                    onBlur={commitQuickEdit}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        cancelQuickEdit();
+                        return;
+                      }
+                      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        commitQuickEdit();
+                      }
+                    }}
+                  />
+                ) : null}
+              </div>
             )
           ) : null}
         </main>

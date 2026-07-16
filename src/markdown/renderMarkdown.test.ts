@@ -52,7 +52,7 @@ describe('safe Markdown rendering', () => {
       }
     ]);
     expect(readyResults[0].html).toContain('id="heading-一级标题"');
-    expect(readyResults[1].html).toContain('<blockquote>');
+    expect(readyResults[1].html).toContain('<blockquote data-edit-block-id=');
     expect(readyResults[1].html).toContain('<ul>');
     expect(readyResults[2].html).toContain('<table>');
     expect(readyResults[3].html).toContain('hljs');
@@ -110,7 +110,7 @@ describe('safe Markdown rendering', () => {
     expect(ready.html).toContain('id="heading-最深"');
   });
 
-  test('renders Markdown without quick-edit metadata', () => {
+  test('adds quick-edit metadata only to supported Markdown blocks', () => {
     const result = renderMarkdownDocument(`# 标题
 
 正文段落
@@ -125,8 +125,11 @@ describe('safe Markdown rendering', () => {
 `);
 
     const ready = asReadyResult(result);
-    expect(ready.html).not.toContain('data-edit-block-id=');
-    expect(ready.html).not.toContain('data-edit-block-kind=');
+    expect(ready.html).toContain('data-edit-block-kind="heading"');
+    expect(ready.html).toContain('data-edit-block-kind="paragraph"');
+    expect(ready.html).toContain('data-edit-block-kind="list-item"');
+    expect(ready.html).not.toMatch(/<table[^>]*data-edit-block-id/);
+    expect(ready.editableBlocks).toHaveLength(4);
   });
 
   test('strips forged quick-edit attributes from raw HTML', () => {
@@ -142,9 +145,58 @@ describe('safe Markdown rendering', () => {
     const heading = template.content.querySelector('h1');
     const forgedParagraph = template.content.querySelector('p');
 
-    expect(heading?.hasAttribute('data-edit-block-id')).toBe(false);
+    expect(heading?.hasAttribute('data-edit-block-id')).toBe(true);
+    expect(heading?.hasAttribute('data-edit-block-token')).toBe(false);
     expect(forgedParagraph?.hasAttribute('data-edit-block-id')).toBe(false);
     expect(forgedParagraph?.hasAttribute('data-edit-block-kind')).toBe(false);
+  });
+
+  test('maps duplicate rendered text to distinct source ranges', () => {
+    const content = '# 相同\n\n相同\n\n相同\n\n- 项目\n\n> 引用\n';
+    const ready = asReadyResult(renderMarkdownDocument(content));
+
+    expect(ready.editableBlocks.map((block) => ({
+      kind: block.kind,
+      source: content.slice(block.start, block.end)
+    }))).toEqual([
+      { kind: 'heading', source: '# 相同' },
+      { kind: 'paragraph', source: '相同' },
+      { kind: 'paragraph', source: '相同' },
+      { kind: 'list-item', source: '- 项目' },
+      { kind: 'blockquote', source: '> 引用' }
+    ]);
+    expect(new Set(ready.editableBlocks.map((block) => block.start)).size).toBe(5);
+  });
+
+  test('keeps nested lists, tables, code, and raw HTML read-only', () => {
+    const ready = asReadyResult(renderMarkdownDocument(`- 父项
+  - 子项
+
+| A | B |
+| - | - |
+| 1 | 2 |
+
+\`\`\`text
+code
+\`\`\`
+
+<section>raw</section>
+
+![图片](assets/test.png)
+
+正文 <span>inline html</span>
+`));
+    const template = document.createElement('template');
+    template.innerHTML = ready.html;
+
+    expect(template.content.querySelectorAll('li[data-edit-block-id]')).toHaveLength(0);
+    expect(template.content.querySelector('table[data-edit-block-id]')).toBeNull();
+    expect(template.content.querySelector('pre[data-edit-block-id]')).toBeNull();
+    expect(template.content.querySelector('section[data-edit-block-id]')).toBeNull();
+    expect(template.content.querySelector('img')?.closest('[data-edit-block-id]')).toBeNull();
+    expect(Array.from(template.content.querySelectorAll('p')).find((paragraph) =>
+      paragraph.textContent?.includes('inline html')
+    )?.hasAttribute('data-edit-block-id')).toBe(false);
   });
 
   test('keeps Markdown images as inert local image references before controlled resolution', () => {
