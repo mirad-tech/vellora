@@ -644,6 +644,22 @@ export default function App() {
       ? `${hasUnsaved ? '• ' : ''}${viewState.document.name} — Vellora`
       : 'Vellora';
 
+  const documentName = viewState.status === 'ready' ? viewState.document.name : 'Vellora';
+  const toolbarStatus =
+    quickEdit !== null
+      ? '正在编辑当前内容块'
+      : viewState.status === 'ready'
+        ? statusMessage && statusMessage !== viewState.document.name
+          ? statusMessage
+          : hasUnsaved
+            ? '有未保存更改'
+            : 'Markdown 文档'
+        : viewState.status === 'error'
+          ? viewState.message
+          : viewState.status === 'loading'
+            ? '正在打开文件'
+            : '未打开文件';
+
   useEffect(() => {
     document.title = titleText;
   }, [titleText]);
@@ -651,19 +667,32 @@ export default function App() {
   return (
     <div className="app-shell" data-testid="app-shell">
       <header className="toolbar" data-testid="toolbar">
-        <button
-          type="button"
-          className="toolbar-btn"
-          data-testid="btn-open"
-          disabled={documentOpenPending}
-          onClick={handleChooseFile}
-        >
-          打开
-        </button>
-        <div className="mode-toggle" role="group" aria-label="模式">
+        <div className="toolbar-leading">
           <button
             type="button"
-            className={editorMode === 'read' ? 'toolbar-btn active' : 'toolbar-btn'}
+            className="toolbar-btn open-action"
+            data-testid="btn-open"
+            disabled={documentOpenPending}
+            onClick={handleChooseFile}
+            title="打开 Markdown 文件"
+          >
+            打开
+          </button>
+          <div className="document-identity">
+            <span className="document-name">{documentName}</span>
+            <span
+              className={hasUnsaved ? 'document-status unsaved' : 'document-status'}
+              data-testid="status-text"
+            >
+              {toolbarStatus}
+            </span>
+          </div>
+        </div>
+
+        <div className="mode-toggle" role="group" aria-label="查看方式">
+          <button
+            type="button"
+            className={editorMode === 'read' ? 'mode-btn active' : 'mode-btn'}
             data-testid="btn-read"
             disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => {
@@ -671,11 +700,11 @@ export default function App() {
               setEditorMode('read');
             }}
           >
-            阅读
+            预览
           </button>
           <button
             type="button"
-            className={editorMode === 'edit' ? 'toolbar-btn active' : 'toolbar-btn'}
+            className={editorMode === 'edit' ? 'mode-btn active' : 'mode-btn'}
             data-testid="btn-edit"
             disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => {
@@ -683,51 +712,45 @@ export default function App() {
               setEditorMode('edit');
             }}
           >
-            编辑
+            源码
           </button>
         </div>
-        <button
-          type="button"
-          className="toolbar-btn"
-          data-testid="btn-save"
-          disabled={
-            viewState.status !== 'ready' || saveState.status === 'saving' || documentOpenPending
-          }
-          onClick={() => void handleSave()}
-        >
-          {saveLabel}
-        </button>
-        <button
-          type="button"
-          className={outlineOpen ? 'toolbar-btn active' : 'toolbar-btn'}
-          data-testid="btn-outline"
-          disabled={viewState.status !== 'ready'}
-          onClick={() => setOutlineOpen((v) => !v)}
-        >
-          目录
-        </button>
-        <button
-          type="button"
-          className={searchOpen ? 'toolbar-btn active' : 'toolbar-btn'}
-          data-testid="btn-search"
-          disabled={viewState.status !== 'ready'}
-          onClick={() => {
-            setSearchOpen((v) => !v);
-            window.setTimeout(() => searchInputRef.current?.focus(), 0);
-          }}
-        >
-          查找
-        </button>
-        <span className="toolbar-status" data-testid="status-text">
-          {statusMessage ||
-            (viewState.status === 'error'
-              ? viewState.message
-              : viewState.status === 'loading'
-                ? '正在打开文件'
-                : viewState.status === 'empty'
-                  ? '未打开文件'
-                  : '')}
-        </span>
+
+        <div className="toolbar-actions">
+          <button
+            type="button"
+            className={outlineOpen ? 'toolbar-btn active' : 'toolbar-btn'}
+            data-testid="btn-outline"
+            disabled={viewState.status !== 'ready'}
+            onClick={() => setOutlineOpen((v) => !v)}
+          >
+            目录
+          </button>
+          <button
+            type="button"
+            className={searchOpen ? 'toolbar-btn active' : 'toolbar-btn'}
+            data-testid="btn-search"
+            disabled={viewState.status !== 'ready'}
+            onClick={() => {
+              setSearchOpen((v) => !v);
+              window.setTimeout(() => searchInputRef.current?.focus(), 0);
+            }}
+          >
+            查找
+          </button>
+          <button
+            type="button"
+            className={hasUnsaved ? 'toolbar-btn save-action dirty' : 'toolbar-btn save-action'}
+            data-testid="btn-save"
+            disabled={
+              viewState.status !== 'ready' || saveState.status === 'saving' || documentOpenPending
+            }
+            onClick={() => void handleSave()}
+            title="保存（Ctrl+S）"
+          >
+            {saveLabel}
+          </button>
+        </div>
       </header>
 
       {searchOpen && viewState.status === 'ready' ? (
@@ -784,6 +807,15 @@ export default function App() {
           >
             下一个
           </button>
+          <button
+            type="button"
+            className="toolbar-btn search-close"
+            data-testid="search-close"
+            onClick={() => setSearchOpen(false)}
+            aria-label="关闭查找"
+          >
+            关闭
+          </button>
         </div>
       ) : null}
 
@@ -822,6 +854,7 @@ export default function App() {
         <main className="content" data-testid="content">
           {viewState.status === 'empty' ? (
             <div className="empty-state" data-testid="empty-state">
+              <div className="empty-mark" aria-hidden="true">MD</div>
               <p>未打开文件</p>
               <p className="muted">请选择 .md 或 .markdown 文件。</p>
               <button
@@ -857,14 +890,17 @@ export default function App() {
           ) : null}
 
           {viewState.status === 'ready' && editorMode === 'edit' ? (
-            <textarea
-              className="source-editor"
-              data-testid="source-editor"
-              value={draftContent}
-              disabled={documentOpenPending}
-              spellCheck={false}
-              onChange={(e) => updateDraft(e.target.value)}
-            />
+            <div className="source-editor-shell">
+              <textarea
+                className="source-editor"
+                data-testid="source-editor"
+                value={draftContent}
+                disabled={documentOpenPending}
+                spellCheck={false}
+                aria-label="Markdown 源码"
+                onChange={(e) => updateDraft(e.target.value)}
+              />
+            </div>
           ) : null}
 
           {viewState.status === 'ready' && editorMode === 'read' ? (

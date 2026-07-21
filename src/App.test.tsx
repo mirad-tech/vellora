@@ -144,6 +144,10 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
+    expect(screen.getByTestId('btn-read').textContent).toBe('预览');
+    expect(screen.getByTestId('btn-edit').textContent).toBe('源码');
+    expect(screen.getByTestId('status-text').textContent).toBe('Markdown 文档');
+
     fireEvent.click(screen.getByTestId('btn-edit'));
     const editor = screen.getByTestId('source-editor') as HTMLTextAreaElement;
     expect(editor.value).toContain('# 标题');
