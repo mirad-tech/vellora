@@ -1,6 +1,6 @@
 [package]
 name = "vellora"
-version = "2.1.0"
+version = "2.2.0"
 description = "Vellora lightweight Markdown viewer and editor"
 authors = ["Vellora Contributors"]
 edition = "2021"

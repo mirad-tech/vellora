@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm test
+      - run: npm run test:rust
+      - run: npm run dist
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $asset = "src-tauri/target/release/bundle/nsis/Vellora_${version}_x64-setup.exe"
+          if (-not (Test-Path -LiteralPath $asset)) {
+            throw "Installer not found: $asset"
+          }
+          gh release create $env:GITHUB_REF_NAME $asset --verify-tag --generate-notes --title "Vellora $version"
