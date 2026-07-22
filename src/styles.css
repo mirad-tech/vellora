@@ -29,13 +29,39 @@
   --code-bg: #eee9e1;
   --hit: #e5ded4;
   --hit-active: #d3c9bc;
+  --scrollbar-thumb: #b9afa2;
+  --scrollbar-thumb-hover: #968d82;
   --shadow-float: 0 12px 32px rgb(64 54 44 / 12%);
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
   margin: 0;
   padding: 0;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
 }
 
 ::selection {
@@ -442,11 +468,11 @@ textarea:focus-visible {
 }
 
 .source-editor-shell {
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   min-width: 0;
-  min-height: 0;
+  min-height: 100%;
   padding: 0 clamp(18px, 5vw, 64px) 48px;
-  overflow: hidden;
+  overflow: visible;
   background: var(--surface);
 }
 
@@ -454,8 +480,8 @@ textarea:focus-visible {
   display: block;
   width: min(840px, 100%);
   min-width: 0;
-  min-height: 0;
-  height: 100%;
+  min-height: 100%;
+  height: auto;
   margin: 0 auto;
   padding: 42px 28px 72px;
   border: 0;
@@ -466,8 +492,8 @@ textarea:focus-visible {
   line-height: 1.68;
   background: var(--surface);
   color: var(--text);
-  /* Avoid UA default ~20ch width looking like a thin strip in some WebViews */
-  field-sizing: fixed;
+  overflow: hidden;
+  field-sizing: content;
   box-sizing: border-box;
 }
 

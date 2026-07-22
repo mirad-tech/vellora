@@ -189,7 +189,21 @@ async function run() {
     // 4 edit mode
     await page.click('[data-testid="btn-edit"]');
     await page.waitForSelector('[data-testid="source-editor"]');
-    await setTextareaValue(page, '[data-testid="source-editor"]', '# 新标题\n\n编辑内容');
+    await setTextareaValue(
+      page,
+      '[data-testid="source-editor"]',
+      `# 新标题\n\n${Array.from({ length: 80 }, (_, index) => `编辑内容 ${index + 1}`).join('\n')}`
+    );
+    const editScrollState = await page.evaluate(() => {
+      const content = document.querySelector('[data-testid="content"]');
+      const editor = document.querySelector('[data-testid="source-editor"]');
+      return {
+        outerScrollable: Boolean(content && content.scrollHeight > content.clientHeight),
+        editorScrollable: Boolean(editor && editor.scrollHeight > editor.clientHeight + 1)
+      };
+    });
+    assert(editScrollState.outerScrollable, 'source mode scrolls through the outer content area');
+    assert(!editScrollState.editorScrollable, 'source editor does not create an inner scrollbar');
     await page.click('[data-testid="btn-read"]');
     await page.waitForSelector('[data-testid="markdown-body"]');
     const body2 = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
