@@ -14,10 +14,10 @@ Vellora 是一款 **Windows 本地优先、轻量的 Markdown 阅读与源码编
 
 适用于 **Windows 10/11 x64**：
 
-[**下载 Vellora 2.2.0 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.0/Vellora_2.2.0_x64-setup.exe)
+[**下载 Vellora 2.2.1 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.1/Vellora_2.2.1_x64-setup.exe)
 
 - 所有版本：[GitHub Releases](https://github.com/mirad-tech/vellora/releases)
-- 安装包：`Vellora_2.2.0_x64-setup.exe`
+- 安装包：`Vellora_2.2.1_x64-setup.exe`
 - 运行环境：Microsoft WebView2；多数 Windows 10/11 已预装，缺失时安装程序会引导下载
 - 从 Electron 1.x 升级：建议先卸载 1.x，再安装当前版本；卸载不会删除 Markdown 文档
 
@@ -86,7 +86,7 @@ npm run dist         # Windows NSIS 安装包
 
 安装包输出到：
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.2.0_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.2.1_x64-setup.exe`
 
 ### 桌面 E2E
 
@@ -117,7 +117,7 @@ build/                  图标源文件与生成脚本
 
 ## 版本与发布
 
-当前版本：**2.2.0**。
+当前版本：**2.2.1**。
 
 - `main` 和 Pull Request 会在 Windows GitHub Actions 中运行类型检查、前端测试、Rust 测试和前端构建
 - 版本号同步维护于 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`
@@ -126,8 +126,8 @@ build/                  图标源文件与生成脚本
 - Release 工作流会构建 NSIS、创建 GitHub Release，并上传同版本安装包
 
 ```powershell
-git tag -a v2.2.0 -m "Vellora 2.2.0"
-git push origin v2.2.0
+git tag -a v2.2.1 -m "Vellora 2.2.1"
+git push origin v2.2.1
 ```
 
 ## 许可证与反馈

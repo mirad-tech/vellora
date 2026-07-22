@@ -14,10 +14,10 @@ Built with **Tauri 2 + React + TypeScript + Vite**. Documents stay on the local 
 
 For **Windows 10/11 x64**:
 
-[**Download Vellora 2.2.0 (NSIS)**](https://github.com/mirad-tech/vellora/releases/download/v2.2.0/Vellora_2.2.0_x64-setup.exe)
+[**Download Vellora 2.2.1 (NSIS)**](https://github.com/mirad-tech/vellora/releases/download/v2.2.1/Vellora_2.2.1_x64-setup.exe)
 
 - All versions: [GitHub Releases](https://github.com/mirad-tech/vellora/releases)
-- Asset: `Vellora_2.2.0_x64-setup.exe`
+- Asset: `Vellora_2.2.1_x64-setup.exe`
 - Requires Microsoft WebView2, normally included with Windows 10/11; the installer can bootstrap it if missing
 - When upgrading from Electron 1.x, uninstall 1.x first; uninstalling does not remove Markdown documents
 
@@ -64,7 +64,7 @@ npm run dist
 
 Installer output:
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.2.0_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.2.1_x64-setup.exe`
 
 Real desktop E2E uses `npm run test:e2e:desktop` with external `tauri-driver` and a matching Edge WebDriver. Release builds never embed WebDriver and the test does not silently fall back to mocks.
 
@@ -78,7 +78,7 @@ Real desktop E2E uses `npm run test:e2e:desktop` with external `tauri-driver` an
 
 ## Repository and releases
 
-Version: **2.2.0**. CI runs on `main` and pull requests. Pushing a signed or annotated `vX.Y.Z` tag builds the Windows installer, creates a GitHub Release, and uploads the matching asset.
+Version: **2.2.1**. CI runs on `main` and pull requests. Pushing a signed or annotated `vX.Y.Z` tag builds the Windows installer, creates a GitHub Release, and uploads the matching asset.
 
 - [Changelog](CHANGELOG.md)
 - [Issues](https://github.com/mirad-tech/vellora/issues)

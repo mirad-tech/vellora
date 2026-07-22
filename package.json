@@ -1,7 +1,7 @@
 {
   "name": "vellora-editor",
   "productName": "Vellora",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Vellora lightweight Markdown viewer and editor",
   "author": "Vellora Contributors",
   "type": "module",
