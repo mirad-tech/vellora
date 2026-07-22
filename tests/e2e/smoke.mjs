@@ -164,12 +164,15 @@ async function run() {
 
     // 3 quick edit in read mode + save through the existing draft flow
     await page.click('[data-testid="markdown-body"] h1');
-    await page.waitForSelector('[data-testid="quick-edit-textarea"]');
-    await setTextareaValue(page, '[data-testid="quick-edit-textarea"]', '# 阅读模式标题');
+    await page.waitForSelector('[data-testid="quick-edit-surface"]');
+    await page.$eval('[data-testid="quick-edit-surface"]', (element) => {
+      element.textContent = '阅读模式标题';
+      element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    });
     await page.keyboard.down('Control');
     await page.keyboard.press('Enter');
     await page.keyboard.up('Control');
-    await page.waitForSelector('[data-testid="quick-edit-textarea"]', { hidden: true });
+    await page.waitForSelector('[data-testid="quick-edit-surface"]', { hidden: true });
     const quickEdited = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
     assert(quickEdited.includes('阅读模式标题'), 'quick edit reflected in read mode');
     await page.click('[data-testid="btn-save"]');

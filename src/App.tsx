@@ -1,7 +1,6 @@
 import React, {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -34,6 +33,11 @@ import {
   resolveImageGroupsWithLimit,
   type ImageResolutionMap
 } from './markdown/resolveImages';
+import {
+  isEditableBlockRoundTripSafe,
+  rebuildEditableBlockSource,
+  serializeEditableBlock
+} from './markdown/editableMarkdown';
 import { applySearchHighlights } from './markdown/searchHtml';
 import type { MarkdownDocument } from './types';
 
@@ -57,11 +61,11 @@ type QuickEditState = {
   kind: MarkdownEditableBlockKind;
   start: number;
   end: number;
-  value: string;
+  originalSource: string;
+  originalHtml: string;
   originalDraft: string;
   candidateDraft: string;
   lineEnding: '\r\n' | '\n';
-  layout: { top: number; left: number; width: number; minHeight: number };
 };
 
 const IMAGE_RESOLVE_DEBOUNCE_MS = 300;
@@ -80,8 +84,63 @@ function detectLineEnding(content: string): '\r\n' | '\n' {
   return firstLineFeed > 0 && content[firstLineFeed - 1] === '\r' ? '\r\n' : '\n';
 }
 
-function normalizeLineEndings(value: string, lineEnding: '\r\n' | '\n'): string {
-  return value.replace(/\r\n|\r|\n/g, lineEnding);
+function removeQuickEditAttributes(element: HTMLElement | null): void {
+  if (!element) return;
+  element.removeAttribute('contenteditable');
+  element.removeAttribute('data-testid');
+  element.removeAttribute('aria-label');
+  element.removeAttribute('spellcheck');
+  element.classList.remove('quick-edit-active');
+}
+
+function placeCaret(element: HTMLElement, clientX: number, clientY: number): void {
+  const documentWithCaret = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const pointRange =
+    clientX > 0 && clientY > 0 ? documentWithCaret.caretRangeFromPoint?.(clientX, clientY) : null;
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const range =
+    pointRange && element.contains(pointRange.startContainer)
+      ? pointRange
+      : (() => {
+          const endRange = document.createRange();
+          endRange.selectNodeContents(element);
+          endRange.collapse(false);
+          return endRange;
+        })();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function insertPlainTextAtCaret(element: HTMLElement, value: string): void {
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  if (!selection || !range || !element.contains(range.commonAncestorContainer)) return;
+
+  range.deleteContents();
+  const fragment = document.createDocumentFragment();
+  let lastNode: Node | null = null;
+  value.replace(/\r\n|\r/g, '\n').split('\n').forEach((line, index) => {
+    if (index > 0) {
+      const breakNode = document.createElement('br');
+      fragment.append(breakNode);
+      lastNode = breakNode;
+    }
+    if (line.length > 0) {
+      const textNode = document.createTextNode(line);
+      fragment.append(textNode);
+      lastNode = textNode;
+    }
+  });
+  if (!lastNode) return;
+  range.insertNode(fragment);
+  range.setStartAfter(lastNode);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
 export default function App() {
@@ -103,8 +162,7 @@ export default function App() {
   const [quickEdit, setQuickEdit] = useState<QuickEditState | null>(null);
 
   const readerRef = useRef<HTMLDivElement | null>(null);
-  const readerStageRef = useRef<HTMLDivElement | null>(null);
-  const quickEditRef = useRef<HTMLTextAreaElement | null>(null);
+  const quickEditRef = useRef<HTMLElement | null>(null);
   const quickEditStateRef = useRef<QuickEditState | null>(quickEdit);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const imageRequestId = useRef(0);
@@ -141,6 +199,8 @@ export default function App() {
   const commitQuickEdit = useCallback(() => {
     const current = quickEditStateRef.current;
     if (!current) return;
+    removeQuickEditAttributes(quickEditRef.current);
+    quickEditRef.current = null;
     draftRef.current = current.candidateDraft;
     setDraftContent(current.candidateDraft);
     quickEditStateRef.current = null;
@@ -373,7 +433,7 @@ export default function App() {
   };
 
   const beginQuickEdit = useCallback(
-    (target: HTMLElement) => {
+    (target: HTMLElement, clientX: number, clientY: number) => {
       if (
         editorMode !== 'read' ||
         viewState.status !== 'ready' ||
@@ -386,57 +446,61 @@ export default function App() {
       const blockElement = target.closest<HTMLElement>('[data-edit-block-id]');
       const blockId = blockElement?.dataset.editBlockId;
       if (!blockElement || !blockId) return;
+      if (quickEditRef.current === blockElement) return;
+      if (quickEditStateRef.current) commitQuickEdit();
       const block = rendered.editableBlocks.find((entry) => entry.id === blockId);
-      const stage = readerStageRef.current;
-      if (!block || !stage) return;
+      if (!block) return;
 
-      const blockRect = blockElement.getBoundingClientRect();
-      const stageRect = stage.getBoundingClientRect();
       const source = draftRef.current.slice(block.start, block.end);
+      const lineEnding = detectLineEnding(draftRef.current);
+      if (!isEditableBlockRoundTripSafe(block.kind, source, blockElement, lineEnding)) return;
       const nextQuickEdit: QuickEditState = {
         blockId,
         kind: block.kind,
         start: block.start,
         end: block.end,
-        value: source.replace(/\r\n|\r/g, '\n'),
+        originalSource: source,
+        originalHtml: blockElement.innerHTML,
         originalDraft: draftRef.current,
         candidateDraft: draftRef.current,
-        lineEnding: detectLineEnding(draftRef.current),
-        layout: {
-          top: blockRect.top - stageRect.top,
-          left: blockRect.left - stageRect.left,
-          width: blockRect.width,
-          minHeight: blockRect.height
-        }
+        lineEnding
       };
       quickEditStateRef.current = nextQuickEdit;
       setQuickEdit(nextQuickEdit);
-      window.setTimeout(() => {
-        quickEditRef.current?.focus();
-        quickEditRef.current?.select();
-      }, 0);
+      quickEditRef.current = blockElement;
+      blockElement.setAttribute('contenteditable', 'true');
+      blockElement.setAttribute('spellcheck', 'true');
+      blockElement.dataset.testid = 'quick-edit-surface';
+      blockElement.setAttribute('aria-label', '编辑当前 Markdown 内容块');
+      blockElement.classList.add('quick-edit-active');
+      blockElement.focus({ preventScroll: true });
+      placeCaret(blockElement, clientX, clientY);
     },
-    [editorMode, rendered, viewState.status]
+    [commitQuickEdit, editorMode, rendered, viewState.status]
   );
 
   const updateQuickEdit = useCallback(
-    (value: string) => {
+    (element: HTMLElement) => {
       const current = quickEditStateRef.current;
       if (!current || documentOpenPendingRef.current) return;
-      const replacement = normalizeLineEndings(value, current.lineEnding);
+      const editedMarkdown = serializeEditableBlock(element);
+      const replacement = rebuildEditableBlockSource(
+        current.kind,
+        current.originalSource,
+        editedMarkdown,
+        current.lineEnding
+      );
       const nextDraft =
-        current.candidateDraft.slice(0, current.start) +
+        current.originalDraft.slice(0, current.start) +
         replacement +
-        current.candidateDraft.slice(current.end);
+        current.originalDraft.slice(current.end);
       draftRef.current = nextDraft;
       const dirty = isReadyDirty(viewStateRef.current, nextDraft);
       syncUnsaved(dirty);
       setSaveState({ status: 'idle' });
       const nextQuickEdit: QuickEditState = {
         ...current,
-        value,
-        candidateDraft: nextDraft,
-        end: current.start + replacement.length
+        candidateDraft: nextDraft
       };
       quickEditStateRef.current = nextQuickEdit;
       setQuickEdit(nextQuickEdit);
@@ -447,6 +511,11 @@ export default function App() {
   const cancelQuickEdit = useCallback(() => {
     const current = quickEditStateRef.current;
     if (!current) return;
+    if (quickEditRef.current) {
+      quickEditRef.current.innerHTML = current.originalHtml;
+    }
+    removeQuickEditAttributes(quickEditRef.current);
+    quickEditRef.current = null;
     draftRef.current = current.originalDraft;
     syncUnsaved(isReadyDirty(viewStateRef.current, current.originalDraft));
     setSaveState({ status: 'idle' });
@@ -454,30 +523,21 @@ export default function App() {
     setQuickEdit(null);
   }, [syncUnsaved]);
 
-  const activeQuickEditBlockId = quickEdit?.blockId ?? null;
-  useEffect(() => {
-    if (!activeQuickEditBlockId) return;
-    const target = Array.from(
-      readerRef.current?.querySelectorAll<HTMLElement>('[data-edit-block-id]') ?? []
-    ).find((element) => element.dataset.editBlockId === activeQuickEditBlockId);
-    target?.classList.add('quick-edit-source-hidden');
-    return () => target?.classList.remove('quick-edit-source-hidden');
-  }, [activeQuickEditBlockId, searchResult.html]);
-
-  useLayoutEffect(() => {
-    const textarea = quickEditRef.current;
-    if (!textarea || !quickEdit) return;
-    textarea.style.height = '0px';
-    textarea.style.height = `${Math.max(quickEdit.layout.minHeight, textarea.scrollHeight)}px`;
-  }, [quickEdit]);
-
   const handleMarkdownNavigation = useCallback(
     async (event: ReactMouseEvent<HTMLDivElement>) => {
       if (documentOpenPendingRef.current) return;
       const target = event.target as HTMLElement | null;
       const anchor = target?.closest('a');
+      const activeEditor = quickEditRef.current;
+      if (target && activeEditor?.contains(target)) {
+        if (anchor) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
       if (!anchor) {
-        if (event.button === 0 && target) beginQuickEdit(target);
+        if (event.button === 0 && target) beginQuickEdit(target, event.clientX, event.clientY);
         return;
       }
       if (viewState.status !== 'ready') return;
@@ -913,48 +973,51 @@ export default function App() {
                 文件为空
               </div>
             ) : (
-              <div ref={readerStageRef} className="reader-stage">
+              <div className="reader-stage">
                 <div
                   ref={readerRef}
                   className="markdown-body"
                   data-testid="markdown-body"
                   onClick={handleMarkdownNavigation}
                   onAuxClick={handleMarkdownNavigation}
+                  onInput={(event) => {
+                    const editor = quickEditRef.current;
+                    if (editor?.contains(event.target as Node)) updateQuickEdit(editor);
+                  }}
+                  onBlur={(event) => {
+                    if (event.target === quickEditRef.current) commitQuickEdit();
+                  }}
+                  onPaste={(event) => {
+                    const editor = quickEditRef.current;
+                    if (!editor?.contains(event.target as Node)) return;
+                    event.preventDefault();
+                    insertPlainTextAtCaret(editor, event.clipboardData.getData('text/plain'));
+                    updateQuickEdit(editor);
+                  }}
+                  onKeyDown={(event) => {
+                    const editor = quickEditRef.current;
+                    if (!editor?.contains(event.target as Node)) return;
+                    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      cancelQuickEdit();
+                      return;
+                    }
+                    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      commitQuickEdit();
+                      return;
+                    }
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      insertPlainTextAtCaret(editor, '\n');
+                      updateQuickEdit(editor);
+                    }
+                  }}
                   dangerouslySetInnerHTML={readerHtml}
                 />
-                {quickEdit ? (
-                  <textarea
-                    ref={quickEditRef}
-                    className="quick-edit-textarea"
-                    data-testid="quick-edit-textarea"
-                    data-edit-kind={quickEdit.kind}
-                    aria-label="编辑当前 Markdown 块"
-                    value={quickEdit.value}
-                    spellCheck={false}
-                    style={{
-                      top: quickEdit.layout.top,
-                      left: quickEdit.layout.left,
-                      width: quickEdit.layout.width,
-                      minHeight: quickEdit.layout.minHeight
-                    }}
-                    onChange={(event) => updateQuickEdit(event.target.value)}
-                    onBlur={commitQuickEdit}
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape') {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        cancelQuickEdit();
-                        return;
-                      }
-                      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        commitQuickEdit();
-                      }
-                    }}
-                  />
-                ) : null}
               </div>
             )
           ) : null}

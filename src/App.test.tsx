@@ -717,12 +717,14 @@ describe('App', () => {
       const block = body.querySelector<HTMLElement>(`[data-edit-block-kind="${kind}"]`);
       expect(block).toBeTruthy();
       fireEvent.click(block!);
-      expect(screen.getByTestId('quick-edit-textarea').getAttribute('data-edit-kind')).toBe(kind);
-      fireEvent.keyDown(screen.getByTestId('quick-edit-textarea'), {
+      const quickEditor = screen.getByTestId('quick-edit-surface');
+      expect(quickEditor).toBe(block);
+      expect(quickEditor.getAttribute('contenteditable')).toBe('true');
+      fireEvent.keyDown(quickEditor, {
         key: 'Enter',
         ctrlKey: true
       });
-      expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+      expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
     }
 
     const duplicateParagraphs = body.querySelectorAll<HTMLElement>(
@@ -730,14 +732,14 @@ describe('App', () => {
     );
     const editedPreviewNode = duplicateParagraphs[1];
     fireEvent.click(editedPreviewNode);
-    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
-      target: { value: '只修改第二处' }
-    });
+    const quickEditor = screen.getByTestId('quick-edit-surface');
+    quickEditor.textContent = '只修改第二处';
+    fireEvent.input(quickEditor);
     expect(
       body.querySelectorAll<HTMLElement>('[data-edit-block-kind="paragraph"]')[1]
     ).toBe(editedPreviewNode);
-    expect(body.textContent).not.toContain('只修改第二处');
-    fireEvent.blur(screen.getByTestId('quick-edit-textarea'));
+    expect(body.textContent).toContain('只修改第二处');
+    fireEvent.blur(quickEditor);
 
     fireEvent.click(screen.getByTestId('btn-save'));
     await waitFor(() => {
@@ -759,13 +761,11 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
     fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
-    expect((screen.getByTestId('quick-edit-textarea') as HTMLTextAreaElement).value).toBe(
-      '第一行\n第二行'
-    );
-    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
-      target: { value: '第一行已修改\n第二行' }
-    });
-    fireEvent.blur(screen.getByTestId('quick-edit-textarea'));
+    const quickEditor = screen.getByTestId('quick-edit-surface');
+    expect(quickEditor.textContent).toBe('第一行\n第二行');
+    quickEditor.textContent = '第一行已修改\n第二行';
+    fireEvent.input(quickEditor);
+    fireEvent.blur(quickEditor);
     fireEvent.click(screen.getByTestId('btn-save'));
 
     await waitFor(() => {
@@ -776,19 +776,56 @@ describe('App', () => {
     });
   });
 
+  test('quick edit stays disabled when rendered content cannot round-trip to the original Markdown', async () => {
+    const document: MarkdownDocument = {
+      ...sampleDoc,
+      content: '# 标题\n\n保留 \\*星号\\*  \n下一行\n'
+    };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
+
+    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
+    expect(setUnsavedChanges).not.toHaveBeenCalledWith(true);
+  });
+
+  test('IME composition Enter and Escape do not commit or cancel quick edit', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
+    const quickEditor = screen.getByTestId('quick-edit-surface');
+    quickEditor.textContent = '拼音输入';
+    fireEvent.input(quickEditor);
+
+    fireEvent.keyDown(quickEditor, { key: 'Enter', isComposing: true, keyCode: 229 });
+    expect(screen.getByTestId('quick-edit-surface')).toBe(quickEditor);
+    expect(quickEditor.querySelector('br')).toBeNull();
+
+    fireEvent.keyDown(quickEditor, { key: 'Escape', isComposing: true, keyCode: 229 });
+    expect(screen.getByTestId('quick-edit-surface')).toBe(quickEditor);
+
+    fireEvent.keyDown(quickEditor, { key: 'Escape' });
+    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
+  });
+
   test('Escape cancels quick edit and restores the previous dirty state', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
     fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
-    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
-      target: { value: '# 临时标题' }
-    });
+    const quickEditor = screen.getByTestId('quick-edit-surface');
+    quickEditor.textContent = '临时标题';
+    fireEvent.input(quickEditor);
     await waitFor(() => expect(setUnsavedChanges).toHaveBeenCalledWith(true));
 
-    fireEvent.keyDown(screen.getByTestId('quick-edit-textarea'), { key: 'Escape' });
-    expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    fireEvent.keyDown(quickEditor, { key: 'Escape' });
+    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
     await waitFor(() => {
       expect(screen.getByTestId('markdown-body').textContent).toContain('标题');
       const calls = setUnsavedChanges.mock.calls.map((call) => call[0]);
@@ -806,9 +843,9 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
     fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
-    fireEvent.change(screen.getByTestId('quick-edit-textarea'), {
-      target: { value: '阅读模式修改' }
-    });
+    const quickEditor = screen.getByTestId('quick-edit-surface');
+    quickEditor.textContent = '阅读模式修改';
+    fireEvent.input(quickEditor);
     await act(async () => closeRequestedHandler?.());
     expect(screen.getByTestId('discard-modal')).toBeTruthy();
     fireEvent.click(screen.getByTestId('discard-cancel'));
@@ -833,12 +870,12 @@ describe('App', () => {
     const link = body.querySelector('a')!;
     fireEvent.click(link);
     await waitFor(() => expect(screen.getByTestId('external-link-modal')).toBeTruthy());
-    expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
     fireEvent.click(screen.getByTestId('external-cancel'));
 
     fireEvent.click(screen.getByTestId('markdown-body').querySelectorAll('p')[1]);
-    const quickEditor = screen.getByTestId('quick-edit-textarea');
-    fireEvent.click(quickEditor);
+    const quickEditor = screen.getByTestId('quick-edit-surface');
+    fireEvent.click(quickEditor.querySelector('a')!);
     expect(inspectMarkdownLink).toHaveBeenCalledTimes(1);
   });
 
@@ -855,7 +892,7 @@ describe('App', () => {
     const body = screen.getByTestId('markdown-body');
     for (const selector of ['li', 'td', 'pre']) {
       fireEvent.click(body.querySelector(selector)!);
-      expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+      expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
     }
   });
 
@@ -875,7 +912,7 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByTestId('btn-open')).toHaveProperty('disabled', true));
 
     fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
-    expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
     await act(async () => {
       resolveOpen({ ok: false, code: 'READ_FAILED', message: '读取失败' });
     });
@@ -893,12 +930,12 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
     fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
-    expect(screen.getByTestId('quick-edit-textarea')).toBeTruthy();
+    expect(screen.getByTestId('quick-edit-surface')).toBeTruthy();
 
     await waitFor(() => expect(openFilePathHandler).toBeTypeOf('function'));
     act(() => openFilePathHandler?.('C:\\docs\\next.md'));
     await waitFor(() => {
-      expect(screen.queryByTestId('quick-edit-textarea')).toBeNull();
+      expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
       expect(screen.getByTestId('markdown-body').textContent).toContain('下一个文档');
     });
   });

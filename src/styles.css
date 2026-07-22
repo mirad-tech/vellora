@@ -401,40 +401,23 @@ textarea:focus-visible {
 
 .markdown-body [data-edit-block-id] {
   cursor: text;
-  border-radius: 4px;
-  transition: background 120ms ease, box-shadow 120ms ease;
 }
 
 .markdown-body [data-edit-block-id]:hover {
-  background: rgba(37, 99, 235, 0.035);
-  box-shadow: -3px 0 0 rgba(37, 99, 235, 0.35);
+  background: transparent;
 }
 
-.markdown-body .quick-edit-source-hidden {
-  visibility: hidden;
-}
-
-.quick-edit-textarea {
-  position: absolute;
-  z-index: 2;
-  box-sizing: border-box;
-  max-height: 60vh;
-  padding: 7px 9px;
-  resize: none;
-  overflow: auto;
-  border: 1px solid var(--accent);
-  border-radius: 5px;
+.markdown-body .quick-edit-active,
+.markdown-body .quick-edit-active:focus,
+.markdown-body .quick-edit-active:focus-visible {
   outline: none;
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 9%);
-  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
-  font-size: 14px;
-  line-height: 1.55;
+  background: transparent;
+  box-shadow: none;
+  caret-color: var(--text);
 }
 
-.quick-edit-textarea:focus-visible {
-  outline: none;
+.markdown-body .quick-edit-active a {
+  pointer-events: none;
 }
 
 .markdown-body h1,

@@ -40,6 +40,17 @@ async function setReactTextareaValue(selector, value) {
   }, selector, value);
 }
 
+async function setContentEditableText(selector, value) {
+  await browser.execute((targetSelector, nextValue) => {
+    const element = document.querySelector(targetSelector);
+    if (!(element instanceof HTMLElement)) {
+      throw new Error(`contenteditable not found: ${targetSelector}`);
+    }
+    element.textContent = nextValue;
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+  }, selector, value);
+}
+
 describe('Vellora desktop E2E (real IPC)', () => {
   it('CLI open, quick edit, save, failed link, success link, search, outline, external cancel', async () => {
     expect(Boolean(sourcePath && fs.existsSync(sourcePath))).toBe(true);
@@ -52,12 +63,9 @@ describe('Vellora desktop E2E (real IPC)', () => {
 
     // 2) Quick edit in read mode + save source on disk
     await $('[data-testid="markdown-body"] h1').click();
-    const quickEditor = await $('[data-testid="quick-edit-textarea"]');
+    const quickEditor = await $('[data-testid="quick-edit-surface"]');
     await quickEditor.waitForDisplayed({ timeout: 10000 });
-    await setReactTextareaValue(
-      '[data-testid="quick-edit-textarea"]',
-      '# 源文档（阅读模式修改）'
-    );
+    await setContentEditableText('[data-testid="quick-edit-surface"]', '源文档（阅读模式修改）');
     await $('[data-testid="btn-save"]').click();
     await browser.waitUntil(
       async () => fs.readFileSync(sourcePath, 'utf8').includes('阅读模式修改'),
