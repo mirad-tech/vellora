@@ -1,5 +1,7 @@
 :root {
   font-family:
+    "Source Han Serif SC VF",
+    "Source Han Serif SC",
     "Segoe UI Variable Text",
     "SF Pro SC",
     "PingFang SC",
@@ -11,26 +13,34 @@
   -webkit-font-smoothing: antialiased;
   color-scheme: light;
 
-  --bg: #f6f6f4;
-  --surface: #ffffff;
-  --text: #202124;
-  --muted: #62656b;
-  --faint: #96999f;
-  --border: #e4e4e1;
-  --border-strong: #d2d2ce;
-  --accent: #2563eb;
-  --accent-bg: rgba(37, 99, 235, 0.07);
-  --danger: #ef4444;
-  --danger-bg: #fee2e2;
-  --code-bg: #f8fafc;
-  --hit: #fde68a;
-  --hit-active: #f59e0b;
+  --bg: #ebe6dd;
+  --surface: #f4f1eb;
+  --surface-raised: #fbf8f2;
+  --text: #242321;
+  --muted: #6e6860;
+  --faint: #968d82;
+  --border: #ded7cc;
+  --border-strong: #cfc5b7;
+  --control-hover: #e9e3da;
+  --control-active: #ded7cc;
+  --primary-hover: #3a3732;
+  --danger: #bd503f;
+  --danger-bg: #f2ded8;
+  --code-bg: #eee9e1;
+  --hit: #e5ded4;
+  --hit-active: #d3c9bc;
+  --shadow-float: 0 12px 32px rgb(64 54 44 / 12%);
 }
 
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+::selection {
+  background: var(--hit-active);
+  color: var(--text);
 }
 
 html,
@@ -64,11 +74,14 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button:focus-visible,
+button:focus-visible {
+  outline: 1px solid var(--border-strong);
+  outline-offset: 1px;
+}
+
 input:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: 0;
 }
 
 .app-shell {
@@ -80,6 +93,7 @@ textarea:focus-visible {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  position: relative;
   background: var(--bg);
   color: var(--text);
 }
@@ -88,11 +102,12 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
-  min-height: 56px;
-  padding: 8px 12px;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  z-index: 20;
 }
 
 .toolbar-leading,
@@ -100,7 +115,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 6px;
+  gap: 3px;
 }
 
 .toolbar-actions {
@@ -111,14 +126,14 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  margin-left: 3px;
+  margin-left: 5px;
   line-height: 1.2;
 }
 
 .document-name {
   overflow: hidden;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -133,12 +148,13 @@ textarea:focus-visible {
 }
 
 .document-status.unsaved {
-  color: #9a6700;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .toolbar-btn {
-  min-height: 32px;
-  padding: 5px 9px;
+  min-height: 30px;
+  padding: 5px 8px;
   background: transparent;
   color: var(--muted);
   border: 1px solid transparent;
@@ -146,44 +162,33 @@ textarea:focus-visible {
 }
 
 .toolbar-btn:hover:not(:disabled) {
-  background: var(--bg);
-  border-color: var(--border);
+  background: var(--control-hover);
+  border-color: transparent;
   color: var(--text);
 }
 
 .toolbar-btn.active {
-  background: var(--bg);
-  border-color: var(--border-strong);
+  background: var(--control-active);
+  border-color: transparent;
   color: var(--text);
 }
 
 .toolbar-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--surface-raised);
+}
+
+.toolbar-btn.primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+  color: var(--surface-raised);
 }
 
 .open-action {
-  border-color: var(--border);
+  border-color: transparent;
   color: var(--text);
-}
-
-.save-action {
-  min-width: 58px;
-  border-color: var(--border);
-  color: var(--text);
-}
-
-.save-action.dirty {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
-}
-
-.save-action.dirty:hover:not(:disabled) {
-  border-color: #1d4ed8;
-  background: #1d4ed8;
-  color: #fff;
+  font-weight: 600;
 }
 
 .toolbar-btn.danger {
@@ -196,15 +201,15 @@ textarea:focus-visible {
   display: inline-flex;
   gap: 2px;
   padding: 2px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 8px;
-  background: var(--bg);
+  background: var(--control-hover);
 }
 
 .mode-btn {
-  min-width: 56px;
-  min-height: 28px;
-  padding: 4px 10px;
+  min-width: 52px;
+  min-height: 26px;
+  padding: 3px 9px;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
@@ -218,35 +223,105 @@ textarea:focus-visible {
 .mode-btn.active {
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
 }
 
 .search-bar {
+  display: grid;
+  position: absolute;
+  top: 54px;
+  right: 12px;
+  z-index: 30;
+  width: min(360px, calc(100% - 24px));
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-float);
+}
+
+.search-query-row,
+.search-navigation-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+}
+
+.search-query-row {
+  min-height: 42px;
+  padding-left: 12px;
+}
+
+.search-navigation-row {
+  min-height: 34px;
+  justify-content: space-between;
+  padding: 2px 10px 2px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.search-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--muted);
+  stroke-linecap: round;
+  stroke-width: 1.5;
 }
 
 .search-input {
   flex: 1;
-  min-width: 120px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  min-width: 0;
+  height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 0;
   font: inherit;
-  max-width: 520px;
-  background: var(--surface);
+  max-width: none;
+  background: transparent;
   color: var(--text);
+}
+
+.search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search-navigation-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.search-icon-btn {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-family: "Segoe UI Symbol", sans-serif;
+  font-size: 15px;
+}
+
+.search-icon-btn:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.search-close {
+  width: 38px;
+  height: 24px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  font-size: 18px;
 }
 
 .search-count {
   color: var(--muted);
-  font-size: 12px;
-  min-width: 4em;
-  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .main-row {
@@ -258,17 +333,17 @@ textarea:focus-visible {
 }
 
 .outline-panel {
-  width: 220px;
+  width: 232px;
   min-width: 160px;
   max-width: 280px;
   border-right: 1px solid var(--border);
-  background: #fafaf8;
+  background: var(--code-bg);
   overflow: auto;
-  padding: 8px 0;
+  padding: 10px 8px;
 }
 
 .outline-heading {
-  padding: 8px 14px 10px;
+  padding: 6px 8px 11px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -283,19 +358,39 @@ textarea:focus-visible {
 }
 
 .outline-item {
+  position: relative;
   display: block;
   width: 100%;
   text-align: left;
-  padding: 7px 14px;
+  min-height: 30px;
+  padding-top: 6px;
+  padding-bottom: 6px;
   background: transparent;
   color: var(--text);
-  border-radius: 0;
+  border-radius: 5px;
   font-size: 13px;
   border: 0;
 }
 
 .outline-item:hover {
-  background: var(--accent-bg);
+  background: var(--control-hover);
+}
+
+.outline-item.current {
+  background: var(--control-active);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.outline-item.current::before {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--muted);
+  content: '';
 }
 
 .content {
@@ -343,37 +438,42 @@ textarea:focus-visible {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  box-shadow: 0 6px 20px rgb(0 0 0 / 5%);
+  box-shadow: 0 6px 20px rgb(64 54 44 / 6%);
 }
 
 .source-editor-shell {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  padding: 20px clamp(16px, 4vw, 48px) 36px;
+  padding: 0 clamp(18px, 5vw, 64px) 48px;
   overflow: hidden;
-  background: #fbfbfa;
+  background: var(--surface);
 }
 
 .source-editor {
   display: block;
-  width: min(920px, 100%);
+  width: min(840px, 100%);
   min-width: 0;
   min-height: 0;
   height: 100%;
   margin: 0 auto;
-  padding: 22px 24px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 42px 28px 72px;
+  border: 0;
+  border-radius: 0;
   resize: none;
-  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
-  font-size: 14px;
-  line-height: 1.55;
+  font-family: "SF Mono", ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 14.5px;
+  line-height: 1.68;
   background: var(--surface);
   color: var(--text);
   /* Avoid UA default ~20ch width looking like a thin strip in some WebViews */
   field-sizing: fixed;
   box-sizing: border-box;
+}
+
+.source-editor:focus-visible {
+  outline: 0;
+  box-shadow: none;
 }
 
 .reader-stage {
@@ -384,9 +484,9 @@ textarea:focus-visible {
 
 .markdown-body {
   width: 100%;
-  max-width: 790px;
+  max-width: 780px;
   margin: 0 auto;
-  padding: 38px 30px 72px;
+  padding: 46px 30px 84px;
   font-family:
     "Source Han Serif SC VF",
     "Source Han Serif SC",
@@ -394,8 +494,8 @@ textarea:focus-visible {
     "Songti SC",
     "SimSun",
     serif;
-  font-size: 15.5px;
-  line-height: 1.76;
+  font-size: 16px;
+  line-height: 1.78;
   color: var(--text);
 }
 
@@ -466,16 +566,18 @@ textarea:focus-visible {
 }
 
 .markdown-body a {
-  color: var(--accent);
-  text-decoration: none;
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 0.18em;
 }
 
 .markdown-body a:hover {
-  text-decoration: underline;
+  text-decoration-color: var(--text);
 }
 
 .markdown-body code {
-  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", ui-monospace, "Cascadia Code", "Consolas", monospace;
   font-size: 0.9em;
   background: var(--code-bg);
   border: 1px solid var(--border);
@@ -496,6 +598,64 @@ textarea:focus-visible {
   background: transparent;
   padding: 0;
   font-size: 13px;
+}
+
+/* Keep syntax highlighting readable without introducing a second accent palette. */
+.markdown-body .hljs {
+  color: var(--text);
+  background: transparent;
+}
+
+.markdown-body .hljs-keyword,
+.markdown-body .hljs-selector-tag,
+.markdown-body .hljs-title,
+.markdown-body .hljs-section,
+.markdown-body .hljs-type,
+.markdown-body .hljs-function {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.markdown-body .hljs-string,
+.markdown-body .hljs-number,
+.markdown-body .hljs-literal,
+.markdown-body .hljs-attr,
+.markdown-body .hljs-attribute,
+.markdown-body .hljs-built_in,
+.markdown-body .hljs-symbol,
+.markdown-body .hljs-bullet,
+.markdown-body .hljs-meta,
+.markdown-body .hljs-selector-id,
+.markdown-body .hljs-selector-class,
+.markdown-body .hljs-variable,
+.markdown-body .hljs-template-variable {
+  color: var(--muted);
+}
+
+.markdown-body .hljs-comment,
+.markdown-body .hljs-quote,
+.markdown-body .hljs-doctag,
+.markdown-body .hljs-formula {
+  color: var(--faint);
+  font-style: italic;
+}
+
+.markdown-body .hljs-emphasis {
+  font-style: italic;
+}
+
+.markdown-body .hljs-strong {
+  font-weight: 700;
+}
+
+.markdown-body .hljs-addition {
+  background: var(--control-hover);
+}
+
+.markdown-body .hljs-deletion {
+  color: var(--muted);
+  background: var(--control-active);
+  text-decoration: line-through;
 }
 
 .markdown-body table {
@@ -539,13 +699,13 @@ mark.search-hit {
 
 mark.search-hit[data-active-search='true'] {
   background: var(--hit-active);
-  color: #111;
+  color: var(--text);
 }
 
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.35);
+  background: rgba(36, 35, 33, 0.28);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -555,11 +715,11 @@ mark.search-hit[data-active-search='true'] {
 
 .modal {
   width: min(420px, 100%);
-  background: var(--surface);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 9px;
   padding: 18px 18px 14px;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.15);
+  box-shadow: 0 16px 40px rgba(64, 54, 44, 0.16);
 }
 
 .modal h2 {
@@ -591,14 +751,12 @@ mark.search-hit[data-active-search='true'] {
 
 @media (max-width: 720px) {
   .toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 5px;
   }
 
   .mode-toggle {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: center;
-    order: 3;
+    justify-self: start;
   }
 
   .document-identity {
@@ -609,11 +767,44 @@ mark.search-hit[data-active-search='true'] {
     min-width: 0;
   }
 
+  .toolbar-actions .toolbar-btn {
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
   .outline-panel {
     width: 160px;
   }
 
   .markdown-body {
-    padding: 26px 20px 56px;
+    padding: 34px 20px 64px;
+  }
+
+  .source-editor {
+    padding: 34px 20px 64px;
+  }
+}
+
+@media (max-width: 520px) {
+  .toolbar {
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+
+  .mode-btn {
+    min-width: 44px;
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
+  .toolbar-actions .toolbar-btn {
+    min-width: 34px;
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+
+  .search-bar {
+    right: 8px;
+    width: calc(100% - 16px);
   }
 }

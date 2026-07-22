@@ -128,6 +128,12 @@ async function setTextareaValue(page, selector, value) {
   );
 }
 
+async function pressControlKey(page, key) {
+  await page.keyboard.down('Control');
+  await page.keyboard.press(key);
+  await page.keyboard.up('Control');
+}
+
 async function run() {
   const edge = findEdge();
   if (!edge) throw new Error('Microsoft Edge not found. Set EDGE_PATH.');
@@ -175,7 +181,7 @@ async function run() {
     await page.waitForSelector('[data-testid="quick-edit-surface"]', { hidden: true });
     const quickEdited = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
     assert(quickEdited.includes('阅读模式标题'), 'quick edit reflected in read mode');
-    await page.click('[data-testid="btn-save"]');
+    await pressControlKey(page, 's');
     await page.waitForFunction(() => {
       return String(window.__e2eSavedContent || '').includes('阅读模式标题');
     }, { timeout: 10000 });
@@ -196,10 +202,9 @@ async function run() {
     // 5 save
     await page.click('[data-testid="btn-edit"]');
     await setTextareaValue(page, '[data-testid="source-editor"]', '# 保存测试\n');
-    await page.click('[data-testid="btn-save"]');
+    await pressControlKey(page, 's');
     await page.waitForFunction(() => {
-      const t = document.querySelector('[data-testid="btn-save"]')?.textContent || '';
-      return t === '已保存' || t === '保存' || Boolean(window.__e2eSavedContent);
+      return Boolean(window.__e2eSavedContent);
     }, { timeout: 10000 });
     const saved = await page.evaluate(() => window.__e2eSavedContent);
     assert(typeof saved === 'string' && saved.includes('保存测试'), `save content got: ${saved}`);
@@ -217,7 +222,7 @@ async function run() {
     // 7 search
     await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
     await openSample(page);
-    await page.click('[data-testid="btn-search"]');
+    await pressControlKey(page, 'f');
     await page.waitForSelector('[data-testid="search-input"]');
     await page.type('[data-testid="search-input"]', '搜索词');
     await page.waitForFunction(() => {

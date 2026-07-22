@@ -149,6 +149,7 @@ export default function App() {
   const [editorMode, setEditorMode] = useState<EditorMode>('read');
   const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [activeHeadingId, setActiveHeadingId] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
@@ -162,6 +163,7 @@ export default function App() {
   const [quickEdit, setQuickEdit] = useState<QuickEditState | null>(null);
 
   const readerRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLElement | null>(null);
   const quickEditRef = useRef<HTMLElement | null>(null);
   const quickEditStateRef = useRef<QuickEditState | null>(quickEdit);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -230,6 +232,38 @@ export default function App() {
 
   const baseHtml = rendered.status === 'ready' ? rendered.html : '';
   const outline = rendered.status === 'ready' ? rendered.outline : [];
+
+  const updateActiveHeading = useCallback(() => {
+    if (editorMode !== 'read' || outline.length === 0) return;
+    const reader = readerRef.current;
+    const content = contentRef.current;
+    if (!reader || !content) return;
+
+    const threshold = content.getBoundingClientRect().top + 96;
+    let currentId = outline[0].id;
+    for (const entry of outline) {
+      const heading = reader.ownerDocument.getElementById(entry.id);
+      if (heading && !reader.contains(heading)) continue;
+      if (!heading || heading.getBoundingClientRect().top > threshold) break;
+      currentId = entry.id;
+    }
+    setActiveHeadingId((current) => (current === currentId ? current : currentId));
+  }, [editorMode, outline]);
+
+  useEffect(() => {
+    if (outline.length === 0) {
+      setActiveHeadingId('');
+      return;
+    }
+    setActiveHeadingId((current) =>
+      outline.some((entry) => entry.id === current) ? current : outline[0].id
+    );
+  }, [outline]);
+
+  useEffect(() => {
+    if (!outlineOpen) return;
+    updateActiveHeading();
+  }, [outlineOpen, updateActiveHeading]);
 
   const htmlWithImages = useMemo(
     () => applyImageResolutions(baseHtml, imageMap),
@@ -688,17 +722,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [discardDialog, handleSave, outlineOpen, pendingExternal, searchOpen]);
 
-  const saveLabel =
-    saveState.status === 'saving'
-      ? '保存中...'
-      : saveState.status === 'saved'
-        ? '已保存'
-        : saveState.status === 'error'
-          ? '保存失败'
-          : hasUnsaved
-            ? '未保存'
-            : '保存';
-
   const titleText =
     viewState.status === 'ready'
       ? `${hasUnsaved ? '• ' : ''}${viewState.document.name} — Vellora`
@@ -708,6 +731,12 @@ export default function App() {
   const toolbarStatus =
     quickEdit !== null
       ? '正在编辑当前内容块'
+      : saveState.status === 'saving'
+        ? '正在保存'
+        : saveState.status === 'saved'
+          ? '已保存'
+          : saveState.status === 'error'
+            ? saveState.message
       : viewState.status === 'ready'
         ? statusMessage && statusMessage !== viewState.document.name
           ? statusMessage
@@ -786,96 +815,89 @@ export default function App() {
           >
             目录
           </button>
-          <button
-            type="button"
-            className={searchOpen ? 'toolbar-btn active' : 'toolbar-btn'}
-            data-testid="btn-search"
-            disabled={viewState.status !== 'ready'}
-            onClick={() => {
-              setSearchOpen((v) => !v);
-              window.setTimeout(() => searchInputRef.current?.focus(), 0);
-            }}
-          >
-            查找
-          </button>
-          <button
-            type="button"
-            className={hasUnsaved ? 'toolbar-btn save-action dirty' : 'toolbar-btn save-action'}
-            data-testid="btn-save"
-            disabled={
-              viewState.status !== 'ready' || saveState.status === 'saving' || documentOpenPending
-            }
-            onClick={() => void handleSave()}
-            title="保存（Ctrl+S）"
-          >
-            {saveLabel}
-          </button>
         </div>
       </header>
 
       {searchOpen && viewState.status === 'ready' ? (
-        <div className="search-bar" data-testid="search-bar">
-          <input
-            ref={searchInputRef}
-            type="search"
-            className="search-input"
-            data-testid="search-input"
-            placeholder="搜索"
-            aria-label="搜索当前文档"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setSearchActiveIndex(0);
-            }}
-            onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                if (searchResult.count <= 0) return;
-                const delta = e.shiftKey ? -1 : 1;
-                setSearchActiveIndex(
-                  (searchResult.activeIndex + delta + searchResult.count) % searchResult.count
-                );
-              }
-            }}
-          />
-          <span className="search-count" data-testid="search-count">
-            {searchResult.count > 0
-              ? `${searchResult.activeIndex + 1}/${searchResult.count}`
-              : '无结果'}
-          </span>
-          <button
-            type="button"
-            className="toolbar-btn"
-            data-testid="search-prev"
-            disabled={searchResult.count <= 0}
-            onClick={() =>
-              setSearchActiveIndex(
-                (searchResult.activeIndex - 1 + searchResult.count) % searchResult.count
-              )
-            }
-          >
-            上一个
-          </button>
-          <button
-            type="button"
-            className="toolbar-btn"
-            data-testid="search-next"
-            disabled={searchResult.count <= 0}
-            onClick={() =>
-              setSearchActiveIndex((searchResult.activeIndex + 1) % searchResult.count)
-            }
-          >
-            下一个
-          </button>
-          <button
-            type="button"
-            className="toolbar-btn search-close"
-            data-testid="search-close"
-            onClick={() => setSearchOpen(false)}
-            aria-label="关闭查找"
-          >
-            关闭
-          </button>
+        <div className="search-bar" data-testid="search-bar" role="search">
+          <div className="search-query-row">
+            <svg className="search-icon" viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="8.5" cy="8.5" r="5.25" />
+              <path d="m12.5 12.5 4 4" />
+            </svg>
+            <input
+              ref={searchInputRef}
+              type="search"
+              className="search-input"
+              data-testid="search-input"
+              placeholder="查找"
+              aria-label="搜索当前文档"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchActiveIndex(0);
+              }}
+              onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setSearchOpen(false);
+                  return;
+                }
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (searchResult.count <= 0) return;
+                  const delta = e.shiftKey ? -1 : 1;
+                  setSearchActiveIndex(
+                    (searchResult.activeIndex + delta + searchResult.count) % searchResult.count
+                  );
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="search-icon-btn search-close"
+              data-testid="search-close"
+              onClick={() => setSearchOpen(false)}
+              aria-label="关闭查找"
+            >
+              ×
+            </button>
+          </div>
+          <div className="search-navigation-row">
+            <div className="search-navigation-actions">
+              <button
+                type="button"
+                className="search-icon-btn"
+                data-testid="search-prev"
+                disabled={searchResult.count <= 0}
+                onClick={() =>
+                  setSearchActiveIndex(
+                    (searchResult.activeIndex - 1 + searchResult.count) % searchResult.count
+                  )
+                }
+                aria-label="上一个匹配项"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="search-icon-btn"
+                data-testid="search-next"
+                disabled={searchResult.count <= 0}
+                onClick={() =>
+                  setSearchActiveIndex((searchResult.activeIndex + 1) % searchResult.count)
+                }
+                aria-label="下一个匹配项"
+              >
+                ↓
+              </button>
+            </div>
+            <span className="search-count" data-testid="search-count">
+              {searchResult.count > 0
+                ? `${searchResult.activeIndex + 1} / ${searchResult.count}`
+                : '0 / 0'}
+            </span>
+          </div>
         </div>
       ) : null}
 
@@ -891,15 +913,22 @@ export default function App() {
                   <button
                     key={entry.id}
                     type="button"
-                    className="outline-item"
+                    className={
+                      activeHeadingId === entry.id ? 'outline-item current' : 'outline-item'
+                    }
                     data-testid="outline-item"
                     data-level={entry.level}
+                    aria-current={activeHeadingId === entry.id ? 'location' : undefined}
                     style={{ paddingLeft: `${(entry.level - 1) * 12 + 8}px` }}
                     onClick={() => {
+                      setActiveHeadingId(entry.id);
                       if (editorMode !== 'read') setEditorMode('read');
                       window.setTimeout(() => {
-                        const el = readerRef.current?.querySelector(`#${CSS.escape(entry.id)}`);
-                        el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        const reader = readerRef.current;
+                        const heading = reader?.ownerDocument.getElementById(entry.id);
+                        if (reader && heading && reader.contains(heading)) {
+                          heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
                       }, 0);
                     }}
                   >
@@ -911,7 +940,12 @@ export default function App() {
           </aside>
         ) : null}
 
-        <main className="content" data-testid="content">
+        <main
+          ref={contentRef}
+          className="content"
+          data-testid="content"
+          onScroll={outlineOpen ? updateActiveHeading : undefined}
+        >
           {viewState.status === 'empty' ? (
             <div className="empty-state" data-testid="empty-state">
               <div className="empty-mark" aria-hidden="true">MD</div>

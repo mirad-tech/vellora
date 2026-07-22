@@ -61,6 +61,12 @@ vi.mock('./api/tauri', () => ({
 
 import App from './App';
 
+async function pressCtrlKey(key: string): Promise<void> {
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true }));
+  });
+}
+
 describe('App', () => {
   /** Captured from onCloseRequested so tests can invoke close protection. */
   let closeRequestedHandler: (() => void) | null = null;
@@ -159,7 +165,7 @@ describe('App', () => {
     });
   });
 
-  test('tracks dirty state and saves with button', async () => {
+  test('tracks dirty state and saves with shortcut', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
@@ -173,7 +179,7 @@ describe('App', () => {
       expect(setUnsavedChanges).toHaveBeenCalledWith(true);
     });
 
-    fireEvent.click(screen.getByTestId('btn-save'));
+    await pressCtrlKey('s');
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalledWith(sampleDoc.path, '# 标题\n\n已保存\n');
     });
@@ -182,7 +188,7 @@ describe('App', () => {
     });
   });
 
-  test('save failure shows error label', async () => {
+  test('save failure shows error status', async () => {
     saveMarkdownFile.mockResolvedValueOnce({
       ok: false,
       code: 'SAVE_FAILED',
@@ -195,10 +201,10 @@ describe('App', () => {
 
     fireEvent.click(screen.getByTestId('btn-edit'));
     fireEvent.change(screen.getByTestId('source-editor'), { target: { value: 'x' } });
-    fireEvent.click(screen.getByTestId('btn-save'));
+    await pressCtrlKey('s');
 
     await waitFor(() => {
-      expect(screen.getByTestId('btn-save').textContent).toBe('保存失败');
+      expect(screen.getByTestId('status-text').textContent).toContain('保存失败');
     });
   });
 
@@ -225,14 +231,17 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('btn-search'));
+    await pressCtrlKey('f');
     const input = screen.getByTestId('search-input');
     fireEvent.change(input, { target: { value: '搜索词' } });
 
     await waitFor(() => {
-      expect(screen.getByTestId('search-count').textContent).toMatch(/1\/1/);
+      expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*1/);
     });
     expect(screen.getByTestId('markdown-body').querySelector('mark.search-hit')).toBeTruthy();
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('search-bar')).toBeNull();
   });
 
   test('external link confirmation flow', async () => {
@@ -260,6 +269,35 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-outline'));
     expect(screen.getByTestId('outline-panel')).toBeTruthy();
     expect(screen.getByTestId('outline-item').textContent).toBe('标题');
+    expect(screen.getByTestId('outline-item').getAttribute('aria-current')).toBe('location');
+  });
+
+  test('opening outline selects the heading at the current scroll position', async () => {
+    chooseMarkdownFile.mockResolvedValueOnce({
+      ok: true,
+      document: {
+        ...sampleDoc,
+        content: '# 第一节\n\n正文\n\n## 第二节\n\n更多正文\n'
+      }
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    const content = screen.getByTestId('content');
+    const headings = screen.getByTestId('markdown-body').querySelectorAll<HTMLElement>('h1, h2');
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
+    vi.spyOn(headings[0], 'getBoundingClientRect').mockReturnValue({ top: -180 } as DOMRect);
+    vi.spyOn(headings[1], 'getBoundingClientRect').mockReturnValue({ top: 40 } as DOMRect);
+
+    fireEvent.click(screen.getByTestId('btn-outline'));
+
+    await waitFor(() => {
+      const items = screen.getAllByTestId('outline-item');
+      expect(items[0].getAttribute('aria-current')).toBeNull();
+      expect(items[1].getAttribute('aria-current')).toBe('location');
+    });
   });
 
   test('Ctrl+S triggers save', async () => {
@@ -270,11 +308,7 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-edit'));
     fireEvent.change(screen.getByTestId('source-editor'), { target: { value: 'saved via key' } });
 
-    await act(async () => {
-      window.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true })
-      );
-    });
+    await pressCtrlKey('s');
 
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalled();
@@ -321,7 +355,7 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('discard-cancel'));
     expect(openMarkdownLink).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId('btn-save'));
+    await pressCtrlKey('s');
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalledWith(
         'C:\\docs\\source.md',
@@ -413,7 +447,7 @@ describe('App', () => {
     });
 
     // Failed open must still save back to the source path, never a dead target path.
-    fireEvent.click(screen.getByTestId('btn-save'));
+    await pressCtrlKey('s');
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalledWith('C:\\docs\\source.md', draft);
     });
@@ -741,7 +775,7 @@ describe('App', () => {
     expect(body.textContent).toContain('只修改第二处');
     fireEvent.blur(quickEditor);
 
-    fireEvent.click(screen.getByTestId('btn-save'));
+    await pressCtrlKey('s');
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalledWith(
         sampleDoc.path,
@@ -766,7 +800,7 @@ describe('App', () => {
     quickEditor.textContent = '第一行已修改\n第二行';
     fireEvent.input(quickEditor);
     fireEvent.blur(quickEditor);
-    fireEvent.click(screen.getByTestId('btn-save'));
+    await pressCtrlKey('s');
 
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalledWith(
@@ -850,7 +884,7 @@ describe('App', () => {
     expect(screen.getByTestId('discard-modal')).toBeTruthy();
     fireEvent.click(screen.getByTestId('discard-cancel'));
 
-    fireEvent.click(screen.getByTestId('btn-save'));
+    await pressCtrlKey('s');
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalledWith(
         sampleDoc.path,

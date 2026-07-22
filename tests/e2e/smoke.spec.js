@@ -146,17 +146,13 @@ describe('Vellora 2.0 browser-mode smoke', () => {
     expect(await $('[data-testid="markdown-body"]').getText()).toContain('新标题');
   });
 
-  it('save button works after edit', async () => {
+  it('save shortcut works after edit', async () => {
     await openSample();
     await $('[data-testid="btn-edit"]').click();
     await (await $('[data-testid="source-editor"]')).setValue('# 保存测试\n');
-    const save = await $('[data-testid="btn-save"]');
-    await save.click();
+    await browser.keys(['Control', 's']);
     await browser.waitUntil(
-      async () => {
-        const label = await save.getText();
-        return label === '已保存' || label === '保存';
-      },
+      async () => Boolean(await browser.execute(() => window.__e2eSavedContent)),
       { timeout: 10000 }
     );
     const content = await browser.execute(() => window.__e2eSavedContent);
@@ -176,7 +172,7 @@ describe('Vellora 2.0 browser-mode smoke', () => {
 
   it('document search finds matches', async () => {
     await openSample();
-    await $('[data-testid="btn-search"]').click();
+    await browser.keys(['Control', 'f']);
     const input = await $('[data-testid="search-input"]');
     await input.setValue('搜索词');
     const count = await $('[data-testid="search-count"]');

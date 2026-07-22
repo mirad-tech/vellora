@@ -23,7 +23,7 @@ async function enterEditAndSetValue(value) {
   await $('[data-testid="btn-edit"]').click();
   const editor = await $('[data-testid="source-editor"]');
   await editor.waitForDisplayed({ timeout: 10000 });
-  await editor.setValue(value);
+  await setReactTextareaValue('[data-testid="source-editor"]', value);
   return editor;
 }
 
@@ -66,7 +66,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     const quickEditor = await $('[data-testid="quick-edit-surface"]');
     await quickEditor.waitForDisplayed({ timeout: 10000 });
     await setContentEditableText('[data-testid="quick-edit-surface"]', '源文档（阅读模式修改）');
-    await $('[data-testid="btn-save"]').click();
+    await browser.keys(['Control', 's']);
     await browser.waitUntil(
       async () => fs.readFileSync(sourcePath, 'utf8').includes('阅读模式修改'),
       { timeout: 15000, timeoutMsg: 'quick edit was not saved to disk' }
@@ -75,7 +75,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     // 3) Full source edit + save
     let sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(sourceText.replace('正文搜索词 alpha', '正文搜索词 alpha 已保存'));
-    await $('[data-testid="btn-save"]').click();
+    await browser.keys(['Control', 's']);
     await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('已保存'), {
       timeout: 15000,
       timeoutMsg: 'disk content not updated after save'
@@ -93,7 +93,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     await discard.waitForDisplayed({ reverse: true, timeout: 5000 });
 
     await enterEditAndSetValue(`${fs.readFileSync(sourcePath, 'utf8')}\n草稿 再保存`);
-    await $('[data-testid="btn-save"]').click();
+    await browser.keys(['Control', 's']);
     await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('再保存'), {
       timeout: 15000,
       timeoutMsg: 'save after cancel local-link failed (session mismatch?)'
@@ -118,7 +118,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
       { timeout: 15000, timeoutMsg: 'expected open failure status message' }
     );
     await enterEditAndSetValue(draftKeep + ' 仍可保存');
-    await $('[data-testid="btn-save"]').click();
+    await browser.keys(['Control', 's']);
     await browser.waitUntil(
       async () => fs.readFileSync(sourcePath, 'utf8').includes('仍可保存'),
       { timeout: 15000, timeoutMsg: 'save after failed open_markdown_link failed' }
@@ -145,7 +145,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     });
 
     // 6) Search + outline on target
-    await $('[data-testid="btn-search"]').click();
+    await browser.keys(['Control', 'f']);
     const input = await $('[data-testid="search-input"]');
     await input.waitForDisplayed();
     await input.setValue('链接跳转');
