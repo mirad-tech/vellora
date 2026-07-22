@@ -1,7 +1,7 @@
 {
   "name": "vellora-editor",
   "productName": "Vellora",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Vellora lightweight Markdown viewer and editor",
   "author": "Vellora Contributors",
   "type": "module",
@@ -17,6 +17,7 @@
   "scripts": {
     "dev": "tauri dev",
     "dev:web": "vite",
+    "version:check": "node tools/check-version.mjs",
     "build": "npm run typecheck && npm run build:web && tauri build --bundles nsis",
     "build:web": "vite build",
     "preview": "vite preview",

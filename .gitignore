@@ -17,6 +17,17 @@ Thumbs.db
 # Local WebDriver binaries (npm run tools:msedgedriver)
 tools/webdriver/
 
+# Generated icon previews and non-Windows Tauri icon outputs
+build/icon-candidates/
+build/icon-generated-v2/
+src-tauri/icons/128x128@2x.png
+src-tauri/icons/64x64.png
+src-tauri/icons/Square*Logo.png
+src-tauri/icons/StoreLogo.png
+src-tauri/icons/android/
+src-tauri/icons/ios/
+src-tauri/icons/icon.icns
+
 # Local AI / coding-agent instruction files (keep on machine, not public repo)
 AGENTS.md
 CLAUDE.md
