@@ -29,7 +29,10 @@ await new Promise((resolve, reject) => {
 
 await copyFile(join(generatedDir, '32x32.png'), join(iconsDir, '32x32.png'));
 await copyFile(join(generatedDir, '128x128.png'), join(iconsDir, '128x128.png'));
-await copyFile(join(generatedDir, '128x128@2x.png'), join(iconsDir, 'henry.w@example.net'));
+await copyFile(
+  join(generatedDir, '128x128@2x.png'),
+  join(iconsDir, '128x128@2x.png')
+);
 await copyFile(join(generatedDir, 'icon.png'), join(iconsDir, 'icon.png'));
 await copyFile(join(generatedDir, 'icon.ico'), join(iconsDir, 'icon.ico'));
 await copyFile(join(generatedDir, 'icon.png'), join(sourceDirectory, 'icon.png'));

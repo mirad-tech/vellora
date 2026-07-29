@@ -22,6 +22,7 @@
     "build:web": "vite build",
     "release:organize": "node tools/manage-release-artifacts.mjs",
     "release:check": "node tools/manage-release-artifacts.mjs --check",
+    "release:prune-old": "node tools/manage-release-artifacts.mjs --prune-old",
     "release:clean-cache": "cargo clean --release --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -58,7 +59,7 @@
     "jsdom": "^29.1.1",
     "puppeteer-core": "^24.43.1",
     "typescript": "^5.9.2",
-    "vite": "^7.3.5",
-    "vitest": "^4.1.8"
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   }
 }

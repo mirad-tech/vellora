@@ -92,10 +92,9 @@ npm run dist         # Windows NSIS 安装包，并整理本地发布产物
 
 `artifacts/releases/current/Vellora_2.2.1_x64-setup.exe`
 
-`artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，
-`archive/` 保存历史安装器，`manifest.json` 记录文件大小与 SHA-256。可运行
-`npm run release:check` 检查当前安装包与清单。详细规则见
-[本地发布产物管理](docs/release-artifacts.md)。
+`artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，`manifest.json` 记录文件大小与 SHA-256；正式历史版本由 GitHub Releases 保留。
+可运行 `npm run release:prune-old` 删除遗留本地安装器，或运行
+`npm run release:check` 检查当前安装包与清单。详细规则见 [本地发布产物管理](docs/release-artifacts.md)。
 
 ### 桌面 E2E
 
@@ -144,6 +143,7 @@ git push origin v2.2.1
 - 许可证：[MIT](LICENSE)
 - 变更记录：[CHANGELOG.md](CHANGELOG.md)
 - 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 行为准则：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - 安全策略：[SECURITY.md](SECURITY.md)
 - 问题反馈：[GitHub Issues](https://github.com/mirad-tech/vellora/issues)
 - 仓库：[mirad-tech/vellora](https://github.com/mirad-tech/vellora)

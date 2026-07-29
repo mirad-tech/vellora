@@ -5,12 +5,11 @@ import {
   mkdir,
   readdir,
   readFile,
-  rename,
   rm,
   stat,
   writeFile
 } from 'node:fs/promises';
-import { dirname, extname, join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,14 +29,11 @@ const sourceDirectory = join(
 const sourceInstaller = join(sourceDirectory, installerName);
 const releasesDirectory = join(root, 'artifacts', 'releases');
 const currentDirectory = join(releasesDirectory, 'current');
-const archiveTauriDirectory = join(
-  releasesDirectory,
-  'archive',
-  'tauri'
-);
+const archiveDirectory = join(releasesDirectory, 'archive');
 const currentInstaller = join(currentDirectory, installerName);
 const manifestPath = join(releasesDirectory, 'manifest.json');
 const checkOnly = process.argv.includes('--check');
+const pruneOnly = process.argv.includes('--prune-old');
 
 async function fileExists(path) {
   try {
@@ -57,45 +53,6 @@ async function hashFile(path) {
     hash.update(chunk);
   }
   return hash.digest('hex');
-}
-
-async function uniqueArchivePath(path, archiveDirectory) {
-  const name = path.split(/[\\/]/).at(-1);
-  const destination = join(archiveDirectory, name);
-  if (!(await fileExists(destination))) {
-    return destination;
-  }
-
-  const [sourceHash, destinationHash] = await Promise.all([
-    hashFile(path),
-    hashFile(destination)
-  ]);
-  if (sourceHash === destinationHash) {
-    return null;
-  }
-
-  const extension = extname(destination);
-  const stem = destination.slice(0, -extension.length);
-  let candidate = `${stem}.${sourceHash.slice(0, 12)}${extension}`;
-  let counter = 2;
-  while (await fileExists(candidate)) {
-    if ((await hashFile(candidate)) === sourceHash) {
-      return null;
-    }
-    candidate = `${stem}.${sourceHash.slice(0, 12)}-${counter}${extension}`;
-    counter += 1;
-  }
-  return candidate;
-}
-
-async function archiveFile(path, archiveDirectory) {
-  await mkdir(archiveDirectory, { recursive: true });
-  const destination = await uniqueArchivePath(path, archiveDirectory);
-  if (destination === null) {
-    await rm(path);
-    return;
-  }
-  await rename(path, destination);
 }
 
 async function listFiles(directory) {
@@ -134,6 +91,41 @@ async function readManifest() {
   return JSON.parse(await readFile(manifestPath, 'utf8'));
 }
 
+async function writeManifest() {
+  const current = await describeFile(currentInstaller);
+  const manifest = {
+    schemaVersion: 2,
+    generatedAt: new Date().toISOString(),
+    projectVersion: version,
+    current
+  };
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    'utf8'
+  );
+  return current;
+}
+
+async function pruneOldReleases() {
+  if (!(await fileExists(currentInstaller))) {
+    throw new Error(`Current installer is missing: ${currentInstaller}`);
+  }
+
+  await mkdir(currentDirectory, { recursive: true });
+  for (const path of await listFiles(currentDirectory)) {
+    if (path !== currentInstaller) {
+      await rm(path);
+    }
+  }
+  await rm(archiveDirectory, { recursive: true, force: true });
+  const current = await writeManifest();
+
+  console.log(
+    `Pruned old local releases; kept ${current.path} (${current.sha256}).`
+  );
+}
+
 async function checkRelease() {
   if (!(await fileExists(currentInstaller))) {
     throw new Error(`Current installer is missing: ${currentInstaller}`);
@@ -159,15 +151,11 @@ async function checkRelease() {
     );
   }
 
-  const archiveFiles = (
-    await listFiles(join(releasesDirectory, 'archive'))
-  ).sort();
-  const archive = [];
-  for (const path of archiveFiles) {
-    archive.push(await describeFile(path));
-  }
-  if (JSON.stringify(manifest.archive ?? []) !== JSON.stringify(archive)) {
-    throw new Error('Archive files do not match manifest.json.');
+  const archiveFiles = await listFiles(archiveDirectory);
+  if (archiveFiles.length > 0 || 'archive' in manifest) {
+    throw new Error(
+      'Old local releases remain. Run npm run release:prune-old.'
+    );
   }
 
   if (await fileExists(sourceInstaller)) {
@@ -191,26 +179,14 @@ async function organizeRelease() {
     );
   }
 
-  await Promise.all([
-    mkdir(currentDirectory, { recursive: true }),
-    mkdir(archiveTauriDirectory, { recursive: true })
-  ]);
+  await mkdir(currentDirectory, { recursive: true });
 
   for (const path of await listFiles(currentDirectory)) {
     if (path !== currentInstaller) {
-      await archiveFile(path, archiveTauriDirectory);
+      await rm(path);
     }
   }
 
-  if (await fileExists(currentInstaller)) {
-    const [sourceHash, currentHash] = await Promise.all([
-      hashFile(sourceInstaller),
-      hashFile(currentInstaller)
-    ]);
-    if (sourceHash !== currentHash) {
-      await archiveFile(currentInstaller, archiveTauriDirectory);
-    }
-  }
   await copyFile(sourceInstaller, currentInstaller);
 
   for (const path of await listFiles(sourceDirectory)) {
@@ -219,39 +195,22 @@ async function organizeRelease() {
       path !== sourceInstaller &&
       /^Vellora_.+_x64-setup\.exe$/i.test(name)
     ) {
-      await archiveFile(path, archiveTauriDirectory);
+      await rm(path);
     }
   }
 
-  const archiveFiles = await listFiles(
-    join(releasesDirectory, 'archive')
-  );
-  const current = await describeFile(currentInstaller);
-  const archive = [];
-  for (const path of archiveFiles.sort()) {
-    archive.push(await describeFile(path));
-  }
-
-  const manifest = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    projectVersion: version,
-    current,
-    archive
-  };
-  await writeFile(
-    manifestPath,
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    'utf8'
-  );
+  await rm(archiveDirectory, { recursive: true, force: true });
+  const current = await writeManifest();
 
   console.log(
-    `Organized Vellora ${version}: 1 current installer, ${archive.length} archived file(s).`
+    `Organized Vellora ${version}: kept only ${current.path}.`
   );
 }
 
 if (checkOnly) {
   await checkRelease();
+} else if (pruneOnly) {
+  await pruneOldReleases();
 } else {
   await organizeRelease();
 }
