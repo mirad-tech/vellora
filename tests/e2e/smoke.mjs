@@ -138,9 +138,13 @@ async function run() {
   const edge = findEdge();
   if (!edge) throw new Error('Microsoft Edge not found. Set EDGE_PATH.');
 
-  const dev = spawn('npm', ['run', 'dev:web'], {
+  const isWindows = process.platform === 'win32';
+  const devCommand = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
+  const devArgs = isWindows
+    ? ['/d', '/s', '/c', 'npm run dev:web']
+    : ['run', 'dev:web'];
+  const dev = spawn(devCommand, devArgs, {
     cwd: root,
-    shell: true,
     stdio: 'ignore',
     env: { ...process.env, BROWSER: 'none' }
   });
@@ -263,7 +267,7 @@ async function run() {
   } finally {
     if (browser) await browser.close().catch(() => undefined);
     if (process.platform === 'win32' && dev.pid) {
-      spawn('taskkill', ['/pid', String(dev.pid), '/T', '/F'], { shell: true, stdio: 'ignore' });
+      spawn('taskkill.exe', ['/pid', String(dev.pid), '/T', '/F'], { stdio: 'ignore' });
     } else {
       dev.kill('SIGTERM');
     }

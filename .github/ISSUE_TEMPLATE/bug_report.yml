@@ -1,0 +1,79 @@
+name: Bug 报告
+description: 报告可复现的 Vellora 功能或安装问题
+title: '[Bug] '
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。提交前请确认问题可复现，且不包含私密文档内容。
+
+  - type: input
+    id: version
+    attributes:
+      label: Vellora 版本
+      description: 可在安装目录中的 vellora.exe 属性或安装包名称中查看。
+      placeholder: 例如 2.2.1
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: 例如 Windows 11 24H2 x64
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 请提供最小、稳定的操作步骤；如需样本，请先移除隐私信息。
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        3. 出现……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 可附错误信息、日志或截图，但不要上传含敏感内容的 Markdown 文档。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: entry
+    attributes:
+      label: 问题入口
+      options:
+        - 打开或文件关联
+        - 阅读与渲染
+        - 编辑与保存
+        - 图片或链接
+        - 查找或目录
+        - 安装、升级或卸载
+        - 其他
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我已搜索现有 Issue，未发现同一问题。
+          required: true
+        - label: 这不是安全漏洞；安全问题将按 SECURITY.md 私下报告。
+          required: true

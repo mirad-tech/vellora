@@ -81,12 +81,21 @@ npm test             # 前端单元测试
 npm run test:rust    # Rust 单元测试
 npm run test:e2e     # 浏览器 E2E，mock Tauri IPC
 npm run build:web    # 前端生产构建
-npm run dist         # Windows NSIS 安装包
+npm run dist         # Windows NSIS 安装包，并整理本地发布产物
 ```
 
-安装包输出到：
+`npm run build` 的原始安装包输出到：
 
 `src-tauri/target/release/bundle/nsis/Vellora_2.2.1_x64-setup.exe`
+
+`npm run dist` 还会把当前版本复制到：
+
+`artifacts/releases/current/Vellora_2.2.1_x64-setup.exe`
+
+`artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，
+`archive/` 保存历史安装器，`manifest.json` 记录文件大小与 SHA-256。可运行
+`npm run release:check` 检查当前安装包与清单。详细规则见
+[本地发布产物管理](docs/release-artifacts.md)。
 
 ### 桌面 E2E
 
@@ -119,7 +128,7 @@ build/                  图标源文件与生成脚本
 
 当前版本：**2.2.1**。
 
-- `main` 和 Pull Request 会在 Windows GitHub Actions 中运行类型检查、前端测试、Rust 测试和前端构建
+- `main` 和 Pull Request 会在 Windows GitHub Actions 中运行版本检查、类型检查、前端测试、Rust 测试、浏览器 E2E 和前端构建
 - 版本号同步维护于 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`
 - `npm run version:check` 会阻止这些版本号不一致的提交或发布
 - 更新 [CHANGELOG.md](CHANGELOG.md) 后推送 `vX.Y.Z` 标签
@@ -134,6 +143,8 @@ git push origin v2.2.1
 
 - 许可证：[MIT](LICENSE)
 - 变更记录：[CHANGELOG.md](CHANGELOG.md)
+- 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全策略：[SECURITY.md](SECURITY.md)
 - 问题反馈：[GitHub Issues](https://github.com/mirad-tech/vellora/issues)
 - 仓库：[mirad-tech/vellora](https://github.com/mirad-tech/vellora)
 

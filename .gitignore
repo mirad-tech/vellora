@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 release/
+artifacts/releases/
 src-tauri/target/
 test-results/
 playwright-report/

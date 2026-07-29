@@ -8,9 +8,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -22,6 +27,7 @@ jobs:
       - run: npm run version:check
       - run: npm test
       - run: npm run test:rust
+      - run: npm run test:e2e:ci
       - run: npm run dist
       - name: Create GitHub release
         shell: pwsh
