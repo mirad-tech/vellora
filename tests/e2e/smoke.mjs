@@ -142,7 +142,11 @@ async function run() {
   let dev;
   const failures = [];
   try {
-    dev = await createServer({ root, logLevel: 'error' });
+    dev = await createServer({
+      root,
+      logLevel: 'error',
+      server: { host: '127.0.0.1', port: 1420, strictPort: true }
+    });
     await dev.listen();
     await waitForUrl(DEV_URL);
     browser = await puppeteer.launch({

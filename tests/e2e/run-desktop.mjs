@@ -10,7 +10,7 @@
  *   - tauri-driver  (cargo install tauri-driver --locked)
  *   - msedgedriver.exe matching Edge major version
  */
-import { spawn, spawnSync, execSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -33,10 +33,8 @@ function fail(msg) {
 
 function which(cmd) {
   try {
-    const out = execSync(
-      process.platform === 'win32' ? `where ${cmd}` : `command -v ${cmd}`,
-      { encoding: 'utf8', shell: true }
-    );
+    const executable = process.platform === 'win32' ? 'where.exe' : 'which';
+    const out = execFileSync(executable, [cmd], { encoding: 'utf8' });
     return out
       .split(/\r?\n/)
       .map((s) => s.trim())
@@ -54,8 +52,11 @@ function edgeVersion() {
   const edge = candidates.find((p) => fs.existsSync(p));
   if (!edge) fail('Microsoft Edge not found (required for WebView2 desktop E2E).');
   try {
-    const ps = `powershell -NoProfile -Command "(Get-Item '${edge.replace(/'/g, "''")}').VersionInfo.ProductVersion"`;
-    return execSync(ps, { encoding: 'utf8' }).trim();
+    const escapedEdge = edge.replace(/'/g, "''");
+    const script = `(Get-Item -LiteralPath '${escapedEdge}').VersionInfo.ProductVersion`;
+    return execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
+      encoding: 'utf8'
+    }).trim();
   } catch {
     fail(`Could not read Edge version from ${edge}`);
   }
@@ -68,7 +69,7 @@ function major(version) {
 
 function msedgedriverVersion(driverPath) {
   try {
-    const out = execSync(`"${driverPath}" --version`, { encoding: 'utf8' });
+    const out = execFileSync(driverPath, ['--version'], { encoding: 'utf8' });
     const m = out.match(/(\d+\.\d+\.\d+\.\d+|\d+\.\d+\.\d+)/);
     return m ? m[1] : out.trim();
   } catch {
@@ -147,7 +148,6 @@ function runSync(cmd, args) {
   const r = spawnSync(cmd, args, {
     cwd: root,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
     env: process.env
   });
   if (r.status !== 0) {
@@ -200,7 +200,11 @@ async function main() {
     const driverPort = Number(process.env.TAURI_DRIVER_PORT || 4444);
 
     console.log('[e2e:desktop] building web + release binary (custom-protocol)…');
-    runSync('npm', ['run', 'build:web']);
+    const npmCli = process.env.npm_execpath;
+    if (!npmCli || !fs.existsSync(npmCli)) {
+      fail('npm CLI path is unavailable. Run desktop E2E through npm run test:e2e:desktop.');
+    }
+    runSync(process.execPath, [npmCli, 'run', 'build:web']);
     // Must enable custom-protocol; otherwise Tauri stays in dev mode and loads
     // http://localhost:1420 instead of the embedded frontendDist assets.
     runSync('cargo', [
@@ -226,19 +230,17 @@ async function main() {
       {
         cwd: root,
         stdio: 'inherit',
-        shell: true,
         env: process.env
       }
     );
 
     await new Promise((r) => setTimeout(r, 1500));
 
-    const wdioBin = path.join(root, 'node_modules', '.bin', 'wdio.cmd');
+    const wdioCli = path.join(root, 'node_modules', '@wdio', 'cli', 'bin', 'wdio.js');
     const status = await new Promise((resolve) => {
-      wdioProc = spawn(wdioBin, ['run', 'wdio.desktop.conf.js'], {
+      wdioProc = spawn(process.execPath, [wdioCli, 'run', 'wdio.desktop.conf.js'], {
         cwd: root,
         stdio: 'inherit',
-        shell: true,
         env: {
           ...process.env,
           VELLORA_E2E_SOURCE: fixtures.source,
