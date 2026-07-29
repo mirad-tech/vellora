@@ -1,8 +1,8 @@
 /**
  * Download msedgedriver matching the installed Microsoft Edge major/full version.
- * Writes to tools/webdriver/msedgedriver.exe (gitignored).
+ * Writes to artifacts/webdriver/msedgedriver.exe (gitignored).
  *
- * Usage: node tools/fetch-msedgedriver.mjs
+ * Usage: npm run tools:msedgedriver
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -10,8 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '..');
-const outDir = path.join(root, 'tools', 'webdriver');
+const root = path.resolve(__dirname, '../..');
+const outDir = path.join(root, 'artifacts', 'webdriver');
 const zipPath = path.join(outDir, 'edgedriver_win64.zip');
 const driverPath = path.join(outDir, 'msedgedriver.exe');
 const driverNotesPath = path.join(outDir, 'Driver_Notes');

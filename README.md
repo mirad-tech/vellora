@@ -94,7 +94,7 @@ npm run dist         # Windows NSIS 安装包，并整理本地发布产物
 
 `artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，`manifest.json` 记录文件大小与 SHA-256；正式历史版本由 GitHub Releases 保留。
 可运行 `npm run release:prune-old` 删除遗留本地安装器，或运行
-`npm run release:check` 检查当前安装包与清单。详细规则见 [本地发布产物管理](docs/release-artifacts.md)。
+`npm run release:check` 检查当前安装包与清单。详细规则见 [本地发布产物管理](docs/releases/local-artifacts.md)。
 
 ### 桌面 E2E
 
@@ -117,9 +117,14 @@ src/                    React 前端、Markdown 渲染、查找和交互
 src-tauri/              Rust / Tauri 后端与 Windows 打包配置
 src-tauri/capabilities/ Tauri 权限边界
 tests/                  单元测试、E2E 和 Markdown 样本
-build/                  图标源文件与生成脚本
+assets/icons/           应用图标源文件与可复用导出
+tools/                  图标、版本、发布和 WebDriver 维护工具
+docs/                   仓库结构与发布产物文档
+legacy/                 不参与构建的历史 Electron/WDIO 文件
 .github/workflows/      CI 与标签发布流程
 ```
+
+完整目录边界见 [仓库目录说明](docs/repository-layout.md)。
 
 前后端命令统一返回：`{ ok: true, ... } | { ok: false, code, message }`。
 

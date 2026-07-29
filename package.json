@@ -17,12 +17,12 @@
   "scripts": {
     "dev": "tauri dev",
     "dev:web": "vite",
-    "version:check": "node tools/check-version.mjs",
+    "version:check": "node tools/verification/check-version.mjs",
     "build": "npm run typecheck && npm run build:web && tauri build --bundles nsis",
     "build:web": "vite build",
-    "release:organize": "node tools/manage-release-artifacts.mjs",
-    "release:check": "node tools/manage-release-artifacts.mjs --check",
-    "release:prune-old": "node tools/manage-release-artifacts.mjs --prune-old",
+    "release:organize": "node tools/release/manage-release-artifacts.mjs",
+    "release:check": "node tools/release/manage-release-artifacts.mjs --check",
+    "release:prune-old": "node tools/release/manage-release-artifacts.mjs --prune-old",
     "release:clean-cache": "cargo clean --release --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -32,10 +32,10 @@
     "test:e2e": "node tests/e2e/smoke.mjs",
     "test:e2e:ci": "node tests/e2e/smoke.mjs",
     "test:e2e:desktop": "node tests/e2e/run-desktop.mjs",
-    "tools:msedgedriver": "node tools/fetch-msedgedriver.mjs",
+    "tools:msedgedriver": "node tools/webdriver/fetch-msedgedriver.mjs",
     "tauri": "tauri",
     "dist": "npm run build && npm run release:organize",
-    "generate:icon": "node build/generate-icon.mjs"
+    "generate:icon": "node tools/icons/generate-icon.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",

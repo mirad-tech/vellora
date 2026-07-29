@@ -4,8 +4,9 @@ import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const sourceDirectory = dirname(fileURLToPath(import.meta.url));
-const root = join(sourceDirectory, '..');
+const toolDirectory = dirname(fileURLToPath(import.meta.url));
+const root = join(toolDirectory, '..', '..');
+const sourceDirectory = join(root, 'assets', 'icons');
 const iconsDir = join(root, 'src-tauri', 'icons');
 const source = join(sourceDirectory, 'icon-source.png');
 const tauriCli = join(root, 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
@@ -39,4 +40,4 @@ await copyFile(join(generatedDir, 'icon.png'), join(sourceDirectory, 'icon.png')
 await copyFile(join(generatedDir, 'icon.ico'), join(sourceDirectory, 'icon.ico'));
 await rm(generatedDir, { recursive: true, force: true });
 
-console.log('Generated icons from build/icon-source.png');
+console.log('Generated icons from assets/icons/icon-source.png');

@@ -61,7 +61,7 @@ npm run test:e2e:desktop
 - 一个 PR 聚焦一个问题，避免混入无关格式化或生成文件。
 - 说明用户可观察变化、风险边界、实际验证结果和未验证项。
 - UI 变化附截图，并覆盖适用的空、加载、错误、禁用与权限受限状态。
-- 不提交 `node_modules/`、`dist/`、`src-tauri/target/`、`release/` 或 `artifacts/releases/`。
+- 不提交 `node_modules/`、`dist/`、`src-tauri/target/`、`release/` 或 `artifacts/` 下的本地生成文件。
 - 依赖或锁文件变化必须与对应源文件一起提交。
 
 ## 版本与发布

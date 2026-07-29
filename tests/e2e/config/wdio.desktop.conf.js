@@ -9,8 +9,9 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, '../../..');
 const appBinary = path.resolve(
-  __dirname,
+  root,
   'src-tauri',
   'target',
   'release',
@@ -42,7 +43,7 @@ if (!fs.existsSync(appBinary)) {
 /** @type {import('@wdio/types').Options.Testrunner} */
 export const config = {
   runner: 'local',
-  specs: ['./tests/e2e/smoke.desktop.spec.js'],
+  specs: [path.join(root, 'tests', 'e2e', 'smoke.desktop.spec.js')],
   maxInstances: 1,
   hostname: '127.0.0.1',
   port: Number(process.env.TAURI_DRIVER_PORT || 4444),

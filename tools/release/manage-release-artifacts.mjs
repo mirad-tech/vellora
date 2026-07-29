@@ -12,7 +12,7 @@ import {
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const packageJson = JSON.parse(
   await readFile(join(root, 'package.json'), 'utf8')
 );

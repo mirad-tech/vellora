@@ -1,8 +1,9 @@
 node_modules/
 out/
 dist/
-release/
+/release/
 artifacts/releases/
+artifacts/webdriver/
 src-tauri/target/
 test-results/
 playwright-report/
@@ -15,12 +16,8 @@ Thumbs.db
 .env
 .env.*
 
-# Local WebDriver binaries (npm run tools:msedgedriver)
-tools/webdriver/
-
-# Generated icon previews and non-Windows Tauri icon outputs
-build/icon-candidates/
-build/icon-generated-v2/
+# Generated icon workspace and non-Windows Tauri icon outputs
+assets/icons/.generated-icons/
 src-tauri/icons/64x64.png
 src-tauri/icons/Square*Logo.png
 src-tauri/icons/StoreLogo.png

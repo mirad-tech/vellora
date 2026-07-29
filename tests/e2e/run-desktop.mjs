@@ -83,7 +83,7 @@ function resolveMsedgedriver() {
     which('msedgedriver'),
     which('msedgedriver.exe'),
     // Project-local install from: npm run tools:msedgedriver
-    path.join(root, 'tools', 'webdriver', 'msedgedriver.exe')
+    path.join(root, 'artifacts', 'webdriver', 'msedgedriver.exe')
   ].filter(Boolean);
   for (const p of candidates) {
     if (p && fs.existsSync(p)) return path.resolve(p);
@@ -106,7 +106,7 @@ function ensureDrivers() {
       'msedgedriver.exe not found. Install a build matching your Edge major version:\n' +
         '  npm run tools:msedgedriver\n' +
         'or download from https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/\n' +
-        'and set MSEDGEDRIVER_PATH / PATH, or place it at tools/webdriver/msedgedriver.exe'
+        'and set MSEDGEDRIVER_PATH / PATH, or place it at artifacts/webdriver/msedgedriver.exe'
     );
   }
 
@@ -238,7 +238,7 @@ async function main() {
 
     const wdioCli = path.join(root, 'node_modules', '@wdio', 'cli', 'bin', 'wdio.js');
     const status = await new Promise((resolve) => {
-      wdioProc = spawn(process.execPath, [wdioCli, 'run', 'wdio.desktop.conf.js'], {
+      wdioProc = spawn(process.execPath, [wdioCli, 'run', 'tests/e2e/config/wdio.desktop.conf.js'], {
         cwd: root,
         stdio: 'inherit',
         env: {

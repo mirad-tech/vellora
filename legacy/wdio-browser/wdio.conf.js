@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, '../..');
 const DEV_URL = 'http://127.0.0.1:1420';
 
 function waitForUrl(url, timeoutMs = 120000) {
@@ -35,7 +36,7 @@ let devProc;
 /** @type {import('@wdio/types').Options.Testrunner} */
 export const config = {
   runner: 'local',
-  specs: ['./tests/e2e/smoke.spec.js'],
+  specs: [path.join(root, 'tests', 'e2e', 'smoke.spec.js')],
   maxInstances: 1,
   // CDP avoids downloading chromedriver (blocked on this network).
   automationProtocol: 'devtools',
@@ -61,7 +62,7 @@ export const config = {
   },
   async onPrepare() {
     devProc = spawn('npm', ['run', 'dev:web'], {
-      cwd: __dirname,
+      cwd: root,
       stdio: 'ignore',
       shell: true,
       env: { ...process.env, BROWSER: 'none' }
