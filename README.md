@@ -117,10 +117,9 @@ src/                    React 前端、Markdown 渲染、查找和交互
 src-tauri/              Rust / Tauri 后端与 Windows 打包配置
 src-tauri/capabilities/ Tauri 权限边界
 tests/                  单元测试、E2E 和 Markdown 样本
-assets/icons/           应用图标源文件与可复用导出
+assets/icons/           应用图标源文件
 tools/                  图标、版本、发布和 WebDriver 维护工具
 docs/                   仓库结构与发布产物文档
-legacy/                 不参与构建的历史 Electron/WDIO 文件
 .github/workflows/      CI 与标签发布流程
 ```
 

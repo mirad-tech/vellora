@@ -16,8 +16,9 @@ Thumbs.db
 .env
 .env.*
 
-# Generated icon workspace and non-Windows Tauri icon outputs
+# Generated icon workspace, Tauri schemas, and non-Windows icon outputs
 assets/icons/.generated-icons/
+src-tauri/gen/schemas/
 src-tauri/icons/64x64.png
 src-tauri/icons/Square*Logo.png
 src-tauri/icons/StoreLogo.png

@@ -6,15 +6,14 @@ Vellora 的目录按运行代码、测试、维护工具、静态资源和本地
 | 目录 | 职责 | 是否提交 |
 | --- | --- | --- |
 | `.github/` | CI、Release、Dependabot 与社区模板 | 是 |
-| `assets/icons/` | 图标设计源文件和可复用导出 | 是 |
+| `assets/icons/` | 图标设计源文件 | 是 |
 | `docs/` | 当前仓库和发布流程文档 | 是 |
-| `legacy/` | 不再参与构建的历史 Electron/WDIO 文件 | 是，待维护者明确决定是否删除 |
 | `src/` | React 前端、Markdown 处理与交互 | 是 |
 | `src-tauri/` | Rust/Tauri 后端、权限、图标和打包配置 | 是 |
 | `tests/` | E2E、测试夹具和相关配置 | 是 |
 | `tools/` | 图标、版本、发布产物和 WebDriver 维护脚本 | 是 |
 | `artifacts/` | 当前安装包、WebDriver 等本地生成产物 | 否 |
-| `dist/`、`src-tauri/target/` | 可重建的前端和 Rust/Tauri 输出 | 否 |
+| `dist/`、`src-tauri/target/`、`src-tauri/gen/schemas/` | 可重建的前端、Rust/Tauri 输出和能力 Schema | 否 |
 | `node_modules/` | npm 安装依赖 | 否 |
 
 本机的 `.agents/`、`.claude/`、`.codex/` 和 `.gitnexus/` 属于开发工具状态，均被

@@ -18,7 +18,7 @@
     "dev": "tauri dev",
     "dev:web": "vite",
     "version:check": "node tools/verification/check-version.mjs",
-    "build": "npm run typecheck && npm run build:web && tauri build --bundles nsis",
+    "build": "npm run typecheck && tauri build --bundles nsis",
     "build:web": "vite build",
     "release:organize": "node tools/release/manage-release-artifacts.mjs",
     "release:check": "node tools/release/manage-release-artifacts.mjs --check",
