@@ -2,12 +2,12 @@
  * Vellora browser E2E using local Edge + puppeteer-core (no driver download).
  * Starts Vite, injects Tauri invoke mocks, exercises UI flows.
  */
-import { spawn } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import process from 'node:process';
+import { createServer } from 'vite';
 import puppeteer from 'puppeteer-core';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -138,20 +138,12 @@ async function run() {
   const edge = findEdge();
   if (!edge) throw new Error('Microsoft Edge not found. Set EDGE_PATH.');
 
-  const isWindows = process.platform === 'win32';
-  const devCommand = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
-  const devArgs = isWindows
-    ? ['/d', '/s', '/c', 'npm run dev:web']
-    : ['run', 'dev:web'];
-  const dev = spawn(devCommand, devArgs, {
-    cwd: root,
-    stdio: 'ignore',
-    env: { ...process.env, BROWSER: 'none' }
-  });
-
   let browser;
+  let dev;
   const failures = [];
   try {
+    dev = await createServer({ root, logLevel: 'error' });
+    await dev.listen();
     await waitForUrl(DEV_URL);
     browser = await puppeteer.launch({
       executablePath: edge,
@@ -266,11 +258,7 @@ async function run() {
     console.error('E2E FAILED:', err);
   } finally {
     if (browser) await browser.close().catch(() => undefined);
-    if (process.platform === 'win32' && dev.pid) {
-      spawn('taskkill.exe', ['/pid', String(dev.pid), '/T', '/F'], { stdio: 'ignore' });
-    } else {
-      dev.kill('SIGTERM');
-    }
+    if (dev) await dev.close().catch(() => undefined);
   }
 
   if (failures.length) process.exit(1);
