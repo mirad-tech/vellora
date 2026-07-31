@@ -244,6 +244,147 @@ describe('App', () => {
     expect(screen.queryByTestId('search-bar')).toBeNull();
   });
 
+  test('source editor search finds matches and moves selection in source mode', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    const editor = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+    fireEvent.change(editor, {
+      target: { value: '# 标题\n\n搜索词\n正文\n搜索词\n' }
+    });
+
+    await pressCtrlKey('f');
+    const input = screen.getByTestId('search-input');
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    for (const partialQuery of ['搜', '搜索', '搜索词']) {
+      fireEvent.change(input, { target: { value: partialQuery } });
+      await waitFor(() => expect(document.activeElement).toBe(input));
+    }
+
+    const query = '搜索词';
+    const firstStart = editor.value.indexOf(query);
+    const secondStart = editor.value.indexOf(query, firstStart + 1);
+    const queryLength = query.length;
+
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*2/);
+      expect(editor.selectionStart).toBe(firstStart);
+      expect(editor.selectionEnd).toBe(firstStart + queryLength);
+    });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/2\s*\/\s*2/);
+      expect(editor.selectionStart).toBe(secondStart);
+      expect(editor.selectionEnd).toBe(secondStart + queryLength);
+      expect(document.activeElement).toBe(input);
+    });
+
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*2/);
+      expect(editor.selectionStart).toBe(firstStart);
+      expect(editor.selectionEnd).toBe(firstStart + queryLength);
+    });
+
+    fireEvent.click(screen.getByTestId('search-next'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/2\s*\/\s*2/);
+      expect(editor.selectionStart).toBe(secondStart);
+      expect(editor.selectionEnd).toBe(secondStart + queryLength);
+    });
+
+    fireEvent.click(screen.getByTestId('search-prev'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*2/);
+      expect(editor.selectionStart).toBe(firstStart);
+      expect(editor.selectionEnd).toBe(firstStart + queryLength);
+    });
+  });
+
+  test('single-match source navigation keeps the next edit cursor position', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    const editor = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+    fireEvent.change(editor, {
+      target: { value: '# 标题\n\n搜索词\n正文\n' }
+    });
+
+    await pressCtrlKey('f');
+    const input = screen.getByTestId('search-input');
+    fireEvent.change(input, { target: { value: '搜索词' } });
+
+    const query = '搜索词';
+    const firstStart = editor.value.indexOf(query);
+    const queryLength = '搜索词'.length;
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*1/);
+      expect(editor.selectionStart).toBe(firstStart);
+      expect(editor.selectionEnd).toBe(firstStart + queryLength);
+    });
+
+    fireEvent.click(screen.getByTestId('search-next'));
+    await waitFor(() => {
+      expect(editor.selectionStart).toBe(firstStart);
+      expect(editor.selectionEnd).toBe(firstStart + queryLength);
+    });
+
+    editor.focus();
+    editor.setSelectionRange(0, 0);
+    const editedValue = `X${editor.value}`;
+    fireEvent.change(editor, {
+      target: {
+        value: editedValue,
+        selectionStart: 1,
+        selectionEnd: 1
+      }
+    });
+
+    await waitFor(() => {
+      expect(editor.selectionStart).toBe(1);
+      expect(editor.selectionEnd).toBe(1);
+    });
+  });
+
+  test('source search keeps original offsets for Unicode case-insensitive matches', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    const editor = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+    fireEvent.change(editor, {
+      target: { value: 'İa A' }
+    });
+
+    await pressCtrlKey('f');
+    const input = screen.getByTestId('search-input');
+    fireEvent.change(input, { target: { value: 'a' } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*2/);
+      expect(editor.selectionStart).toBe(1);
+      expect(editor.selectionEnd).toBe(2);
+    });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/2\s*\/\s*2/);
+      expect(editor.selectionStart).toBe(3);
+      expect(editor.selectionEnd).toBe(4);
+    });
+  });
+
   test('external link confirmation flow', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));

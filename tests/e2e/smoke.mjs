@@ -244,6 +244,46 @@ async function run() {
       return t.includes('/');
     }, { timeout: 5000 });
 
+    await page.click('[data-testid="search-close"]');
+    await page.click('[data-testid="btn-edit"]');
+    const sourceSearchTarget = 'SOURCE_SEARCH_TARGET';
+    await setTextareaValue(
+      page,
+      '[data-testid="source-editor"]',
+      `${Array.from({ length: 180 }, (_, index) => `源代码行 ${index + 1}`).join('\n')}\n${sourceSearchTarget}`
+    );
+    await page.waitForFunction(() => {
+      const content = document.querySelector('[data-testid="content"]');
+      return Boolean(content && content.scrollHeight > content.clientHeight);
+    }, { timeout: 5000 });
+    await page.$eval('[data-testid="content"]', (element) => {
+      element.scrollTop = 0;
+    });
+    await pressControlKey(page, 'f');
+    await page.waitForSelector('[data-testid="search-input"]');
+    await page.click('[data-testid="search-input"]');
+    await pressControlKey(page, 'a');
+    await page.type('[data-testid="search-input"]', sourceSearchTarget);
+    await page.waitForFunction((target) => {
+      const content = document.querySelector('[data-testid="content"]');
+      const editor = document.querySelector('[data-testid="source-editor"]');
+      const input = document.querySelector('[data-testid="search-input"]');
+      const expectedStart = editor?.value.indexOf(target) ?? -1;
+      return Boolean(
+        content &&
+        editor &&
+        input &&
+        expectedStart >= 0 &&
+        content.scrollTop > 0 &&
+        editor.selectionStart === expectedStart &&
+        editor.selectionEnd === expectedStart + target.length &&
+        document.activeElement === input
+      );
+    }, { timeout: 5000 }, sourceSearchTarget);
+
+    await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
+    await openSample(page);
+
     // 8 outline
     await page.click('[data-testid="btn-outline"]');
     await page.waitForSelector('[data-testid="outline-panel"]');

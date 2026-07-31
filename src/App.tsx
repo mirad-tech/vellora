@@ -41,6 +41,43 @@ import {
 import { applySearchHighlights } from './markdown/searchHtml';
 import type { MarkdownDocument } from './types';
 
+type SourceSearchMatch = { start: number; end: number };
+
+type SourceSearchResult = {
+  count: number;
+  activeIndex: number;
+  matches: SourceSearchMatch[];
+};
+
+const TEXTAREA_MIRROR_PROPERTIES = [
+  'box-sizing',
+  'border-top-width',
+  'border-right-width',
+  'border-bottom-width',
+  'border-left-width',
+  'border-top-style',
+  'border-right-style',
+  'border-bottom-style',
+  'border-left-style',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'font-family',
+  'font-size',
+  'font-style',
+  'font-variant',
+  'font-weight',
+  'letter-spacing',
+  'line-height',
+  'text-align',
+  'text-indent',
+  'text-transform',
+  'word-spacing',
+  'tab-size',
+  'direction'
+] as const;
+
 type ViewState =
   | { status: 'empty' }
   | { status: 'loading' }
@@ -143,6 +180,131 @@ function insertPlainTextAtCaret(element: HTMLElement, value: string): void {
   selection.addRange(range);
 }
 
+function normalizeSearchQuery(query: string): string {
+  return query.trim();
+}
+
+function escapeSearchQuery(query: string): string {
+  return query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findSourceSearchMatches(
+  source: string,
+  rawQuery: string,
+  requestedActiveIndex: number
+): SourceSearchResult {
+  const query = normalizeSearchQuery(rawQuery);
+  if (!query) {
+    return {
+      count: 0,
+      activeIndex: -1,
+      matches: []
+    };
+  }
+
+  const matches: SourceSearchMatch[] = [];
+  const matcher = new RegExp(escapeSearchQuery(query), 'giu');
+  for (const match of source.matchAll(matcher)) {
+    if (match.index === undefined) continue;
+    matches.push({
+      start: match.index,
+      end: match.index + match[0].length
+    });
+  }
+
+  if (matches.length === 0) {
+    return { count: 0, activeIndex: -1, matches };
+  }
+
+  const safeRequestedActiveIndex = Math.max(0, requestedActiveIndex);
+  return {
+    count: matches.length,
+    activeIndex: safeRequestedActiveIndex % matches.length,
+    matches
+  };
+}
+
+function measureTextareaMatch(
+  editor: HTMLTextAreaElement,
+  match: SourceSearchMatch
+): { top: number; height: number } | null {
+  const view = editor.ownerDocument.defaultView;
+  const body = editor.ownerDocument.body;
+  if (!view || !body) return null;
+
+  const computed = view.getComputedStyle(editor);
+  const mirror = editor.ownerDocument.createElement('div');
+  mirror.setAttribute('aria-hidden', 'true');
+  for (const property of TEXTAREA_MIRROR_PROPERTIES) {
+    mirror.style.setProperty(property, computed.getPropertyValue(property));
+  }
+  mirror.style.position = 'fixed';
+  mirror.style.top = '0';
+  mirror.style.left = '-10000px';
+  mirror.style.width = computed.width;
+  mirror.style.height = 'auto';
+  mirror.style.minHeight = '0';
+  mirror.style.maxHeight = 'none';
+  mirror.style.overflow = 'hidden';
+  mirror.style.visibility = 'hidden';
+  mirror.style.pointerEvents = 'none';
+  mirror.style.whiteSpace = editor.wrap === 'off' ? 'pre' : 'pre-wrap';
+  mirror.style.overflowWrap = editor.wrap === 'off' ? 'normal' : 'break-word';
+  mirror.style.wordBreak = computed.wordBreak;
+
+  mirror.textContent = editor.value.slice(0, match.start);
+  const marker = editor.ownerDocument.createElement('span');
+  marker.textContent = editor.value.slice(match.start, match.end) || '\u200b';
+  mirror.append(marker);
+  body.append(mirror);
+
+  try {
+    const lineHeight = Number.parseFloat(computed.lineHeight);
+    const fontSize = Number.parseFloat(computed.fontSize);
+    const fallbackHeight = Number.isFinite(lineHeight)
+      ? lineHeight
+      : (Number.isFinite(fontSize) ? fontSize : 16) * 1.5;
+    return {
+      top: marker.offsetTop,
+      height: Math.max(marker.offsetHeight, fallbackHeight)
+    };
+  } finally {
+    mirror.remove();
+  }
+}
+
+function selectSourceSearchMatch(
+  editor: HTMLTextAreaElement,
+  scroller: HTMLElement | null,
+  match: SourceSearchMatch
+): void {
+  editor.setSelectionRange(match.start, match.end);
+  if (!scroller || scroller.clientHeight <= 0) return;
+
+  const metrics = measureTextareaMatch(editor, match);
+  if (!metrics) return;
+
+  const editorTop =
+    editor.getBoundingClientRect().top -
+    scroller.getBoundingClientRect().top +
+    scroller.scrollTop;
+  const matchTop = editorTop + metrics.top;
+  const matchBottom = matchTop + metrics.height;
+  const viewportTop = scroller.scrollTop;
+  const viewportBottom = viewportTop + scroller.clientHeight;
+  const viewportMargin = 24;
+
+  if (
+    matchTop < viewportTop + viewportMargin ||
+    matchBottom > viewportBottom - viewportMargin
+  ) {
+    scroller.scrollTop = Math.max(
+      0,
+      matchTop - (scroller.clientHeight - metrics.height) / 2
+    );
+  }
+}
+
 export default function App() {
   const [viewState, setViewState] = useState<ViewState>({ status: 'empty' });
   const [draftContent, setDraftContent] = useState('');
@@ -167,6 +329,8 @@ export default function App() {
   const quickEditRef = useRef<HTMLElement | null>(null);
   const quickEditStateRef = useRef<QuickEditState | null>(quickEdit);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const sourceEditInProgressRef = useRef(false);
   const imageRequestId = useRef(0);
   const documentRequestId = useRef(0);
   const documentOpenPendingRef = useRef(false);
@@ -271,10 +435,46 @@ export default function App() {
   );
 
   const searchResult = useMemo(
-    () => applySearchHighlights(htmlWithImages, searchOpen ? searchQuery : '', searchActiveIndex),
-    [htmlWithImages, searchOpen, searchQuery, searchActiveIndex]
+    () =>
+      editorMode === 'read'
+        ? applySearchHighlights(htmlWithImages, searchOpen ? searchQuery : '', searchActiveIndex)
+        : {
+            html: htmlWithImages,
+            count: 0,
+            activeIndex: -1
+          },
+    [editorMode, htmlWithImages, searchOpen, searchQuery, searchActiveIndex]
+  );
+  const sourceSearchResult = useMemo(
+    () =>
+      findSourceSearchMatches(
+        draftContent,
+        searchOpen && editorMode === 'edit' ? searchQuery : '',
+        searchActiveIndex
+      ),
+    [draftContent, editorMode, searchOpen, searchQuery, searchActiveIndex]
   );
   const readerHtml = useMemo(() => ({ __html: searchResult.html }), [searchResult.html]);
+  const activeSearchCount = editorMode === 'edit' ? sourceSearchResult.count : searchResult.count;
+  const activeSearchIndex = editorMode === 'edit' ? sourceSearchResult.activeIndex : searchResult.activeIndex;
+
+  const navigateSearch = useCallback(
+    (delta: number) => {
+      if (activeSearchCount <= 0) return;
+
+      const nextIndex =
+        (activeSearchIndex + delta + activeSearchCount) % activeSearchCount;
+      setSearchActiveIndex(nextIndex);
+
+      if (editorMode !== 'edit') return;
+      const match = sourceSearchResult.matches[nextIndex];
+      const editor = sourceEditorRef.current;
+      if (!editor || !match) return;
+      selectSourceSearchMatch(editor, contentRef.current, match);
+    },
+    [activeSearchCount, activeSearchIndex, editorMode, sourceSearchResult.matches]
+  );
+
 
   useEffect(() => {
     if (rendered.status !== 'ready' || viewState.status !== 'ready') {
@@ -304,11 +504,26 @@ export default function App() {
 
   useEffect(() => {
     if (!searchOpen) return;
+
+    if (editorMode === 'edit') {
+      const editor = sourceEditorRef.current;
+      const preserveEditorSelection =
+        sourceEditInProgressRef.current && document.activeElement === editor;
+      sourceEditInProgressRef.current = false;
+      if (preserveEditorSelection) return;
+      if (sourceSearchResult.count <= 0) return;
+      const currentMatch = sourceSearchResult.matches[sourceSearchResult.activeIndex];
+      if (!editor || !currentMatch) return;
+
+      selectSourceSearchMatch(editor, contentRef.current, currentMatch);
+      return;
+    }
+
     const active = readerRef.current?.querySelector<HTMLElement>('[data-active-search="true"]');
     if (active && typeof active.scrollIntoView === 'function') {
       active.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
-  }, [searchResult.activeIndex, searchResult.count, searchOpen, searchResult.html]);
+  }, [editorMode, searchOpen, sourceSearchResult.activeIndex, sourceSearchResult.count, sourceSearchResult.matches, searchResult.activeIndex, searchResult.count, searchResult.html]);
 
   const applyDocument = useCallback(
     (document: MarkdownDocument) => {
@@ -845,11 +1060,9 @@ export default function App() {
                 }
                 if (e.key === 'Enter') {
                   e.preventDefault();
-                  if (searchResult.count <= 0) return;
+                  if (activeSearchCount <= 0) return;
                   const delta = e.shiftKey ? -1 : 1;
-                  setSearchActiveIndex(
-                    (searchResult.activeIndex + delta + searchResult.count) % searchResult.count
-                  );
+                  navigateSearch(delta);
                 }
               }}
             />
@@ -869,12 +1082,10 @@ export default function App() {
                 type="button"
                 className="search-icon-btn"
                 data-testid="search-prev"
-                disabled={searchResult.count <= 0}
-                onClick={() =>
-                  setSearchActiveIndex(
-                    (searchResult.activeIndex - 1 + searchResult.count) % searchResult.count
-                  )
-                }
+                disabled={activeSearchCount <= 0}
+                onClick={() => {
+                  navigateSearch(-1);
+                }}
                 aria-label="上一个匹配项"
               >
                 ↑
@@ -883,18 +1094,18 @@ export default function App() {
                 type="button"
                 className="search-icon-btn"
                 data-testid="search-next"
-                disabled={searchResult.count <= 0}
-                onClick={() =>
-                  setSearchActiveIndex((searchResult.activeIndex + 1) % searchResult.count)
-                }
+                disabled={activeSearchCount <= 0}
+                onClick={() => {
+                  navigateSearch(1);
+                }}
                 aria-label="下一个匹配项"
               >
                 ↓
               </button>
             </div>
             <span className="search-count" data-testid="search-count">
-              {searchResult.count > 0
-                ? `${searchResult.activeIndex + 1} / ${searchResult.count}`
+              {activeSearchCount > 0
+                ? `${activeSearchIndex + 1} / ${activeSearchCount}`
                 : '0 / 0'}
             </span>
           </div>
@@ -988,11 +1199,15 @@ export default function App() {
               <textarea
                 className="source-editor"
                 data-testid="source-editor"
+                ref={sourceEditorRef}
                 value={draftContent}
                 disabled={documentOpenPending}
                 spellCheck={false}
                 aria-label="Markdown 源码"
-                onChange={(e) => updateDraft(e.target.value)}
+                onChange={(e) => {
+                  sourceEditInProgressRef.current = searchOpen;
+                  updateDraft(e.target.value);
+                }}
               />
             </div>
           ) : null}

@@ -335,9 +335,13 @@ textarea:focus-visible {
 }
 
 .search-close {
-  width: 38px;
-  height: 24px;
-  margin-left: 2px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  width: 42px;
+  height: auto;
+  margin-left: 0;
   border-left: 1px solid var(--border);
   border-radius: 0;
   font-size: 18px;
