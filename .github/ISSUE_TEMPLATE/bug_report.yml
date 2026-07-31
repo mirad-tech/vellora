@@ -14,7 +14,7 @@ body:
     attributes:
       label: Vellora 版本
       description: 可在安装目录中的 vellora.exe 属性或安装包名称中查看。
-      placeholder: 例如 2.2.1
+      placeholder: 例如 2.2.2
     validations:
       required: true
 

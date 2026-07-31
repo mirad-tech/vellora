@@ -14,10 +14,10 @@ Vellora 是一款 **Windows 本地优先、轻量的 Markdown 阅读与源码编
 
 适用于 **Windows 10/11 x64**：
 
-[**下载 Vellora 2.2.1 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.1/Vellora_2.2.1_x64-setup.exe)
+[**下载 Vellora 2.2.2 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.2/Vellora_2.2.2_x64-setup.exe)
 
 - 所有版本：[GitHub Releases](https://github.com/mirad-tech/vellora/releases)
-- 安装包：`Vellora_2.2.1_x64-setup.exe`
+- 安装包：`Vellora_2.2.2_x64-setup.exe`
 - 运行环境：Microsoft WebView2；多数 Windows 10/11 已预装，缺失时安装程序会引导下载
 - 从 Electron 1.x 升级：建议先卸载 1.x，再安装当前版本；卸载不会删除 Markdown 文档
 
@@ -27,7 +27,7 @@ Vellora 是一款 **Windows 本地优先、轻量的 Markdown 阅读与源码编
 - Markdown 阅读：标题、段落、列表、引用、表格、围栏代码、链接、相对路径图片
 - 源码编辑：轻量 `textarea` 编辑器，阅读/源码模式快速切换
 - 阅读模式快速修改：点击可编辑内容块，`Ctrl+Enter` 提交，`Escape` 取消
-- 文档内查找：紧凑浮层、结果计数、上一项/下一项
+- 文档内查找：预览模式高亮匹配，源码模式选中并滚动到当前匹配，支持结果计数与上一项/下一项
 - 标题目录：自动跟随当前阅读位置
 - 安全链接：本地 Markdown 链接受目录边界限制，HTTP(S) 外链打开前确认
 - 未保存保护：关闭、切换文件或打开其他文档前确认
@@ -86,11 +86,11 @@ npm run dist         # Windows NSIS 安装包，并整理本地发布产物
 
 `npm run build` 的原始安装包输出到：
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.2.1_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.2.2_x64-setup.exe`
 
 `npm run dist` 还会把当前版本复制到：
 
-`artifacts/releases/current/Vellora_2.2.1_x64-setup.exe`
+`artifacts/releases/current/Vellora_2.2.2_x64-setup.exe`
 
 `artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，`manifest.json` 记录文件大小与 SHA-256；正式历史版本由 GitHub Releases 保留。
 可运行 `npm run release:prune-old` 删除遗留本地安装器，或运行
@@ -129,7 +129,7 @@ docs/                   仓库结构与发布产物文档
 
 ## 版本与发布
 
-当前版本：**2.2.1**。
+当前版本：**2.2.2**。
 
 - `main` 和 Pull Request 会在 Windows GitHub Actions 中运行版本检查、类型检查、前端测试、Rust 测试、浏览器 E2E 和前端构建
 - 版本号同步维护于 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`
@@ -138,8 +138,8 @@ docs/                   仓库结构与发布产物文档
 - Release 工作流会构建 NSIS、创建 GitHub Release，并上传同版本安装包
 
 ```powershell
-git tag -a v2.2.1 -m "Vellora 2.2.1"
-git push origin v2.2.1
+git tag -a v2.2.2 -m "Vellora 2.2.2"
+git push origin v2.2.2
 ```
 
 ## 许可证与反馈
