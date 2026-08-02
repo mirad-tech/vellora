@@ -66,7 +66,21 @@ describe('Vellora desktop E2E (real IPC)', () => {
 
     // 1) Launch arg opens source.md
     const body = await $('[data-testid="markdown-body"]');
-    await body.waitForDisplayed({ timeout: 60000 });
+    try {
+      await body.waitForDisplayed({ timeout: 60000 });
+    } catch (error) {
+      const startup = await browser.execute(() => ({
+        title: document.title,
+        url: window.location.href,
+        readyState: document.readyState,
+        appShell: Boolean(document.querySelector('[data-testid="app-shell"]')),
+        status: document.querySelector('[data-testid="status-text"]')?.textContent || null,
+        rootText: document.getElementById('root')?.textContent?.trim().slice(0, 600) || null,
+        diagnostics: globalThis.__velloraE2eDiagnostics || null
+      }));
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message}; startup=${JSON.stringify(startup)}`);
+    }
     expect(await body.getText()).toContain('源文档');
 
     // 2) Quick edit in read mode + save source on disk
