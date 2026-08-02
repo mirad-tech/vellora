@@ -28,6 +28,12 @@ async function enterEditAndSetValue(value) {
   return editor;
 }
 
+async function waitForMarkdownBody(timeout = 20000) {
+  const body = await $('[data-testid="markdown-body"]');
+  await body.waitForDisplayed({ timeout });
+  return body;
+}
+
 async function setReactTextareaValue(selector, value) {
   await browser.execute((targetSelector, nextValue) => {
     const element = document.querySelector(targetSelector);
@@ -65,9 +71,9 @@ describe('Vellora desktop E2E (real IPC)', () => {
     }
 
     // 1) Launch arg opens source.md
-    let body = await $('[data-testid="markdown-body"]');
+    let body;
     try {
-      await body.waitForDisplayed({ timeout: 60000 });
+      body = await waitForMarkdownBody(60000);
     } catch (error) {
       const startup = await browser.execute(() => ({
         title: document.title,
@@ -107,10 +113,9 @@ describe('Vellora desktop E2E (real IPC)', () => {
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n草稿`);
     await $('[data-testid="btn-read"]').click();
-    body = await $('[data-testid="markdown-body"]');
-    await body.waitForDisplayed();
+    body = await waitForMarkdownBody();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
-    const discard = await $('[data-testid="discard-modal"]');
+    let discard = await $('[data-testid="discard-modal"]');
     await discard.waitForDisplayed({ timeout: 10000 });
     await $('[data-testid="discard-cancel"]').click();
     await discard.waitForDisplayed({ reverse: true, timeout: 5000 });
@@ -127,9 +132,9 @@ describe('Vellora desktop E2E (real IPC)', () => {
     const draftKeep = `${sourceText}\n失败跳转草稿`;
     await enterEditAndSetValue(draftKeep);
     await $('[data-testid="btn-read"]').click();
-    body = await $('[data-testid="markdown-body"]');
-    await body.waitForDisplayed();
+    body = await waitForMarkdownBody();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
+    discard = await $('[data-testid="discard-modal"]');
     await discard.waitForDisplayed({ timeout: 10000 });
     fs.unlinkSync(targetPath);
     await $('[data-testid="discard-confirm"]').click();
@@ -159,15 +164,18 @@ describe('Vellora desktop E2E (real IPC)', () => {
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n临时`);
     await $('[data-testid="btn-read"]').click();
-    body = await $('[data-testid="markdown-body"]');
-    await body.waitForDisplayed();
+    body = await waitForMarkdownBody();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
+    discard = await $('[data-testid="discard-modal"]');
     await discard.waitForDisplayed({ timeout: 10000 });
     await $('[data-testid="discard-confirm"]').click();
-    await browser.waitUntil(async () => (await body.getText()).includes('目标文档'), {
-      timeout: 20000,
-      timeoutMsg: 'did not open target.md after discard'
-    });
+    await browser.waitUntil(
+      async () => (await $('[data-testid="markdown-body"]').getText()).includes('目标文档'),
+      {
+        timeout: 20000,
+        timeoutMsg: 'did not open target.md after discard'
+      }
+    );
 
     // 6) Search + outline on target
     await browser.keys([modifierKey, 'f']);
@@ -189,6 +197,6 @@ describe('Vellora desktop E2E (real IPC)', () => {
     await external.waitForDisplayed({ timeout: 10000 });
     await $('[data-testid="external-cancel"]').click();
     await external.waitForDisplayed({ reverse: true, timeout: 5000 });
-    expect(await body.getText()).toContain('目标文档');
+    expect(await (await $('[data-testid="markdown-body"]')).getText()).toContain('目标文档');
   });
 });
