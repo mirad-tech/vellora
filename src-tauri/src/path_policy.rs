@@ -102,9 +102,12 @@ pub fn resolve_document_relative_path(
 
   let cleaned = relative_path.split(['?', '#']).next().unwrap_or(relative_path);
   let decoded = urlencoding_decode(cleaned);
-  let candidate = Path::new(&decoded);
+  // Treat Windows separators consistently on every host. Without this,
+  // backslash traversal is parsed as a literal filename on Unix systems.
+  let normalized_reference = decoded.replace('\\', "/");
+  let candidate = Path::new(&normalized_reference);
 
-  if is_unsafe_relative_candidate(&decoded, candidate) {
+  if is_unsafe_relative_candidate(&normalized_reference, candidate) {
     return None;
   }
 
@@ -222,6 +225,8 @@ mod tests {
     fs::write(&doc, "# d").unwrap();
     let resolved = resolve_document_relative_path(&doc, "assets/pic.png").unwrap();
     assert!(resolved.ends_with(Path::new("assets").join("pic.png")));
+    let windows_style = resolve_document_relative_path(&doc, r"assets\pic.png").unwrap();
+    assert!(windows_style.ends_with(Path::new("assets").join("pic.png")));
   }
 
   #[test]

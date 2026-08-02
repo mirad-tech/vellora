@@ -8,31 +8,52 @@ mod types;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
+#[cfg(not(target_os = "macos"))]
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult};
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use types::{CommandResult, DocumentPayload, EmptyPayload, ImagePayload, LinkInspectData};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+enum CloseAction {
+  CloseWindow,
+  HideWindow,
+  QuitApp,
+}
+
+#[derive(Debug, Default)]
+struct CloseState {
+  allow_window_close: bool,
+  prompt_pending: bool,
+  action: Option<CloseAction>,
+}
+
+#[derive(Debug, Default)]
+struct LaunchState {
+  pending_path: Option<String>,
+  frontend_ready: bool,
+}
+
 pub struct AppState {
-  /// Markdown path from first-launch CLI args (kept until successfully opened).
-  pub initial_path: Mutex<Option<String>>,
+  /// Pending launch/open request and the frontend readiness handshake.
+  launch_state: Mutex<LaunchState>,
   /// Session: only the currently opened document may be saved / used as link base.
   pub current_document: Mutex<Option<PathBuf>>,
   /// Whether the renderer reports unsaved changes (for close protection).
   pub has_unsaved_changes: Mutex<bool>,
-  /// One-shot flag: next CloseRequested may proceed without discard prompt.
-  pub allow_close: Mutex<bool>,
-  /// True after first unsaved close attempt while waiting for frontend / native dialog.
-  pub close_prompt_pending: Mutex<bool>,
+  /// Pending close/hide/quit intent and the Windows one-shot close bypass.
+  close_state: Mutex<CloseState>,
 }
 
 impl Default for AppState {
   fn default() -> Self {
     Self {
-      initial_path: Mutex::new(None),
+      launch_state: Mutex::new(LaunchState::default()),
       current_document: Mutex::new(None),
       has_unsaved_changes: Mutex::new(false),
-      allow_close: Mutex::new(false),
-      close_prompt_pending: Mutex::new(false),
+      close_state: Mutex::new(CloseState::default()),
     }
   }
 }
@@ -46,15 +67,50 @@ fn set_current_document(state: &AppState, path: &str) {
 }
 
 fn clear_close_flags(state: &AppState) {
-  *lock_mutex(&state.allow_close) = false;
-  *lock_mutex(&state.close_prompt_pending) = false;
+  *lock_mutex(&state.close_state) = CloseState::default();
+}
+
+fn clear_close_flags_if_idle(state: &AppState) {
+  let mut close = lock_mutex(&state.close_state);
+  if !close.prompt_pending {
+    *close = CloseState::default();
+  }
+}
+
+fn queue_open_path(state: &AppState, path: String) -> bool {
+  let mut launch = lock_mutex(&state.launch_state);
+  if launch.frontend_ready {
+    true
+  } else {
+    // The app is single-document: the most recent user request wins before startup.
+    launch.pending_path = Some(path);
+    false
+  }
+}
+
+fn take_initial_path_and_mark_ready(state: &AppState) -> Option<String> {
+  let mut launch = lock_mutex(&state.launch_state);
+  launch.frontend_ready = true;
+  launch.pending_path.take()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn markdown_path_from_urls(urls: &[url::Url]) -> Option<String> {
+  urls.iter().find_map(|url| {
+    let path = url.to_file_path().ok()?;
+    if file_access::is_markdown_path(&path) {
+      Some(path.to_string_lossy().into_owned())
+    } else {
+      None
+    }
+  })
 }
 
 fn remember_opened(state: &AppState, result: &CommandResult<DocumentPayload>) {
   if let CommandResult::Ok { data, .. } = result {
     set_current_document(state, &data.document.path);
     *lock_mutex(&state.has_unsaved_changes) = false;
-    clear_close_flags(state);
+    clear_close_flags_if_idle(state);
   }
 }
 
@@ -120,7 +176,7 @@ fn open_link_session(
     } => {
       set_current_document(state, &document.path);
       *lock_mutex(&state.has_unsaved_changes) = false;
-      clear_close_flags(state);
+      clear_close_flags_if_idle(state);
       CommandResult::success(DocumentPayload { document })
     }
     CommandResult::Ok {
@@ -205,13 +261,12 @@ fn open_external_url(url: String) -> CommandResult<EmptyPayload> {
 
 #[tauri::command]
 fn get_initial_document(state: State<'_, AppState>) -> CommandResult<DocumentPayload> {
-  let path = lock_mutex(&state.initial_path).clone();
+  let path = take_initial_path_and_mark_ready(&state);
 
   match path {
     Some(p) => {
       let result = file_access::read_markdown_file(&p);
       if matches!(result, CommandResult::Ok { .. }) {
-        *lock_mutex(&state.initial_path) = None;
         remember_opened(&state, &result);
       }
       result
@@ -224,9 +279,84 @@ fn get_initial_document(state: State<'_, AppState>) -> CommandResult<DocumentPay
 fn set_unsaved_changes(value: bool, state: State<'_, AppState>) -> CommandResult<EmptyPayload> {
   *lock_mutex(&state.has_unsaved_changes) = value;
   if !value {
-    *lock_mutex(&state.close_prompt_pending) = false;
+    // Saving/opening may finish after a close or quit request. Keep that newer
+    // user intent until the renderer confirms or cancels the pending prompt.
+    clear_close_flags_if_idle(&state);
   }
   CommandResult::success(EmptyPayload {})
+}
+
+fn default_window_close_action() -> CloseAction {
+  #[cfg(target_os = "macos")]
+  {
+    CloseAction::HideWindow
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  {
+    CloseAction::CloseWindow
+  }
+}
+
+fn begin_close_request(state: &AppState, action: CloseAction) -> bool {
+  let mut close = lock_mutex(&state.close_state);
+  let already_pending = close.prompt_pending;
+  close.prompt_pending = true;
+  close.action = Some(action);
+  already_pending
+}
+
+fn cancel_close_request(state: &AppState) {
+  let mut close = lock_mutex(&state.close_state);
+  close.prompt_pending = false;
+  close.action = None;
+  close.allow_window_close = false;
+}
+
+fn take_pending_close_action(state: &AppState) -> CloseAction {
+  let mut close = lock_mutex(&state.close_state);
+  close.prompt_pending = false;
+  close
+    .action
+    .take()
+    .unwrap_or_else(default_window_close_action)
+}
+
+fn execute_close_action(app: &AppHandle, action: CloseAction) -> CommandResult<EmptyPayload> {
+  match action {
+    CloseAction::CloseWindow => {
+      let state = app.state::<AppState>();
+      lock_mutex(&state.close_state).allow_window_close = true;
+      let Some(window) = app.get_webview_window("main") else {
+        lock_mutex(&state.close_state).allow_window_close = false;
+        return CommandResult::failure("CLOSE_FAILED", "找不到主窗口。");
+      };
+      if window.close().is_err() {
+        lock_mutex(&state.close_state).allow_window_close = false;
+        return CommandResult::failure("CLOSE_FAILED", "无法关闭窗口。");
+      }
+    }
+    CloseAction::HideWindow => {
+      let Some(window) = app.get_webview_window("main") else {
+        return CommandResult::failure("CLOSE_FAILED", "找不到主窗口。");
+      };
+      if window.hide().is_err() {
+        return CommandResult::failure("CLOSE_FAILED", "无法隐藏窗口。");
+      }
+    }
+    CloseAction::QuitApp => app.exit(0),
+  }
+
+  CommandResult::success(EmptyPayload {})
+}
+
+fn complete_close_request(app: &AppHandle, state: &AppState) -> CommandResult<EmptyPayload> {
+  let action = take_pending_close_action(state);
+  let result = execute_close_action(app, action);
+  if matches!(&result, CommandResult::Ok { .. }) {
+    *lock_mutex(&state.has_unsaved_changes) = false;
+  }
+  result
 }
 
 #[tauri::command]
@@ -236,25 +366,11 @@ fn confirm_close(
   app: AppHandle,
 ) -> CommandResult<EmptyPayload> {
   if !allow {
-    *lock_mutex(&state.allow_close) = false;
-    *lock_mutex(&state.close_prompt_pending) = false;
+    cancel_close_request(&state);
     return CommandResult::success(EmptyPayload {});
   }
 
-  *lock_mutex(&state.allow_close) = true;
-  *lock_mutex(&state.close_prompt_pending) = false;
-
-  if let Some(window) = app.get_webview_window("main") {
-    if window.close().is_err() {
-      *lock_mutex(&state.allow_close) = false;
-      return CommandResult::failure("CLOSE_FAILED", "无法关闭窗口。");
-    }
-  } else {
-    *lock_mutex(&state.allow_close) = false;
-    return CommandResult::failure("CLOSE_FAILED", "找不到主窗口。");
-  }
-
-  CommandResult::success(EmptyPayload {})
+  complete_close_request(&app, &state)
 }
 
 fn focus_main_window(app: &AppHandle) {
@@ -265,13 +381,23 @@ fn focus_main_window(app: &AppHandle) {
   }
 }
 
-fn handle_second_instance(app: &AppHandle, args: Vec<String>) {
-  if let Some(path) = launch_args::find_markdown_path_in_args(&args) {
+fn handle_open_path(app: &AppHandle, path: String) {
+  let state = app.state::<AppState>();
+  if queue_open_path(&state, path.clone()) {
     let _ = app.emit("open-file-path", path);
   }
   focus_main_window(app);
 }
 
+fn handle_second_instance(app: &AppHandle, args: Vec<String>) {
+  if let Some(path) = launch_args::find_markdown_path_in_args(&args) {
+    handle_open_path(app, path);
+    return;
+  }
+  focus_main_window(app);
+}
+
+#[cfg(not(target_os = "macos"))]
 fn native_discard_dialog() -> bool {
   let result = MessageDialog::new()
     .set_title("未保存更改")
@@ -285,6 +411,28 @@ fn native_discard_dialog() -> bool {
   matches!(result, MessageDialogResult::Ok)
 }
 
+fn request_close_confirmation(app: &AppHandle, action: CloseAction) {
+  let state = app.state::<AppState>();
+  let already_pending = begin_close_request(&state, action);
+
+  if already_pending {
+    #[cfg(not(target_os = "macos"))]
+    if native_discard_dialog() {
+      let _ = complete_close_request(app, &state);
+    }
+    #[cfg(target_os = "macos")]
+    {
+      // Keep one renderer-owned confirmation open so its discard callback can
+      // reset the reusable window's in-memory draft before a later Dock reopen.
+      let _ = app.emit("close-requested", ());
+      focus_main_window(app);
+    }
+    return;
+  }
+
+  let _ = app.emit("close-requested", ());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let mut builder = tauri::Builder::default();
@@ -293,13 +441,20 @@ pub fn run() {
     handle_second_instance(app, args);
   }));
 
-  builder
+  #[cfg(feature = "macos-e2e")]
+  {
+    builder = builder
+      .plugin(tauri_plugin_wdio::init())
+      .plugin(tauri_plugin_wdio_webdriver::init());
+  }
+
+  let app = builder
     .manage(AppState::default())
     .setup(|app| {
       let args: Vec<String> = std::env::args().collect();
       if let Some(path) = launch_args::find_markdown_path_in_args(&args) {
         let state = app.state::<AppState>();
-        *lock_mutex(&state.initial_path) = Some(path);
+        queue_open_path(&state, path);
       }
       Ok(())
     })
@@ -308,42 +463,43 @@ pub fn run() {
         let app = window.app_handle();
         let state = app.state::<AppState>();
 
-        let allow = {
-          let mut guard = lock_mutex(&state.allow_close);
-          let value = *guard;
-          *guard = false;
-          value
-        };
-        if allow {
-          *lock_mutex(&state.close_prompt_pending) = false;
-          return;
-        }
-
-        let unsaved = *lock_mutex(&state.has_unsaved_changes);
-        if !unsaved {
-          *lock_mutex(&state.close_prompt_pending) = false;
-          return;
-        }
-
-        api.prevent_close();
-
-        let mut pending = lock_mutex(&state.close_prompt_pending);
-        if *pending {
-          drop(pending);
-          if native_discard_dialog() {
-            *lock_mutex(&state.allow_close) = true;
-            *lock_mutex(&state.has_unsaved_changes) = false;
-            *lock_mutex(&state.close_prompt_pending) = false;
-            let _ = window.close();
-          } else {
-            *lock_mutex(&state.close_prompt_pending) = false;
+        #[cfg(not(target_os = "macos"))]
+        {
+          let allow = {
+            let mut close = lock_mutex(&state.close_state);
+            let value = close.allow_window_close;
+            close.allow_window_close = false;
+            if value {
+              close.prompt_pending = false;
+              close.action = None;
+            }
+            value
+          };
+          if allow {
+            return;
           }
-          return;
+
+          if !*lock_mutex(&state.has_unsaved_changes) {
+            clear_close_flags(&state);
+            return;
+          }
+
+          api.prevent_close();
+          request_close_confirmation(app, CloseAction::CloseWindow);
         }
 
-        *pending = true;
-        drop(pending);
-        let _ = window.emit("close-requested", ());
+        #[cfg(target_os = "macos")]
+        {
+          // Native macOS semantics keep the application alive when its last
+          // window is closed. Prevent destruction and hide the reusable window.
+          api.prevent_close();
+          if *lock_mutex(&state.has_unsaved_changes) {
+            request_close_confirmation(app, CloseAction::HideWindow);
+          } else {
+            clear_close_flags(&state);
+            let _ = window.hide();
+          }
+        }
       }
     })
     .invoke_handler(tauri::generate_handler![
@@ -358,8 +514,28 @@ pub fn run() {
       set_unsaved_changes,
       confirm_close
     ])
-    .run(tauri::generate_context!())
-    .expect("error while running Vellora");
+    .build(tauri::generate_context!())
+    .expect("error while building Vellora");
+
+  app.run(|_app, event| match event {
+    #[cfg(target_os = "macos")]
+    RunEvent::Opened { urls } => {
+      if let Some(path) = markdown_path_from_urls(&urls) {
+        handle_open_path(_app, path);
+      }
+    }
+    #[cfg(target_os = "macos")]
+    RunEvent::Reopen { .. } => focus_main_window(_app),
+    #[cfg(target_os = "macos")]
+    RunEvent::ExitRequested { code, api, .. } if code.is_none() => {
+      let state = _app.state::<AppState>();
+      if *lock_mutex(&state.has_unsaved_changes) {
+        api.prevent_exit();
+        request_close_confirmation(_app, CloseAction::QuitApp);
+      }
+    }
+    _ => {}
+  });
 }
 
 #[cfg(test)]
@@ -450,7 +626,7 @@ mod session_link_tests {
       "# source\n\n[t](target.md)\n",
     );
     *lock_mutex(&state.has_unsaved_changes) = true;
-    *lock_mutex(&state.close_prompt_pending) = true;
+    begin_close_request(&state, CloseAction::CloseWindow);
 
     let inspected = inspect_link_session(&state, &session_path, "target.md");
     assert!(matches!(
@@ -476,7 +652,7 @@ mod session_link_tests {
     ));
     assert!(*lock_mutex(&state.has_unsaved_changes));
     // Failure must not clear close-protection flags
-    assert!(*lock_mutex(&state.close_prompt_pending));
+    assert!(lock_mutex(&state.close_state).prompt_pending);
   }
 
   #[test]
@@ -508,5 +684,81 @@ mod session_link_tests {
     ));
     assert_eq!(*lock_mutex(&state.current_document), before);
     assert!(*lock_mutex(&state.has_unsaved_changes));
+  }
+
+  #[test]
+  fn launch_queue_keeps_latest_path_until_frontend_is_ready() {
+    let state = AppState::default();
+    assert!(!queue_open_path(&state, "first.md".into()));
+    assert!(!queue_open_path(&state, "second.markdown".into()));
+    assert_eq!(
+      take_initial_path_and_mark_ready(&state).as_deref(),
+      Some("second.markdown")
+    );
+    assert!(queue_open_path(&state, "warm.md".into()));
+    assert!(take_initial_path_and_mark_ready(&state).is_none());
+  }
+
+  #[test]
+  fn opened_urls_choose_first_supported_local_markdown() {
+    let dir = tempdir().unwrap();
+    let ignored = url::Url::parse("https://example.com/readme.md").unwrap();
+    let text = url::Url::from_file_path(dir.path().join("notes.txt")).unwrap();
+    let first_path = dir.path().join("中文 空格.md");
+    let second_path = dir.path().join("second.markdown");
+    let first = url::Url::from_file_path(&first_path).unwrap();
+    let second = url::Url::from_file_path(second_path).unwrap();
+
+    let selected = markdown_path_from_urls(&[ignored, text, first, second]).unwrap();
+    assert!(path_policy::paths_equal(
+      std::path::Path::new(&selected),
+      &first_path
+    ));
+  }
+
+  #[test]
+  fn close_request_tracks_latest_intent_and_cancel_preserves_dirty() {
+    let state = AppState::default();
+    *lock_mutex(&state.has_unsaved_changes) = true;
+
+    assert!(!begin_close_request(&state, CloseAction::HideWindow));
+    assert!(begin_close_request(&state, CloseAction::QuitApp));
+    assert_eq!(
+      lock_mutex(&state.close_state).action,
+      Some(CloseAction::QuitApp)
+    );
+
+    cancel_close_request(&state);
+    let close = lock_mutex(&state.close_state);
+    assert!(!close.prompt_pending);
+    assert_eq!(close.action, None);
+    drop(close);
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+  }
+
+  #[test]
+  fn taking_close_action_clears_prompt_but_keeps_selected_action() {
+    let state = AppState::default();
+    begin_close_request(&state, CloseAction::HideWindow);
+    assert_eq!(take_pending_close_action(&state), CloseAction::HideWindow);
+
+    let close = lock_mutex(&state.close_state);
+    assert!(!close.prompt_pending);
+    assert_eq!(close.action, None);
+  }
+
+  #[test]
+  fn clean_transition_preserves_pending_quit_until_confirmation() {
+    let state = AppState::default();
+    *lock_mutex(&state.has_unsaved_changes) = true;
+    begin_close_request(&state, CloseAction::QuitApp);
+
+    // Models an async save/open completing after Cmd+Q started confirmation.
+    *lock_mutex(&state.has_unsaved_changes) = false;
+    clear_close_flags_if_idle(&state);
+
+    let close = lock_mutex(&state.close_state);
+    assert!(close.prompt_pending);
+    assert_eq!(close.action, Some(CloseAction::QuitApp));
   }
 }

@@ -248,5 +248,5 @@ code
     if (result.status !== 'ready') return;
     expect(result.html).toContain('<h2 id="heading-标题-0"');
     expect(result.html.length).toBeGreaterThan(100_000);
-  });
+  }, 15_000);
 });

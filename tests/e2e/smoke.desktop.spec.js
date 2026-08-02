@@ -6,6 +6,7 @@ import fs from 'node:fs';
 
 const sourcePath = process.env.VELLORA_E2E_SOURCE;
 const targetPath = process.env.VELLORA_E2E_TARGET;
+const modifierKey = process.env.VELLORA_E2E_MODIFIER || 'Control';
 
 async function clickLinkByHrefFragment(fragment) {
   const anchors = await $$('[data-testid="markdown-body"] a');
@@ -25,6 +26,12 @@ async function enterEditAndSetValue(value) {
   await editor.waitForDisplayed({ timeout: 10000 });
   await setReactTextareaValue('[data-testid="source-editor"]', value);
   return editor;
+}
+
+async function waitForMarkdownBody(timeout = 20000) {
+  const body = await $('[data-testid="markdown-body"]');
+  await body.waitForDisplayed({ timeout });
+  return body;
 }
 
 async function setReactTextareaValue(selector, value) {
@@ -56,9 +63,30 @@ describe('Vellora desktop E2E (real IPC)', () => {
     expect(Boolean(sourcePath && fs.existsSync(sourcePath))).toBe(true);
     expect(Boolean(targetPath && fs.existsSync(targetPath))).toBe(true);
 
+    if (process.platform === 'darwin') {
+      // Tauri's native title stays "Vellora" while the document title becomes
+      // "<file> — Vellora". Select by the stable window label so the WDIO
+      // service does not lose the active WKWebView during title-based focusing.
+      await browser.tauri.switchWindow('main');
+    }
+
     // 1) Launch arg opens source.md
-    const body = await $('[data-testid="markdown-body"]');
-    await body.waitForDisplayed({ timeout: 60000 });
+    let body;
+    try {
+      body = await waitForMarkdownBody(60000);
+    } catch (error) {
+      const startup = await browser.execute(() => ({
+        title: document.title,
+        url: window.location.href,
+        readyState: document.readyState,
+        appShell: Boolean(document.querySelector('[data-testid="app-shell"]')),
+        status: document.querySelector('[data-testid="status-text"]')?.textContent || null,
+        rootText: document.getElementById('root')?.textContent?.trim().slice(0, 600) || null,
+        diagnostics: globalThis.__velloraE2eDiagnostics || null
+      }));
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message}; startup=${JSON.stringify(startup)}`);
+    }
     expect(await body.getText()).toContain('源文档');
 
     // 2) Quick edit in read mode + save source on disk
@@ -66,7 +94,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     const quickEditor = await $('[data-testid="quick-edit-surface"]');
     await quickEditor.waitForDisplayed({ timeout: 10000 });
     await setContentEditableText('[data-testid="quick-edit-surface"]', '源文档（阅读模式修改）');
-    await browser.keys(['Control', 's']);
+    await browser.keys([modifierKey, 's']);
     await browser.waitUntil(
       async () => fs.readFileSync(sourcePath, 'utf8').includes('阅读模式修改'),
       { timeout: 15000, timeoutMsg: 'quick edit was not saved to disk' }
@@ -75,7 +103,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     // 3) Full source edit + save
     let sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(sourceText.replace('正文搜索词 alpha', '正文搜索词 alpha 已保存'));
-    await browser.keys(['Control', 's']);
+    await browser.keys([modifierKey, 's']);
     await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('已保存'), {
       timeout: 15000,
       timeoutMsg: 'disk content not updated after save'
@@ -85,15 +113,15 @@ describe('Vellora desktop E2E (real IPC)', () => {
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n草稿`);
     await $('[data-testid="btn-read"]').click();
-    await body.waitForDisplayed();
+    body = await waitForMarkdownBody();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
-    const discard = await $('[data-testid="discard-modal"]');
+    let discard = await $('[data-testid="discard-modal"]');
     await discard.waitForDisplayed({ timeout: 10000 });
     await $('[data-testid="discard-cancel"]').click();
     await discard.waitForDisplayed({ reverse: true, timeout: 5000 });
 
     await enterEditAndSetValue(`${fs.readFileSync(sourcePath, 'utf8')}\n草稿 再保存`);
-    await browser.keys(['Control', 's']);
+    await browser.keys([modifierKey, 's']);
     await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('再保存'), {
       timeout: 15000,
       timeoutMsg: 'save after cancel local-link failed (session mismatch?)'
@@ -104,8 +132,9 @@ describe('Vellora desktop E2E (real IPC)', () => {
     const draftKeep = `${sourceText}\n失败跳转草稿`;
     await enterEditAndSetValue(draftKeep);
     await $('[data-testid="btn-read"]').click();
-    await body.waitForDisplayed();
+    body = await waitForMarkdownBody();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
+    discard = await $('[data-testid="discard-modal"]');
     await discard.waitForDisplayed({ timeout: 10000 });
     fs.unlinkSync(targetPath);
     await $('[data-testid="discard-confirm"]').click();
@@ -118,7 +147,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
       { timeout: 15000, timeoutMsg: 'expected open failure status message' }
     );
     await enterEditAndSetValue(draftKeep + ' 仍可保存');
-    await browser.keys(['Control', 's']);
+    await browser.keys([modifierKey, 's']);
     await browser.waitUntil(
       async () => fs.readFileSync(sourcePath, 'utf8').includes('仍可保存'),
       { timeout: 15000, timeoutMsg: 'save after failed open_markdown_link failed' }
@@ -135,17 +164,21 @@ describe('Vellora desktop E2E (real IPC)', () => {
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n临时`);
     await $('[data-testid="btn-read"]').click();
-    await body.waitForDisplayed();
+    body = await waitForMarkdownBody();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
+    discard = await $('[data-testid="discard-modal"]');
     await discard.waitForDisplayed({ timeout: 10000 });
     await $('[data-testid="discard-confirm"]').click();
-    await browser.waitUntil(async () => (await body.getText()).includes('目标文档'), {
-      timeout: 20000,
-      timeoutMsg: 'did not open target.md after discard'
-    });
+    await browser.waitUntil(
+      async () => (await $('[data-testid="markdown-body"]').getText()).includes('目标文档'),
+      {
+        timeout: 20000,
+        timeoutMsg: 'did not open target.md after discard'
+      }
+    );
 
     // 6) Search + outline on target
-    await browser.keys(['Control', 'f']);
+    await browser.keys([modifierKey, 'f']);
     const input = await $('[data-testid="search-input"]');
     await input.waitForDisplayed();
     await input.setValue('链接跳转');
@@ -164,6 +197,6 @@ describe('Vellora desktop E2E (real IPC)', () => {
     await external.waitForDisplayed({ timeout: 10000 });
     await $('[data-testid="external-cancel"]').click();
     await external.waitForDisplayed({ reverse: true, timeout: 5000 });
-    expect(await body.getText()).toContain('目标文档');
+    expect(await (await $('[data-testid="markdown-body"]')).getText()).toContain('目标文档');
   });
 });

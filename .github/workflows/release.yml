@@ -29,14 +29,117 @@ jobs:
       - run: npm run test:rust
       - run: npm run test:e2e:ci
       - run: npm run dist
-      - name: Create GitHub release
-        shell: pwsh
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vellora-windows-installer
+          path: src-tauri/target/release/bundle/nsis/Vellora_*_x64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:rust
+      - run: npm run test:e2e:ci
+      - run: npm run test:e2e:mac
+      - name: Require Apple signing and notarization secrets
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
+            if [ -z "${!name}" ]; then
+              echo "Required release secret is missing: $name" >&2
+              exit 1
+            fi
+          done
+      - name: Import Developer ID certificate and notarization key
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/vellora-build.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/vellora-certificate.p12"
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$CERTIFICATE_PATH"
+          printf '%s' "$APPLE_API_KEY_P8" > "$API_KEY_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          CERT_ID=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n 1)
+          if [ -z "$CERT_ID" ]; then
+            echo "Developer ID Application identity was not found." >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"
+      - name: Build, sign, notarize and verify Universal DMG
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          VELLORA_REQUIRE_NOTARIZATION: '1'
+        run: npm run dist:mac
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vellora-macos-installer
+          path: artifacts/releases/macos
+          if-no-files-found: error
+      - name: Remove temporary signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/vellora-build.keychain-db" || true
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v5
+        with:
+          name: vellora-windows-installer
+          path: release-assets
+      - uses: actions/download-artifact@v5
+        with:
+          name: vellora-macos-installer
+          path: release-assets/macos
+      - name: Create one GitHub release with both platforms
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          $asset = "src-tauri/target/release/bundle/nsis/Vellora_${version}_x64-setup.exe"
-          if (-not (Test-Path -LiteralPath $asset)) {
-            throw "Installer not found: $asset"
-          }
-          gh release create $env:GITHUB_REF_NAME $asset --verify-tag --generate-notes --title "Vellora $version"
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $VERSION." >&2
+            exit 1
+          fi
+          mapfile -t ASSETS < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name 'SHA256SUMS.txt' \) -print | sort)
+          if [ "${#ASSETS[@]}" -ne 3 ]; then
+            echo "Expected Windows installer, macOS DMG and SHA256SUMS.txt; found ${#ASSETS[@]}." >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" --verify-tag --generate-notes --title "Vellora $VERSION"

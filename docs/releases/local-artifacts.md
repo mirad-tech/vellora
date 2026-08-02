@@ -1,14 +1,17 @@
 # 本地发布产物管理
 
-本项目只使用 Tauri 2 生成 Windows NSIS 安装包。GitHub Releases 是对外发布源，
-本地 `artifacts/releases/` 只保留当前安装包；历史正式版本由 GitHub Releases 保留。
+本项目使用 Tauri 2 生成 Windows NSIS 和 macOS Universal DMG。GitHub Releases 是对外发布源，
+本地 `artifacts/releases/` 只保留当前构建产物；历史正式版本由 GitHub Releases 保留。
 
 ## 目录职责
 
 ```text
 artifacts/releases/
 ├─ current/           当前 `package.json` 版本，只允许一个安装包
-└─ manifest.json      当前安装包的版本、大小与 SHA-256
+├─ manifest.json      Windows 安装包的版本、大小与 SHA-256
+└─ macos/<version>/
+   ├─ Vellora_<version>_universal.dmg
+   └─ SHA256SUMS.txt
 ```
 
 - `artifacts/releases/` 是本地生成目录，已加入 `.gitignore`，不提交二进制文件。
@@ -26,7 +29,13 @@ npm run release:check      # 校验当前版本、文件数量和 SHA-256
 npm run release:prune-old  # 无需重新构建，删除遗留本地旧版并更新清单
 npm run release:clean-cache # 删除可重建的 Tauri release 编译缓存
 npm run dist               # 依次执行 build 与 release:organize
+npm run build:mac          # 在 Mac 上构建 Universal app 与 DMG
+npm run dist:mac           # 构建、整理并验证 macOS 产物
+npm run release:check:mac  # 校验 DMG、双架构、签名、Info.plist 与 SHA-256
 ```
 
 `release:organize` 会以最新构建覆盖同版本本地副本，并删除本地旧版。对外发布与
 历史追溯仍以 GitHub Releases 为准。
+
+macOS 测试构建默认使用 ad-hoc 签名，只用于本机或 CI。正式标签发布必须完成 Developer ID
+签名、公证和 stapling；工作流不会把缺少凭据的 DMG 公开发布。

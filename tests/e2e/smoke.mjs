@@ -1,5 +1,5 @@
 /**
- * Vellora browser E2E using local Edge + puppeteer-core (no driver download).
+ * Vellora browser E2E using a local Chromium browser + puppeteer-core.
  * Starts Vite, injects Tauri invoke mocks, exercises UI flows.
  */
 import http from 'node:http';
@@ -22,11 +22,17 @@ const sampleDoc = {
   size: 80
 };
 
-function findEdge() {
+function findBrowser() {
   const candidates = [
+    process.env.BROWSER_PATH,
     process.env.EDGE_PATH,
     path.join(process.env['ProgramFiles(x86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    path.join(process.env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+    path.join(process.env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium'
   ].filter(Boolean);
   return candidates.find((p) => fs.existsSync(p));
 }
@@ -91,6 +97,9 @@ async function installMocks(page) {
       unregisterCallback: () => undefined,
       plugins: {}
     };
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: () => undefined
+    };
     window.__TAURI__ = {
       core: { invoke: handler },
       event: { listen: async () => () => undefined }
@@ -128,15 +137,16 @@ async function setTextareaValue(page, selector, value) {
   );
 }
 
-async function pressControlKey(page, key) {
-  await page.keyboard.down('Control');
+async function pressModifierKey(page, key) {
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.down(modifier);
   await page.keyboard.press(key);
-  await page.keyboard.up('Control');
+  await page.keyboard.up(modifier);
 }
 
 async function run() {
-  const edge = findEdge();
-  if (!edge) throw new Error('Microsoft Edge not found. Set EDGE_PATH.');
+  const browserPath = findBrowser();
+  if (!browserPath) throw new Error('Chromium browser not found. Set BROWSER_PATH or EDGE_PATH.');
 
   let browser;
   let dev;
@@ -150,7 +160,7 @@ async function run() {
     await dev.listen();
     await waitForUrl(DEV_URL);
     browser = await puppeteer.launch({
-      executablePath: edge,
+      executablePath: browserPath,
       headless: true,
       args: ['--no-sandbox', '--disable-gpu', '--window-size=1280,800']
     });
@@ -175,13 +185,14 @@ async function run() {
       element.textContent = '阅读模式标题';
       element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
     });
-    await page.keyboard.down('Control');
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.down(modifier);
     await page.keyboard.press('Enter');
-    await page.keyboard.up('Control');
+    await page.keyboard.up(modifier);
     await page.waitForSelector('[data-testid="quick-edit-surface"]', { hidden: true });
     const quickEdited = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
     assert(quickEdited.includes('阅读模式标题'), 'quick edit reflected in read mode');
-    await pressControlKey(page, 's');
+    await pressModifierKey(page, 's');
     await page.waitForFunction(() => {
       return String(window.__e2eSavedContent || '').includes('阅读模式标题');
     }, { timeout: 10000 });
@@ -216,7 +227,7 @@ async function run() {
     // 5 save
     await page.click('[data-testid="btn-edit"]');
     await setTextareaValue(page, '[data-testid="source-editor"]', '# 保存测试\n');
-    await pressControlKey(page, 's');
+    await pressModifierKey(page, 's');
     await page.waitForFunction(() => {
       return Boolean(window.__e2eSavedContent);
     }, { timeout: 10000 });
@@ -236,7 +247,7 @@ async function run() {
     // 7 search
     await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
     await openSample(page);
-    await pressControlKey(page, 'f');
+    await pressModifierKey(page, 'f');
     await page.waitForSelector('[data-testid="search-input"]');
     await page.type('[data-testid="search-input"]', '搜索词');
     await page.waitForFunction(() => {
@@ -259,10 +270,10 @@ async function run() {
     await page.$eval('[data-testid="content"]', (element) => {
       element.scrollTop = 0;
     });
-    await pressControlKey(page, 'f');
+    await pressModifierKey(page, 'f');
     await page.waitForSelector('[data-testid="search-input"]');
     await page.click('[data-testid="search-input"]');
-    await pressControlKey(page, 'a');
+    await page.$eval('[data-testid="search-input"]', (input) => input.select());
     await page.type('[data-testid="search-input"]', sourceSearchTarget);
     await page.waitForFunction((target) => {
       const content = document.querySelector('[data-testid="content"]');
