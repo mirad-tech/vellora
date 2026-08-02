@@ -67,6 +67,12 @@ async function pressCtrlKey(key: string): Promise<void> {
   });
 }
 
+async function pressMetaKey(key: string): Promise<void> {
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true }));
+  });
+}
+
 describe('App', () => {
   /** Captured from onCloseRequested so tests can invoke close protection. */
   let closeRequestedHandler: (() => void) | null = null;
@@ -129,6 +135,69 @@ describe('App', () => {
     closeRequestedHandler = null;
     openFilePathHandler = null;
     cleanup();
+  });
+
+  test('registers native event listeners before requesting the initial document', async () => {
+    let finishOpenListener!: () => void;
+    onOpenFilePath.mockImplementationOnce((handler: (path: string) => void) => {
+      openFilePathHandler = handler;
+      return new Promise<() => void>((resolve) => {
+        finishOpenListener = () => resolve(() => undefined);
+      });
+    });
+
+    render(<App />);
+    await act(async () => Promise.resolve());
+    expect(getInitialDocument).not.toHaveBeenCalled();
+
+    await act(async () => finishOpenListener());
+    await waitFor(() => expect(getInitialDocument).toHaveBeenCalledTimes(1));
+  });
+
+  test('loads the initial document and cleans successful listeners when one registration fails', async () => {
+    const unsubscribeOpen = vi.fn();
+    const unsubscribeClose = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    onOpenFilePath.mockResolvedValueOnce(unsubscribeOpen);
+    onCloseRequested.mockResolvedValueOnce(unsubscribeClose);
+    onDragDropPaths.mockRejectedValueOnce(new Error('drag listener failed'));
+
+    const view = render(<App />);
+    await waitFor(() => expect(getInitialDocument).toHaveBeenCalledTimes(1));
+    expect(consoleError).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    expect(unsubscribeOpen).toHaveBeenCalledTimes(1);
+    expect(unsubscribeClose).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
+  });
+
+  test('a newer native open request wins over a late initial document result', async () => {
+    const newerDocument: MarkdownDocument = {
+      ...sampleDoc,
+      path: 'C:\\docs\\newer.md',
+      name: 'newer.md',
+      content: '# 较新的系统打开请求\n'
+    };
+    let finishInitial!: () => void;
+    getInitialDocument.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishInitial = () => resolve({ ok: true, document: sampleDoc });
+        })
+    );
+    openMarkdownFile.mockResolvedValueOnce({ ok: true, document: newerDocument });
+
+    render(<App />);
+    await waitFor(() => expect(getInitialDocument).toHaveBeenCalledTimes(1));
+    await act(async () => openFilePathHandler!('C:\\docs\\newer.md'));
+    await waitFor(() =>
+      expect(screen.getByTestId('markdown-body').textContent).toContain('较新的系统打开请求')
+    );
+
+    await act(async () => finishInitial());
+    expect(screen.getByTestId('markdown-body').textContent).toContain('较新的系统打开请求');
+    expect(screen.getByTestId('markdown-body').textContent).not.toContain('正文搜索词');
   });
 
   test('shows empty state and opens a file', async () => {
@@ -456,6 +525,20 @@ describe('App', () => {
     });
   });
 
+  test('Command shortcuts trigger save and search', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: 'saved via command' } });
+    await pressMetaKey('s');
+    await waitFor(() => expect(saveMarkdownFile).toHaveBeenCalled());
+
+    await pressMetaKey('f');
+    await waitFor(() => expect(screen.getByTestId('search-input')).toBeTruthy());
+  });
+
   test('dirty local link cancel does not call openMarkdownLink; save still uses source path', async () => {
     const localDoc: MarkdownDocument = {
       path: 'C:\\docs\\source.md',
@@ -575,23 +658,65 @@ describe('App', () => {
 
     fireEvent.click(screen.getByTestId('discard-cancel'));
     expect(screen.queryByTestId('discard-modal')).toBeNull();
-    expect(confirmClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(false));
+    confirmClose.mockClear();
 
     await act(async () => {
       closeRequestedHandler!();
     });
     await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('discard-confirm'));
-    await waitFor(() => {
-      expect(confirmClose).toHaveBeenCalledTimes(1);
-      expect(confirmClose).toHaveBeenCalledWith(true);
-    });
+    fireEvent.click(screen.getByTestId('discard-cancel'));
+    await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(false));
 
     // Failed open must still save back to the source path, never a dead target path.
     await pressCtrlKey('s');
     await waitFor(() => {
       expect(saveMarkdownFile).toHaveBeenCalledWith('C:\\docs\\source.md', draft);
     });
+  });
+
+  test('Escape cancels a close confirmation and resets the native close request', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 尚未保存\n' }
+    });
+    await act(async () => closeRequestedHandler!());
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+
+    saveMarkdownFile.mockClear();
+    await pressMetaKey('s');
+    expect(saveMarkdownFile).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('discard-modal')).toBeNull());
+    expect(confirmClose).toHaveBeenCalledWith(false);
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe(
+      '# 尚未保存\n'
+    );
+  });
+
+  test('confirming close discards the in-memory draft for a later Dock reopen', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 放弃此草稿\n' }
+    });
+    await act(async () => closeRequestedHandler!());
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+    await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe(
+      sampleDoc.content
+    );
   });
 
   test('openMarkdownFile failure after discard keeps source draft and dirty', async () => {

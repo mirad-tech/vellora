@@ -36,6 +36,7 @@ await copyFile(
 );
 await copyFile(join(generatedDir, 'icon.png'), join(iconsDir, 'icon.png'));
 await copyFile(join(generatedDir, 'icon.ico'), join(iconsDir, 'icon.ico'));
+await copyFile(join(generatedDir, 'icon.icns'), join(iconsDir, 'icon.icns'));
 await rm(generatedDir, { recursive: true, force: true });
 
 console.log('Generated icons from assets/icons/icon-source.png');

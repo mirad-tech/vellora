@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 
@@ -89,6 +89,9 @@ export async function onCloseRequested(handler: () => void): Promise<UnlistenFn>
 export async function onDragDropPaths(
   handler: (paths: string[]) => void
 ): Promise<UnlistenFn> {
+  // Browser smoke tests mock invoke/event only and intentionally have no native
+  // WebView metadata. Native Tauri builds still register the real drop listener.
+  if (!isTauri()) return () => undefined;
   const webview = getCurrentWebview();
   return webview.onDragDropEvent((event) => {
     if (event.payload.type === 'drop') {

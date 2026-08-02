@@ -30,3 +30,56 @@ jobs:
       - run: npm run test:rust
       - run: npm run test:e2e:ci
       - run: npm run build:web
+
+  macos:
+    name: macOS (${{ matrix.runner }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:rust
+      - run: npm run test:e2e:ci
+      - run: npm run build:web
+      - run: npm run test:e2e:mac
+      - name: Install Universal Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build and verify ad-hoc Universal DMG
+        run: npm run dist:mac
+      - name: Upload Universal DMG test artifact
+        if: matrix.runner == 'macos-15'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vellora-macos-universal-test
+          path: artifacts/releases/macos
+          if-no-files-found: error
+
+  macos-universal-intel:
+    name: Universal DMG verification (Intel)
+    needs: macos
+    timeout-minutes: 20
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v5
+        with:
+          name: vellora-macos-universal-test
+          path: artifacts/releases/macos
+      - run: npm run release:check:mac

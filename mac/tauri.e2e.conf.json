@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "app.markdown-viewer.desktop.e2e",
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "macos-e2e-webdriver",
+          "description": "Embedded WebDriver manifest for macOS desktop E2E only",
+          "windows": ["main"],
+          "platforms": ["macOS"],
+          "permissions": ["wdio-webdriver:default"]
+        }
+      ]
+    }
+  }
+}

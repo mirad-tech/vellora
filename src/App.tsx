@@ -555,6 +555,26 @@ export default function App() {
     []
   );
 
+  const cancelDiscardDialog = useCallback(() => {
+    if (discardDialog?.reason === 'close') {
+      void confirmClose(false);
+    }
+    setDiscardDialog(null);
+  }, [discardDialog]);
+
+  const discardCloseDraft = useCallback(() => {
+    const current = viewStateRef.current;
+    if (current.status !== 'ready') return;
+    removeQuickEditAttributes(quickEditRef.current);
+    quickEditRef.current = null;
+    quickEditStateRef.current = null;
+    setQuickEdit(null);
+    setDraftContent(current.document.content);
+    draftRef.current = current.document.content;
+    setEditorMode('read');
+    setSaveState({ status: 'idle' });
+  }, []);
+
   /** Restore non-ready UI after a failed open; a ready document is preserved in place. */
   const restoreAfterFailedOpen = useCallback(
     (prevView: ViewState, message?: string) => {
@@ -865,44 +885,95 @@ export default function App() {
   }, [pendingExternal]);
 
   useEffect(() => {
-    if (initialLoadStarted.current) return;
-    initialLoadStarted.current = true;
-    // Initial CLI probing must not block the Open button. A manual request increments
-    // the same sequence and makes a late initial result stale.
-    const requestId = ++documentRequestId.current;
-    void getInitialDocument().then((result) => {
-      if (requestId === documentRequestId.current && result.ok) {
-        applyDocument(result.document);
-      }
-    });
-  }, [applyDocument]);
-
-  useEffect(() => {
+    let disposed = false;
     let unsubs: Array<() => void> = [];
 
-    void onOpenFilePath((path) => {
-      openPath(path);
-    }).then((u) => unsubs.push(u));
+    const registerListenersAndLoadInitial = async () => {
+      const trackRegistration = async (registration: Promise<() => void>) => {
+        const unsubscribe = await registration;
+        if (disposed) {
+          unsubscribe();
+        } else {
+          unsubs.push(unsubscribe);
+        }
+      };
+      const registrations = await Promise.allSettled([
+        trackRegistration(
+          onOpenFilePath((path) => {
+            openPath(path);
+          })
+        ),
+        trackRegistration(
+          onDragDropPaths((paths) => {
+            const md = paths.find(isMarkdownFilePath);
+            if (md) openPath(md);
+          })
+        ),
+        trackRegistration(
+          onCloseRequested(() => {
+            confirmIfDirty('close', () => {
+              void confirmClose(true).then((result) => {
+                // A macOS close hides the reusable window. Only discard the
+                // in-memory draft after Rust confirms that hide/close succeeded.
+                if (result.ok) discardCloseDraft();
+              });
+            });
+          })
+        )
+      ]);
 
-    void onDragDropPaths((paths) => {
-      const md = paths.find(isMarkdownFilePath);
-      if (md) openPath(md);
-    }).then((u) => unsubs.push(u));
+      for (const registration of registrations) {
+        if (registration.status === 'rejected') {
+          console.error('Failed to register a native application event listener.', registration.reason);
+        }
+      }
 
-    void onCloseRequested(() => {
-      confirmIfDirty('close', () => {
-        // allow_close one-shot closes without requiring dirty=false first
-        void confirmClose(true);
+      if (disposed) return;
+
+      if (initialLoadStarted.current) return;
+      initialLoadStarted.current = true;
+      // Register the open-path listener before telling Rust the renderer is ready.
+      // Any later event starts a newer request and makes this initial result stale.
+      const requestId = ++documentRequestId.current;
+      void getInitialDocument().then((result) => {
+        if (requestId === documentRequestId.current && result.ok) {
+          applyDocument(result.document);
+        }
       });
-    }).then((u) => unsubs.push(u));
+    };
+
+    void registerListenersAndLoadInitial();
 
     return () => {
+      disposed = true;
       for (const u of unsubs) u();
     };
-  }, [confirmIfDirty, openPath]);
+  }, [applyDocument, confirmIfDirty, discardCloseDraft, openPath]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (pendingExternal) {
+          setPendingExternal(null);
+          return;
+        }
+        if (discardDialog) {
+          cancelDiscardDialog();
+          return;
+        }
+        if (searchOpen) {
+          setSearchOpen(false);
+          return;
+        }
+        if (outlineOpen) {
+          setOutlineOpen(false);
+        }
+        return;
+      }
+      // A confirmation owns the current interaction. In particular, do not let
+      // Command-S clear Rust's pending QuitApp/HideWindow intent behind it.
+      if (pendingExternal || discardDialog) return;
+
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.key.toLowerCase() === 's') {
         event.preventDefault();
@@ -913,29 +984,11 @@ export default function App() {
         event.preventDefault();
         setSearchOpen(true);
         window.setTimeout(() => searchInputRef.current?.focus(), 0);
-        return;
-      }
-      if (event.key === 'Escape') {
-        if (pendingExternal) {
-          setPendingExternal(null);
-          return;
-        }
-        if (discardDialog) {
-          setDiscardDialog(null);
-          return;
-        }
-        if (searchOpen) {
-          setSearchOpen(false);
-          return;
-        }
-        if (outlineOpen) {
-          setOutlineOpen(false);
-        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [discardDialog, handleSave, outlineOpen, pendingExternal, searchOpen]);
+  }, [cancelDiscardDialog, discardDialog, handleSave, outlineOpen, pendingExternal, searchOpen]);
 
   const titleText =
     viewState.status === 'ready'
@@ -1311,7 +1364,7 @@ export default function App() {
                 type="button"
                 className="toolbar-btn"
                 data-testid="discard-cancel"
-                onClick={() => setDiscardDialog(null)}
+                onClick={cancelDiscardDialog}
               >
                 继续编辑
               </button>

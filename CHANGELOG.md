@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### macOS
+
+- 新增根目录 `mac/` 覆盖层，支持 macOS 12+、Apple Silicon/Intel Universal `.app` 与 `.dmg`。
+- 支持 Finder 文件关联、冷/热启动文件转发、Dock 恢复、红灯隐藏窗口和 `⌘Q` 未保存保护。
+- 新增仅测试 feature 启用的 macOS 嵌入式 WebDriver E2E；正式包不包含测试驱动或额外通用权限。
+- CI 在 Apple Silicon 与 Intel runner 上验证共享功能，并对 Universal DMG 检查架构、签名、Info.plist、文件关联和校验和。
+
+### 发布
+
+- 标签发布拆分为 Windows/macOS 构建和单一发布任务；macOS 缺少 Developer ID 或公证凭据时拒绝公开发布。
+
 ## 2.2.2 - 2026-07-31
 
 ### 查找与交互
