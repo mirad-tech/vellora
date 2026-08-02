@@ -65,7 +65,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     }
 
     // 1) Launch arg opens source.md
-    const body = await $('[data-testid="markdown-body"]');
+    let body = await $('[data-testid="markdown-body"]');
     try {
       await body.waitForDisplayed({ timeout: 60000 });
     } catch (error) {
@@ -107,6 +107,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n草稿`);
     await $('[data-testid="btn-read"]').click();
+    body = await $('[data-testid="markdown-body"]');
     await body.waitForDisplayed();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
     const discard = await $('[data-testid="discard-modal"]');
@@ -126,6 +127,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     const draftKeep = `${sourceText}\n失败跳转草稿`;
     await enterEditAndSetValue(draftKeep);
     await $('[data-testid="btn-read"]').click();
+    body = await $('[data-testid="markdown-body"]');
     await body.waitForDisplayed();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
     await discard.waitForDisplayed({ timeout: 10000 });
@@ -157,6 +159,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(`${sourceText}\n临时`);
     await $('[data-testid="btn-read"]').click();
+    body = await $('[data-testid="markdown-body"]');
     await body.waitForDisplayed();
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
     await discard.waitForDisplayed({ timeout: 10000 });
