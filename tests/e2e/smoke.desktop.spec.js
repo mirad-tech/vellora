@@ -57,6 +57,13 @@ describe('Vellora desktop E2E (real IPC)', () => {
     expect(Boolean(sourcePath && fs.existsSync(sourcePath))).toBe(true);
     expect(Boolean(targetPath && fs.existsSync(targetPath))).toBe(true);
 
+    if (process.platform === 'darwin') {
+      // Tauri's native title stays "Vellora" while the document title becomes
+      // "<file> — Vellora". Select by the stable window label so the WDIO
+      // service does not lose the active WKWebView during title-based focusing.
+      await browser.tauri.switchWindow('main');
+    }
+
     // 1) Launch arg opens source.md
     const body = await $('[data-testid="markdown-body"]');
     await body.waitForDisplayed({ timeout: 60000 });
