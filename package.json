@@ -69,6 +69,7 @@
     "vitest": "^4.1.10"
   },
   "overrides": {
+    "@wdio/native-utils": "2.5.0",
     "serialize-javascript": "7.0.5"
   }
 }
