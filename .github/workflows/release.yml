@@ -30,7 +30,7 @@ jobs:
       - run: npm run test:e2e:ci
       - run: npm run dist
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vellora-windows-installer
           path: src-tauri/target/release/bundle/nsis/Vellora_*_x64-setup.exe
@@ -102,7 +102,7 @@ jobs:
           VELLORA_REQUIRE_NOTARIZATION: '1'
         run: npm run dist:mac
       - name: Upload macOS installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vellora-macos-installer
           path: artifacts/releases/macos
@@ -120,11 +120,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: vellora-windows-installer
           path: release-assets
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: vellora-macos-installer
           path: release-assets/macos
