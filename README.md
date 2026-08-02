@@ -12,7 +12,12 @@ Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 
 
 ## 下载与安装
 
-当前正式发布适用于 **Windows 10/11 x64**：
+| 平台 | 支持状态 | 获取方式 |
+|---|---|---|
+| Windows 10/11 x64 | 当前公开版本为 2.2.2 | 下载 NSIS 安装包 |
+| macOS 12+（Apple Silicon / Intel） | Universal 应用与 DMG 已通过双架构 CI；2.2.2 尚无正式 macOS 资产 | 按 macOS 说明构建 ad-hoc 测试包 |
+
+### Windows 10/11 x64
 
 [**下载 Vellora 2.2.2 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.2/Vellora_2.2.2_x64-setup.exe)
 
@@ -21,7 +26,9 @@ Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 
 - 运行环境：Microsoft WebView2；多数 Windows 10/11 已预装，缺失时安装程序会引导下载
 - 从 Electron 1.x 升级：建议先卸载 1.x，再安装当前版本；卸载不会删除 Markdown 文档
 
-macOS 12+ Universal DMG 已加入源码与 CI，但尚未作为 2.2.2 正式资产发布；可按 [macOS 构建说明](mac/README.md) 本机构建 ad-hoc 测试包。
+### macOS 12+
+
+当前源码支持同时包含 `arm64` 与 `x86_64` 的 Universal 应用和 DMG。2.2.2 发布早于 macOS 支持，因此 Releases 中没有可公开分发的签名 DMG；可按 [macOS 构建与验证说明](mac/README.md) 在 Mac 或 GitHub Actions 中生成 ad-hoc 测试包。
 
 ## 主要功能
 
@@ -147,7 +154,8 @@ docs/                   仓库结构与发布产物文档
 
 当前版本：**2.2.2**。
 
-- `main` 和 Pull Request 会在 Windows GitHub Actions 中运行版本检查、类型检查、前端测试、Rust 测试、浏览器 E2E 和前端构建
+- `main` 和 Pull Request 会在 Windows、Apple Silicon 与 Intel GitHub Actions 中运行版本检查、类型检查、前端/Rust 测试、浏览器 E2E 和构建
+- macOS CI 还会运行真实桌面 E2E、构建 Universal DMG，并在 Intel runner 上复核 Apple Silicon runner 生成的同一份产物
 - 版本号同步维护于 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`
 - `npm run version:check` 会阻止这些版本号不一致的提交或发布
 - 更新 [CHANGELOG.md](CHANGELOG.md) 后推送 `vX.Y.Z` 标签

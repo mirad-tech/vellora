@@ -7,7 +7,14 @@
 
 詳細は [中文 README](README.md) または [English README](README.en.md) を参照してください。
 
-## ダウンロード（Windows x64）
+## ダウンロード
+
+| プラットフォーム | 対応状況 | 入手方法 |
+|---|---|---|
+| Windows 10/11 x64 | 現在の公開版は 2.2.2 | NSIS インストーラをダウンロード |
+| macOS 12+（Apple Silicon / Intel） | Universal アプリ / DMG を両アーキテクチャの CI で検証済み。2.2.2 の macOS アセットは未公開 | ソースから ad-hoc テスト版をビルド |
+
+### Windows 10/11 x64
 
 [**Vellora 2.2.2 インストーラ**](https://github.com/mirad-tech/vellora/releases/download/v2.2.2/Vellora_2.2.2_x64-setup.exe)
 
@@ -16,7 +23,9 @@
 - **WebView2** が必要（通常は OS に同梱。インストールパッケージには埋め込みません）
 - 1.x（Electron）から：先に 1.x をアンインストールしてから最新版を入れてください
 
-macOS 12+ Universal DMG のソースと CI は追加済みですが、2.2.2 の正式 macOS アセットは未公開です。ローカルの ad-hoc ビルドは [macOS ビルド手順](mac/README.md) を参照してください。
+### macOS 12+
+
+ソースは `arm64` / `x86_64` を含む Universal アプリと DMG に対応しています。2.2.2 は macOS 対応前のリリースのため、公開配布用の署名済み DMG はありません。ad-hoc テスト版は [macOS ビルド・検証手順](mac/README.md) を参照してください。
 
 ## 概要
 

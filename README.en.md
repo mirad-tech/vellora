@@ -12,7 +12,12 @@ Built with **Tauri 2 + React + TypeScript + Vite**. Documents stay on the local 
 
 ## Download
 
-The current public release is for **Windows 10/11 x64**:
+| Platform | Support status | How to get it |
+|---|---|---|
+| Windows 10/11 x64 | Current public release: 2.2.2 | Download the NSIS installer |
+| macOS 12+ (Apple Silicon / Intel) | Universal app and DMG verified by native CI on both architectures; no macOS asset in 2.2.2 | Build an ad-hoc test package from source |
+
+### Windows 10/11 x64
 
 [**Download Vellora 2.2.2 (NSIS)**](https://github.com/mirad-tech/vellora/releases/download/v2.2.2/Vellora_2.2.2_x64-setup.exe)
 
@@ -21,7 +26,9 @@ The current public release is for **Windows 10/11 x64**:
 - Requires Microsoft WebView2, normally included with Windows 10/11; the installer can bootstrap it if missing
 - When upgrading from Electron 1.x, uninstall 1.x first; uninstalling does not remove Markdown documents
 
-The source tree and CI now include a macOS 12+ Universal DMG build, but no macOS asset was published for 2.2.2. See [macOS build instructions](mac/README.md) for an ad-hoc test build.
+### macOS 12+
+
+The source tree builds a Universal app and DMG containing both `arm64` and `x86_64`. Release 2.2.2 predates macOS support, so Releases does not contain a signed DMG for public distribution. See the [macOS build and verification guide](mac/README.md) for an ad-hoc test build.
 
 ## Features
 
@@ -82,7 +89,7 @@ On macOS, install Xcode Command Line Tools and both Apple Rust targets, then use
 
 ## Repository and releases
 
-Version: **2.2.2**. CI runs on `main` and pull requests. A matching `vX.Y.Z` tag builds Windows and macOS assets; the macOS release job fails closed unless Developer ID signing and notarization secrets are configured.
+Version: **2.2.2**. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies a Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds Windows and macOS assets; the macOS release job fails closed unless Developer ID signing and notarization secrets are configured.
 
 - [Changelog](CHANGELOG.md)
 - [Issues](https://github.com/mirad-tech/vellora/issues)

@@ -41,6 +41,16 @@ artifacts/releases/macos/<version>/SHA256SUMS.txt
 
 验证包含双架构、代码签名、Bundle ID、macOS 12 最低版本、Markdown 文件关联、ICNS、DMG Applications 链接与 SHA-256。
 
+## CI 验证
+
+`.github/workflows/ci.yml` 分别使用 Apple Silicon `macos-15` 与 Intel `macos-15-intel` runner：
+
+- 两种架构都运行前端/Rust 测试、浏览器 E2E 和真实 Tauri 桌面 E2E
+- 两种架构都构建并检查 Universal 应用和 DMG
+- Apple Silicon runner 上传的同一份 DMG 会再由 Intel runner 下载并执行 `release:check:mac`
+
+这些结果证明当前源码能在两种 Mac 架构上构建并运行核心自动化流程，但 runner 使用 macOS 15，不能替代 macOS 12 的启动 smoke 或 Finder、Dock、原生窗口交互等实机验收。
+
 ## 签名模式
 
 没有 Apple 凭据时使用 `signingIdentity: "-"` 生成 ad-hoc 测试包。此类包适合本机/CI 验证，但 Gatekeeper 仍会显示未验证提示，不得作为正式公开版本。
