@@ -3729,6 +3729,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-wdio"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8aa9b559f110924b9897793767a3bb4880c195db75838030eb224f94d21565d9"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "tauri-plugin-wdio-webdriver"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4374,6 +4391,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "tauri-plugin-wdio",
  "tauri-plugin-wdio-webdriver",
  "tempfile",
  "thiserror 2.0.19",

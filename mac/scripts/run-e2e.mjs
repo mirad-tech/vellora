@@ -52,7 +52,10 @@ try {
     'custom-protocol,macos-e2e'
   ];
   if (process.env.CI) buildArgs.push('--ci');
-  run(process.execPath, buildArgs);
+  run(process.execPath, buildArgs, {
+    ...process.env,
+    VELLORA_MACOS_E2E: '1'
+  });
   if (!fs.existsSync(appBinary)) fail(`debug binary is missing: ${appBinary}`);
 
   run(process.execPath, [wdioCli, 'run', 'mac/tests/wdio.macos.conf.js'], {
