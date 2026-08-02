@@ -273,7 +273,7 @@ async function run() {
     await pressModifierKey(page, 'f');
     await page.waitForSelector('[data-testid="search-input"]');
     await page.click('[data-testid="search-input"]');
-    await pressModifierKey(page, 'a');
+    await page.$eval('[data-testid="search-input"]', (input) => input.select());
     await page.type('[data-testid="search-input"]', sourceSearchTarget);
     await page.waitForFunction((target) => {
       const content = document.querySelector('[data-testid="content"]');
