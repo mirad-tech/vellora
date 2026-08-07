@@ -17,7 +17,8 @@ const DEV_URL = 'http://127.0.0.1:1420';
 const sampleDoc = {
   path: 'C:\\e2e\\sample.md',
   name: 'sample.md',
-  content: '# 标题一\n\n正文搜索词 hello\n\n## 标题二\n\n[外链](https://example.com/path)\n',
+  content:
+    '# 标题一\n\n正文搜索词 hello\n\n## 标题二\n\n###### 这是一个用于验证目录单行省略的非常长的六级标题\n\n[外链](https://example.com/path)\n',
   modifiedAt: Date.now(),
   size: 80
 };
@@ -122,6 +123,94 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
+function assertApprox(actual, expected, msg, tolerance = 0.05) {
+  assert(Math.abs(actual - expected) <= tolerance, `${msg}: expected ${expected}, got ${actual}`);
+}
+
+function assertIntegerGeometry(metric, label) {
+  for (const key of ['x', 'y', 'width', 'height']) {
+    assertApprox(metric[key], Math.round(metric[key]), `${label} ${key} is pixel-aligned`);
+  }
+}
+
+function relativeLuminance(hex) {
+  const value = hex.replace('#', '');
+  const channels = [0, 2, 4]
+    .map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16) / 255)
+    .map((channel) =>
+      channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    );
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(foreground, background) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+async function readVisualMetrics(page, selectors, variables = []) {
+  return page.evaluate(
+    ({ requestedSelectors, requestedVariables }) => {
+      const elements = {};
+      for (const selector of requestedSelectors) {
+        const element = document.querySelector(selector);
+        if (!(element instanceof HTMLElement)) {
+          elements[selector] = null;
+          continue;
+        }
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        elements[selector] = {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          right: rect.right,
+          bottom: rect.bottom,
+          borderRadius: Number.parseFloat(style.borderTopLeftRadius),
+          paddingLeft: Number.parseFloat(style.paddingLeft),
+          paddingTop: Number.parseFloat(style.paddingTop),
+          outlineWidth: Number.parseFloat(style.outlineWidth),
+          outlineOffset: Number.parseFloat(style.outlineOffset),
+          position: style.position
+        };
+      }
+
+      const rootStyle = getComputedStyle(document.documentElement);
+      const rootVariables = Object.fromEntries(
+        requestedVariables.map((name) => [name, rootStyle.getPropertyValue(name).trim()])
+      );
+      return {
+        elements,
+        variables: rootVariables,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        overflowX: document.documentElement.scrollWidth - window.innerWidth
+      };
+    },
+    { requestedSelectors: selectors, requestedVariables: variables }
+  );
+}
+
+async function readToolbarLayout(page) {
+  return page.evaluate(() => {
+    const rect = (selector) => {
+      const element = document.querySelector(selector);
+      if (!(element instanceof HTMLElement)) return null;
+      const bounds = element.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right };
+    };
+    return {
+      leading: rect('.toolbar-leading'),
+      toggle: rect('.mode-toggle'),
+      actions: rect('.toolbar-actions'),
+      overflowX: document.documentElement.scrollWidth - window.innerWidth
+    };
+  });
+}
+
 /** Set React-controlled textarea value so onChange/updateDraft runs. */
 async function setTextareaValue(page, selector, value) {
   await page.$eval(
@@ -165,6 +254,7 @@ async function run() {
       args: ['--no-sandbox', '--disable-gpu', '--window-size=1280,800']
     });
     const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
     await installMocks(page);
 
     // 1 empty
@@ -172,11 +262,44 @@ async function run() {
     await page.waitForSelector('[data-testid="empty-state"]');
     const emptyText = await page.$eval('[data-testid="empty-state"]', (el) => el.textContent || '');
     assert(emptyText.includes('未打开文件'), 'empty state text');
+    const emptyVisual = await readVisualMetrics(
+      page,
+      ['.toolbar', '.button--toolbar', '.mode-toggle', '.mode-btn', '.button--primary'],
+      ['--faint', '--surface']
+    );
+    assert(emptyVisual.overflowX <= 0, 'desktop empty state has no horizontal overflow');
+    assertApprox(emptyVisual.elements['.toolbar'].height, 48, 'toolbar height');
+    assertApprox(emptyVisual.elements['.button--toolbar'].height, 32, 'toolbar button height');
+    assertApprox(emptyVisual.elements['.button--toolbar'].borderRadius, 6, 'toolbar button radius');
+    assertApprox(emptyVisual.elements['.mode-toggle'].height, 32, 'mode toggle height');
+    assertApprox(emptyVisual.elements['.mode-toggle'].borderRadius, 8, 'mode toggle radius');
+    assertApprox(emptyVisual.elements['.mode-btn'].height, 28, 'mode button height');
+    assertApprox(emptyVisual.elements['.mode-btn'].borderRadius, 6, 'mode button radius');
+    assertApprox(emptyVisual.elements['.button--primary'].height, 32, 'primary button height');
+    assertIntegerGeometry(emptyVisual.elements['.button--toolbar'], 'toolbar button');
+    assertIntegerGeometry(emptyVisual.elements['.mode-toggle'], 'mode toggle');
+    assertIntegerGeometry(emptyVisual.elements['.mode-btn'], 'mode button');
+    assert(
+      contrastRatio(emptyVisual.variables['--faint'], emptyVisual.variables['--surface']) >= 4.5,
+      'small status text contrast is at least 4.5:1'
+    );
+    await page.keyboard.press('Tab');
+    const focusedButton = await page.evaluate(
+      () => document.activeElement?.getAttribute('data-testid') || ''
+    );
+    assert(focusedButton === 'btn-open', 'keyboard focus reaches the open button first');
+    const focusVisual = await readVisualMetrics(page, ['[data-testid="btn-open"]']);
+    assertApprox(focusVisual.elements['[data-testid="btn-open"]'].outlineWidth, 2, 'button focus ring');
+    assertApprox(focusVisual.elements['[data-testid="btn-open"]'].outlineOffset, 2, 'button focus offset');
 
     // 2 open + render
     await openSample(page);
     const body1 = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
     assert(body1.includes('标题一'), 'render heading');
+    const previewVisual = await readVisualMetrics(page, ['.markdown-body']);
+    assertApprox(previewVisual.elements['.markdown-body'].width, 800, 'preview document width');
+    assertApprox(previewVisual.elements['.markdown-body'].paddingLeft, 30, 'preview horizontal padding');
+    assertApprox(previewVisual.elements['.markdown-body'].paddingTop, 44, 'preview top padding');
 
     // 3 quick edit in read mode + save through the existing draft flow
     await page.click('[data-testid="markdown-body"] h1');
@@ -200,6 +323,15 @@ async function run() {
     // 4 edit mode
     await page.click('[data-testid="btn-edit"]');
     await page.waitForSelector('[data-testid="source-editor"]');
+    const sourceVisual = await readVisualMetrics(page, ['.source-editor']);
+    assertApprox(sourceVisual.elements['.source-editor'].width, 800, 'source document width');
+    assertApprox(sourceVisual.elements['.source-editor'].paddingLeft, 30, 'source horizontal padding');
+    assertApprox(sourceVisual.elements['.source-editor'].paddingTop, 44, 'source top padding');
+    assertApprox(
+      sourceVisual.elements['.source-editor'].x,
+      previewVisual.elements['.markdown-body'].x,
+      'source and preview left edges align'
+    );
     await setTextareaValue(
       page,
       '[data-testid="source-editor"]',
@@ -241,6 +373,10 @@ async function run() {
     await setTextareaValue(page, '[data-testid="source-editor"]', 'dirty content');
     await page.click('[data-testid="btn-open"]');
     await page.waitForSelector('[data-testid="discard-modal"]', { timeout: 5000 });
+    const discardVisual = await readVisualMetrics(page, ['.modal', '.button--danger']);
+    assertApprox(discardVisual.elements['.modal'].borderRadius, 10, 'discard modal radius');
+    assertApprox(discardVisual.elements['.button--danger'].height, 32, 'danger button height');
+    assertApprox(discardVisual.elements['.button--danger'].borderRadius, 6, 'danger button radius');
     await page.click('[data-testid="discard-cancel"]');
     await page.waitForSelector('[data-testid="discard-modal"]', { hidden: true, timeout: 5000 });
 
@@ -249,6 +385,34 @@ async function run() {
     await openSample(page);
     await pressModifierKey(page, 'f');
     await page.waitForSelector('[data-testid="search-input"]');
+    await page.waitForFunction(
+      () => document.activeElement?.getAttribute('data-testid') === 'search-input',
+      { timeout: 5000 }
+    );
+    const searchVisual = await readVisualMetrics(page, [
+      '.search-bar',
+      '.search-query-row',
+      '.search-navigation-row',
+      '.search-navigation-actions .search-icon-btn'
+    ]);
+    assertApprox(searchVisual.elements['.search-bar'].borderRadius, 10, 'search surface radius');
+    assertApprox(searchVisual.elements['.search-bar'].outlineWidth, 2, 'search focus-within ring');
+    assertApprox(searchVisual.elements['.search-query-row'].height, 44, 'search query row height');
+    assertApprox(
+      searchVisual.elements['.search-navigation-row'].height,
+      36,
+      'search navigation row height'
+    );
+    assertApprox(
+      searchVisual.elements['.search-navigation-actions .search-icon-btn'].height,
+      28,
+      'search icon button height'
+    );
+    assertApprox(
+      searchVisual.elements['.search-navigation-actions .search-icon-btn'].borderRadius,
+      6,
+      'search icon button radius'
+    );
     await page.type('[data-testid="search-input"]', '搜索词');
     await page.waitForFunction(() => {
       const t = document.querySelector('[data-testid="search-count"]')?.textContent || '';
@@ -300,14 +464,88 @@ async function run() {
     await page.waitForSelector('[data-testid="outline-panel"]');
     const outlineCount = await page.$$eval('[data-testid="outline-item"]', (els) => els.length);
     assert(outlineCount >= 1, 'outline items');
+    const outlineVisual = await readVisualMetrics(page, ['.outline-item']);
+    assertApprox(outlineVisual.elements['.outline-item'].height, 32, 'outline item height');
+    assertApprox(outlineVisual.elements['.outline-item'].borderRadius, 6, 'outline item radius');
+    const longOutlineLabel = await page.$$eval('.outline-item-label', (labels) => {
+      const label = labels.find((element) => element.textContent?.includes('目录单行省略'));
+      if (!(label instanceof HTMLElement) || !(label.parentElement instanceof HTMLElement)) {
+        return null;
+      }
+      const labelStyle = getComputedStyle(label);
+      const labelBounds = label.getBoundingClientRect();
+      const itemBounds = label.parentElement.getBoundingClientRect();
+      return {
+        clientWidth: label.clientWidth,
+        scrollWidth: label.scrollWidth,
+        labelBottom: labelBounds.bottom,
+        itemBottom: itemBounds.bottom,
+        overflow: labelStyle.overflow,
+        textOverflow: labelStyle.textOverflow,
+        whiteSpace: labelStyle.whiteSpace
+      };
+    });
+    assert(longOutlineLabel !== null, 'long nested outline label is rendered');
+    assert(
+      longOutlineLabel.scrollWidth > longOutlineLabel.clientWidth,
+      'long nested outline label reaches the truncation path'
+    );
+    assert(longOutlineLabel.overflow === 'hidden', 'long outline label clips overflow');
+    assert(longOutlineLabel.textOverflow === 'ellipsis', 'long outline label uses ellipsis');
+    assert(longOutlineLabel.whiteSpace === 'nowrap', 'long outline label stays on one line');
+    assert(
+      longOutlineLabel.labelBottom <= longOutlineLabel.itemBottom + 0.05,
+      'long outline label stays inside the 32px item'
+    );
 
     // 9 external link
     await page.click('[data-testid="markdown-body"] a');
     await page.waitForSelector('[data-testid="external-link-modal"]', { timeout: 5000 });
+    const externalVisual = await readVisualMetrics(page, ['.modal']);
+    assertApprox(externalVisual.elements['.modal'].borderRadius, 10, 'external modal radius');
     await page.click('[data-testid="external-cancel"]');
     await page.waitForSelector('[data-testid="external-link-modal"]', { hidden: true, timeout: 5000 });
 
-    console.log('E2E OK: 9 scenarios passed');
+    for (const viewport of [
+      { width: 720, height: 800 },
+      { width: 390, height: 844 },
+      { width: 320, height: 800 }
+    ]) {
+      await page.setViewport({ ...viewport, deviceScaleFactor: 1 });
+      await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-testid="empty-state"]');
+      const layout = await readToolbarLayout(page);
+      assert(layout.overflowX <= 0, `${viewport.width}px viewport has no horizontal overflow`);
+      assert(
+        layout.leading.right <= layout.toggle.left,
+        `${viewport.width}px leading controls do not overlap mode toggle`
+      );
+      assert(
+        layout.toggle.right <= layout.actions.left,
+        `${viewport.width}px mode toggle does not overlap toolbar actions`
+      );
+    }
+
+    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
+    await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
+    await openSample(page);
+    await page.click('[data-testid="btn-outline"]');
+    await page.waitForSelector('[data-testid="outline-panel"]');
+    const narrowOutline = await readVisualMetrics(page, ['.outline-panel']);
+    assert(narrowOutline.overflowX <= 0, '390px outline has no horizontal overflow');
+    assert(narrowOutline.elements['.outline-panel'].position === 'absolute', '390px outline is an overlay');
+    assertApprox(narrowOutline.elements['.outline-panel'].x, 8, '390px outline left inset');
+    assertApprox(narrowOutline.elements['.outline-panel'].width, 264, '390px outline width');
+    assertApprox(narrowOutline.elements['.outline-panel'].borderRadius, 10, '390px outline radius');
+    await pressModifierKey(page, 'f');
+    await page.waitForSelector('[data-testid="search-bar"]');
+    const narrowSearch = await readVisualMetrics(page, ['.search-bar']);
+    assert(narrowSearch.overflowX <= 0, '390px search has no horizontal overflow');
+    assertApprox(narrowSearch.elements['.search-bar'].x, 8, '390px search left inset');
+    assertApprox(narrowSearch.elements['.search-bar'].width, 374, '390px search width');
+    assertApprox(narrowSearch.elements['.search-bar'].borderRadius, 10, '390px search radius');
+
+    console.log('E2E OK: 9 scenarios and visual consistency checks passed');
   } catch (err) {
     failures.push(err);
     console.error('E2E FAILED:', err);

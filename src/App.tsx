@@ -1027,7 +1027,7 @@ export default function App() {
         <div className="toolbar-leading">
           <button
             type="button"
-            className="toolbar-btn open-action"
+            className="button button--toolbar open-action"
             data-testid="btn-open"
             disabled={documentOpenPending}
             onClick={handleChooseFile}
@@ -1076,7 +1076,9 @@ export default function App() {
         <div className="toolbar-actions">
           <button
             type="button"
-            className={outlineOpen ? 'toolbar-btn active' : 'toolbar-btn'}
+            className={
+              outlineOpen ? 'button button--toolbar active' : 'button button--toolbar'
+            }
             data-testid="btn-outline"
             disabled={viewState.status !== 'ready'}
             onClick={() => setOutlineOpen((v) => !v)}
@@ -1196,7 +1198,7 @@ export default function App() {
                       }, 0);
                     }}
                   >
-                    {entry.text}
+                    <span className="outline-item-label">{entry.text}</span>
                   </button>
                 ))}
               </nav>
@@ -1217,7 +1219,7 @@ export default function App() {
               <p className="muted">请选择 .md 或 .markdown 文件。</p>
               <button
                 type="button"
-                className="toolbar-btn primary"
+                className="button button--primary"
                 disabled={documentOpenPending}
                 onClick={handleChooseFile}
               >
@@ -1238,7 +1240,7 @@ export default function App() {
               <p className="muted">{viewState.message}</p>
               <button
                 type="button"
-                className="toolbar-btn primary"
+                className="button button--primary"
                 disabled={documentOpenPending}
                 onClick={handleChooseFile}
               >
@@ -1335,7 +1337,7 @@ export default function App() {
             <div className="modal-actions">
               <button
                 type="button"
-                className="toolbar-btn"
+                className="button"
                 data-testid="external-cancel"
                 onClick={() => setPendingExternal(null)}
               >
@@ -1343,7 +1345,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="toolbar-btn primary"
+                className="button button--primary"
                 data-testid="external-confirm"
                 onClick={() => void handleConfirmExternal()}
               >
@@ -1362,7 +1364,7 @@ export default function App() {
             <div className="modal-actions">
               <button
                 type="button"
-                className="toolbar-btn"
+                className="button"
                 data-testid="discard-cancel"
                 onClick={cancelDiscardDialog}
               >
@@ -1370,7 +1372,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className="toolbar-btn danger"
+                className="button button--danger"
                 data-testid="discard-confirm"
                 onClick={() => {
                   const { proceed } = discardDialog;

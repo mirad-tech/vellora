@@ -18,11 +18,11 @@
   --surface-raised: #fbf8f2;
   --text: #242321;
   --muted: #6e6860;
-  --faint: #968d82;
-  --border: #ded7cc;
-  --border-strong: #cfc5b7;
-  --control-hover: #e9e3da;
-  --control-active: #ded7cc;
+  --faint: #746c62;
+  --border: #d6cec1;
+  --border-strong: #bfb4a4;
+  --control-hover: #e7dfd4;
+  --control-active: #dcd2c4;
   --primary-hover: #3a3732;
   --danger: #bd503f;
   --danger-bg: #f2ded8;
@@ -31,7 +31,32 @@
   --hit-active: #d3c9bc;
   --scrollbar-thumb: #b9afa2;
   --scrollbar-thumb-hover: #968d82;
-  --shadow-float: 0 12px 32px rgb(64 54 44 / 12%);
+  --focus-ring: #6e6860;
+  --radius-highlight: 2px;
+  --radius-content: 4px;
+  --radius-control: 6px;
+  --radius-group: 8px;
+  --radius-surface: 10px;
+  --radius-pill: 999px;
+  --control-height: 32px;
+  --control-height-compact: 28px;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 24px;
+  --space-8: 32px;
+  --shadow-control: 0 1px 3px rgb(64 54 44 / 10%);
+  --shadow-subtle: 0 6px 20px rgb(64 54 44 / 6%);
+  --shadow-popover: 0 12px 32px rgb(64 54 44 / 14%);
+  --shadow-modal: 0 18px 48px rgb(64 54 44 / 18%);
+  --motion-fast: 120ms ease-out;
+  --document-max-width: 800px;
+  --document-padding-inline: 30px;
+  --document-padding-block-start: 44px;
+  --document-padding-block-end: 80px;
 }
 
 * {
@@ -54,7 +79,7 @@
 
 *::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--scrollbar-thumb);
   background-clip: padding-box;
 }
@@ -86,13 +111,18 @@ body {
 
 button {
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   font: inherit;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: var(--space-3);
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    color var(--motion-fast),
+    box-shadow var(--motion-fast);
 }
 
 button:disabled {
@@ -101,8 +131,8 @@ button:disabled {
 }
 
 button:focus-visible {
-  outline: 1px solid var(--border-strong);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 input:focus-visible,
@@ -128,11 +158,12 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: var(--space-4);
+  height: 48px;
   min-height: 48px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface-raised);
+  box-shadow: inset 0 -1px 0 var(--border);
   z-index: 20;
 }
 
@@ -141,7 +172,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 3px;
+  gap: var(--space-2);
 }
 
 .toolbar-actions {
@@ -152,7 +183,7 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  margin-left: 5px;
+  margin-left: var(--space-2);
   line-height: 1.2;
 }
 
@@ -178,34 +209,41 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
-.toolbar-btn {
-  min-height: 30px;
-  padding: 5px 8px;
+.button {
+  height: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 var(--space-5);
   background: transparent;
   color: var(--muted);
   border: 1px solid transparent;
   font-size: 13px;
 }
 
-.toolbar-btn:hover:not(:disabled) {
+.button--toolbar {
+  min-width: 48px;
+  padding-right: var(--space-4);
+  padding-left: var(--space-4);
+}
+
+.button:hover:not(:disabled) {
   background: var(--control-hover);
   border-color: transparent;
   color: var(--text);
 }
 
-.toolbar-btn.active {
+.button.active {
   background: var(--control-active);
   border-color: transparent;
   color: var(--text);
 }
 
-.toolbar-btn.primary {
+.button--primary {
   background: var(--text);
   border-color: var(--text);
   color: var(--surface-raised);
 }
 
-.toolbar-btn.primary:hover:not(:disabled) {
+.button--primary:hover:not(:disabled) {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
   color: var(--surface-raised);
@@ -217,7 +255,13 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
-.toolbar-btn.danger {
+.button--danger {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.button--danger:hover:not(:disabled) {
   background: var(--danger-bg);
   border-color: var(--danger);
   color: var(--danger);
@@ -225,18 +269,21 @@ textarea:focus-visible {
 
 .mode-toggle {
   display: inline-flex;
-  gap: 2px;
-  padding: 2px;
+  flex: 0 0 auto;
+  height: var(--control-height);
+  gap: var(--space-1);
+  padding: var(--space-1);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-group);
   background: var(--control-hover);
 }
 
 .mode-btn {
+  height: var(--control-height-compact);
   min-width: 52px;
-  min-height: 26px;
-  padding: 3px 9px;
-  border-radius: 6px;
+  min-height: var(--control-height-compact);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
   font-size: 12px;
@@ -249,21 +296,30 @@ textarea:focus-visible {
 .mode-btn.active {
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  box-shadow: var(--shadow-control);
 }
 
 .search-bar {
   display: grid;
   position: absolute;
-  top: 54px;
-  right: 12px;
+  top: calc(48px + var(--space-3));
+  right: var(--space-5);
   z-index: 30;
   width: min(360px, calc(100% - 24px));
   overflow: hidden;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-surface);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-float);
+  box-shadow: var(--shadow-popover);
+  transition:
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast),
+    outline-color var(--motion-fast);
+}
+
+.search-bar:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .search-query-row,
@@ -273,14 +329,16 @@ textarea:focus-visible {
 }
 
 .search-query-row {
-  min-height: 42px;
-  padding-left: 12px;
+  height: 44px;
+  min-height: 44px;
+  padding-left: var(--space-5);
 }
 
 .search-navigation-row {
-  min-height: 34px;
+  height: 36px;
+  min-height: 36px;
   justify-content: space-between;
-  padding: 2px 10px 2px 8px;
+  padding: var(--space-1) var(--space-5) var(--space-1) var(--space-4);
   border-top: 1px solid var(--border);
 }
 
@@ -297,8 +355,8 @@ textarea:focus-visible {
 .search-input {
   flex: 1;
   min-width: 0;
-  height: 40px;
-  padding: 0 10px;
+  height: 44px;
+  padding: 0 var(--space-5);
   border: 0;
   border-radius: 0;
   font: inherit;
@@ -314,15 +372,16 @@ textarea:focus-visible {
 .search-navigation-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-2);
 }
 
 .search-icon-btn {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
+  min-height: var(--control-height-compact);
+  flex: 0 0 var(--control-height-compact);
   padding: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
   font-family: "Segoe UI Symbol", sans-serif;
@@ -338,9 +397,10 @@ textarea:focus-visible {
   align-self: stretch;
   display: grid;
   place-items: center;
-  flex: 0 0 42px;
-  width: 42px;
-  height: auto;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   margin-left: 0;
   border-left: 1px solid var(--border);
   border-radius: 0;
@@ -356,6 +416,7 @@ textarea:focus-visible {
 
 .main-row {
   display: flex;
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -369,11 +430,14 @@ textarea:focus-visible {
   border-right: 1px solid var(--border);
   background: var(--code-bg);
   overflow: auto;
-  padding: 10px 8px;
+  padding: var(--space-5) var(--space-4);
+  transition:
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
 }
 
 .outline-heading {
-  padding: 6px 8px 11px;
+  padding: var(--space-3) var(--space-4) var(--space-5);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -382,24 +446,34 @@ textarea:focus-visible {
 }
 
 .outline-empty {
-  padding: 8px 12px;
+  padding: var(--space-4) var(--space-5);
   color: var(--faint);
   font-size: 13px;
 }
 
 .outline-item {
   position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
   text-align: left;
-  min-height: 30px;
-  padding-top: 6px;
-  padding-bottom: 6px;
+  height: var(--control-height);
+  min-height: var(--control-height);
+  padding-top: 0;
+  padding-bottom: 0;
   background: transparent;
   color: var(--text);
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   font-size: 13px;
   border: 0;
+}
+
+.outline-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .outline-item:hover {
@@ -414,11 +488,11 @@ textarea:focus-visible {
 
 .outline-item.current::before {
   position: absolute;
-  top: 7px;
-  bottom: 7px;
+  top: var(--space-4);
+  bottom: var(--space-4);
   left: 0;
   width: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-highlight);
   background: var(--muted);
   content: '';
 }
@@ -439,10 +513,10 @@ textarea:focus-visible {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: var(--space-5);
   min-height: 100%;
   width: 100%;
-  padding: 32px;
+  padding: var(--space-8);
   color: var(--text);
 }
 
@@ -462,32 +536,35 @@ textarea:focus-visible {
   height: 56px;
   place-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  box-shadow: 0 6px 20px rgb(64 54 44 / 6%);
+  box-shadow: var(--shadow-subtle);
 }
 
 .source-editor-shell {
   flex: 1 0 auto;
   min-width: 0;
   min-height: 100%;
-  padding: 0 clamp(18px, 5vw, 64px) 48px;
+  padding: 0;
   overflow: visible;
   background: var(--surface);
 }
 
 .source-editor {
   display: block;
-  width: min(840px, 100%);
+  width: min(var(--document-max-width), 100%);
   min-width: 0;
   min-height: 100%;
   height: auto;
   margin: 0 auto;
-  padding: 42px 28px 72px;
+  padding:
+    var(--document-padding-block-start)
+    var(--document-padding-inline)
+    var(--document-padding-block-end);
   border: 0;
   border-radius: 0;
   resize: none;
@@ -502,7 +579,8 @@ textarea:focus-visible {
 }
 
 .source-editor:focus-visible {
-  outline: 0;
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
   box-shadow: none;
 }
 
@@ -514,9 +592,12 @@ textarea:focus-visible {
 
 .markdown-body {
   width: 100%;
-  max-width: 780px;
+  max-width: var(--document-max-width);
   margin: 0 auto;
-  padding: 46px 30px 84px;
+  padding:
+    var(--document-padding-block-start)
+    var(--document-padding-inline)
+    var(--document-padding-block-end);
   font-family:
     "Source Han Serif SC VF",
     "Source Han Serif SC",
@@ -540,7 +621,9 @@ textarea:focus-visible {
 .markdown-body .quick-edit-active,
 .markdown-body .quick-edit-active:focus,
 .markdown-body .quick-edit-active:focus-visible {
-  outline: none;
+  outline: 1px solid var(--border);
+  outline-offset: var(--space-2);
+  border-radius: var(--radius-content);
   background: transparent;
   box-shadow: none;
   caret-color: var(--text);
@@ -611,14 +694,14 @@ textarea:focus-visible {
   font-size: 0.9em;
   background: var(--code-bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-content);
   padding: 0.1em 0.35em;
 }
 
 .markdown-body pre {
   background: var(--code-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-group);
   padding: 12px 14px;
   overflow: auto;
 }
@@ -708,7 +791,7 @@ textarea:focus-visible {
 .markdown-body img {
   max-width: 100%;
   height: auto;
-  border-radius: 4px;
+  border-radius: var(--radius-content);
 }
 
 .image-placeholder {
@@ -716,7 +799,7 @@ textarea:focus-visible {
   padding: 4px 8px;
   background: var(--danger-bg);
   color: var(--danger);
-  border-radius: 4px;
+  border-radius: var(--radius-content);
   font-size: 13px;
 }
 
@@ -724,7 +807,7 @@ mark.search-hit {
   background: var(--hit);
   color: inherit;
   padding: 0 1px;
-  border-radius: 2px;
+  border-radius: var(--radius-highlight);
 }
 
 mark.search-hit[data-active-search='true'] {
@@ -746,10 +829,10 @@ mark.search-hit[data-active-search='true'] {
 .modal {
   width: min(420px, 100%);
   background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 18px 18px 14px;
-  box-shadow: 0 16px 40px rgba(64, 54, 44, 0.16);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-surface);
+  padding: var(--space-7) var(--space-7) var(--space-6);
+  box-shadow: var(--shadow-modal);
 }
 
 .modal h2 {
@@ -768,21 +851,29 @@ mark.search-hit[data-active-search='true'] {
   font-size: 12px !important;
   color: var(--text) !important;
   background: var(--bg);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
 }
 
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 14px;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
 }
 
 @media (max-width: 720px) {
+  :root {
+    --document-padding-inline: 20px;
+    --document-padding-block-start: 34px;
+    --document-padding-block-end: 64px;
+  }
+
   .toolbar {
     grid-template-columns: auto auto minmax(0, 1fr);
-    gap: 5px;
+    gap: var(--space-2);
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
   }
 
   .mode-toggle {
@@ -797,44 +888,59 @@ mark.search-hit[data-active-search='true'] {
     min-width: 0;
   }
 
-  .toolbar-actions .toolbar-btn {
-    padding-right: 6px;
-    padding-left: 6px;
+  .toolbar-actions .button--toolbar {
+    padding-right: var(--space-3);
+    padding-left: var(--space-3);
   }
 
   .outline-panel {
     width: 160px;
   }
 
-  .markdown-body {
-    padding: 34px 20px 64px;
-  }
-
-  .source-editor {
-    padding: 34px 20px 64px;
-  }
 }
 
 @media (max-width: 520px) {
   .toolbar {
-    padding-right: 5px;
-    padding-left: 5px;
+    padding-right: var(--space-3);
+    padding-left: var(--space-3);
   }
 
   .mode-btn {
     min-width: 44px;
-    padding-right: 6px;
-    padding-left: 6px;
+    padding-right: var(--space-3);
+    padding-left: var(--space-3);
   }
 
-  .toolbar-actions .toolbar-btn {
-    min-width: 34px;
-    padding-right: 4px;
-    padding-left: 4px;
+  .toolbar-actions .button--toolbar {
+    padding-right: var(--space-2);
+    padding-left: var(--space-2);
+  }
+
+  .outline-panel {
+    position: absolute;
+    top: var(--space-4);
+    right: auto;
+    bottom: var(--space-4);
+    left: var(--space-4);
+    z-index: 15;
+    width: min(264px, calc(100% - 16px));
+    min-width: 0;
+    max-width: none;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-surface);
+    box-shadow: var(--shadow-popover);
   }
 
   .search-bar {
-    right: 8px;
+    right: var(--space-4);
     width: calc(100% - 16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .search-bar,
+  .outline-panel {
+    transition-duration: 0.01ms;
   }
 }
