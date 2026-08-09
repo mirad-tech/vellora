@@ -14,21 +14,21 @@ Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 
 
 | 平台 | 支持状态 | 获取方式 |
 |---|---|---|
-| Windows 10/11 x64 | 当前公开版本为 2.2.2 | 下载 NSIS 安装包 |
-| macOS 12+（Apple Silicon / Intel） | Universal 应用与 DMG 已通过双架构 CI；2.2.2 尚无正式 macOS 资产 | 按 macOS 说明构建 ad-hoc 测试包 |
+| Windows 10/11 x64 | 当前公开版本为 2.2.3 | 下载 NSIS 安装包 |
+| macOS 12+（Apple Silicon / Intel） | Universal 应用与 DMG 已通过双架构 CI；2.2.3 暂无正式 macOS 资产 | 按 macOS 说明构建 ad-hoc 测试包 |
 
 ### Windows 10/11 x64
 
-[**下载 Vellora 2.2.2 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.2/Vellora_2.2.2_x64-setup.exe)
+[**下载 Vellora 2.2.3 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.3/Vellora_2.2.3_x64-setup.exe)
 
 - 所有版本：[GitHub Releases](https://github.com/mirad-tech/vellora/releases)
-- 安装包：`Vellora_2.2.2_x64-setup.exe`
+- 安装包：`Vellora_2.2.3_x64-setup.exe`
 - 运行环境：Microsoft WebView2；多数 Windows 10/11 已预装，缺失时安装程序会引导下载
 - 从 Electron 1.x 升级：建议先卸载 1.x，再安装当前版本；卸载不会删除 Markdown 文档
 
 ### macOS 12+
 
-当前源码支持同时包含 `arm64` 与 `x86_64` 的 Universal 应用和 DMG。2.2.2 发布早于 macOS 支持，因此 Releases 中没有可公开分发的签名 DMG；可按 [macOS 构建与验证说明](mac/README.md) 在 Mac 或 GitHub Actions 中生成 ad-hoc 测试包。
+当前源码继续支持同时包含 `arm64` 与 `x86_64` 的 Universal 应用和 DMG。本次 2.2.3 Release 仅提供 Windows NSIS 安装包，暂不发布签名 DMG；可按 [macOS 构建与验证说明](mac/README.md) 在 Mac 或 GitHub Actions 中生成 ad-hoc 测试包。
 
 ## 主要功能
 
@@ -95,11 +95,11 @@ npm run dist         # Windows NSIS 安装包，并整理本地发布产物
 
 `npm run build` 的原始安装包输出到：
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.2.2_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.2.3_x64-setup.exe`
 
 `npm run dist` 还会把当前版本复制到：
 
-`artifacts/releases/current/Vellora_2.2.2_x64-setup.exe`
+`artifacts/releases/current/Vellora_2.2.3_x64-setup.exe`
 
 `artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，`manifest.json` 记录文件大小与 SHA-256；正式历史版本由 GitHub Releases 保留。
 可运行 `npm run release:prune-old` 删除遗留本地安装器，或运行
@@ -152,7 +152,7 @@ docs/                   仓库结构与发布产物文档
 
 ## 版本与发布
 
-当前版本：**2.2.2**。
+当前版本：**2.2.3**。
 
 - `main` 和 Pull Request 会在 Windows、Apple Silicon 与 Intel GitHub Actions 中运行版本检查、类型检查、前端/Rust 测试、浏览器 E2E 和构建
 - macOS CI 还会运行真实桌面 E2E、构建 Universal DMG，并在 Intel runner 上复核 Apple Silicon runner 生成的同一份产物
@@ -162,8 +162,8 @@ docs/                   仓库结构与发布产物文档
 - Release 工作流会构建 NSIS、创建 GitHub Release，并上传同版本安装包
 
 ```powershell
-git tag -a v2.2.2 -m "Vellora 2.2.2"
-git push origin v2.2.2
+git tag -a v2.2.3 -m "Vellora 2.2.3"
+git push origin v2.2.3
 ```
 
 ## 许可证与反馈

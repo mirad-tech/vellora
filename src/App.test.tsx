@@ -341,6 +341,13 @@ describe('App', () => {
       expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*2/);
       expect(editor.selectionStart).toBe(firstStart);
       expect(editor.selectionEnd).toBe(firstStart + queryLength);
+      const layer = screen.getByTestId('source-search-highlight-layer');
+      const hits = layer.querySelectorAll<HTMLElement>('.source-search-hit');
+      expect(layer.textContent).toBe(editor.value);
+      expect(hits).toHaveLength(2);
+      expect(hits[0].dataset.activeSearch).toBe('true');
+      expect(hits[1].dataset.activeSearch).toBeUndefined();
+      expect(editor.classList.contains('source-editor--searching')).toBe(true);
     });
 
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -350,6 +357,11 @@ describe('App', () => {
       expect(editor.selectionStart).toBe(secondStart);
       expect(editor.selectionEnd).toBe(secondStart + queryLength);
       expect(document.activeElement).toBe(input);
+      const hits = screen
+        .getByTestId('source-search-highlight-layer')
+        .querySelectorAll<HTMLElement>('.source-search-hit');
+      expect(hits[0].dataset.activeSearch).toBeUndefined();
+      expect(hits[1].dataset.activeSearch).toBe('true');
     });
 
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
@@ -375,6 +387,20 @@ describe('App', () => {
       expect(editor.selectionStart).toBe(firstStart);
       expect(editor.selectionEnd).toBe(firstStart + queryLength);
     });
+
+    fireEvent.change(input, { target: { value: '不存在的匹配' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('search-count').textContent).toMatch(/0\s*\/\s*0/);
+      expect(screen.queryByTestId('source-search-highlight-layer')).toBeNull();
+      expect(editor.classList.contains('source-editor--searching')).toBe(false);
+    });
+
+    fireEvent.change(input, { target: { value: query } });
+    await waitFor(() => expect(screen.getByTestId('source-search-highlight-layer')).toBeTruthy());
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('search-bar')).toBeNull();
+    expect(screen.queryByTestId('source-search-highlight-layer')).toBeNull();
+    expect(editor.classList.contains('source-editor--searching')).toBe(false);
   });
 
   test('single-match source navigation keeps the next edit cursor position', async () => {
@@ -421,6 +447,9 @@ describe('App', () => {
     await waitFor(() => {
       expect(editor.selectionStart).toBe(1);
       expect(editor.selectionEnd).toBe(1);
+      const layer = screen.getByTestId('source-search-highlight-layer');
+      expect(layer.textContent).toBe(editedValue);
+      expect(layer.querySelectorAll('.source-search-hit')).toHaveLength(1);
     });
   });
 
@@ -443,6 +472,11 @@ describe('App', () => {
       expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*2/);
       expect(editor.selectionStart).toBe(1);
       expect(editor.selectionEnd).toBe(2);
+      expect(
+        screen
+          .getByTestId('source-search-highlight-layer')
+          .querySelectorAll('.source-search-hit')
+      ).toHaveLength(2);
     });
 
     fireEvent.keyDown(input, { key: 'Enter' });

@@ -1,7 +1,7 @@
 # Vellora
 
 Локальный лёгкий просмотрщик и редактор Markdown для **Windows и macOS**.
-Текущая версия — **2.2.2**, на **Tauri 2 + React + TypeScript + Vite**.
+Текущая версия — **2.2.3**, на **Tauri 2 + React + TypeScript + Vite**.
 
 Репозиторий: [`mirad-tech/vellora`](https://github.com/mirad-tech/vellora). Продукт: **Vellora**.
 
@@ -11,21 +11,21 @@
 
 | Платформа | Статус поддержки | Как получить |
 |---|---|---|
-| Windows 10/11 x64 | Текущая публичная версия — 2.2.2 | Скачать установщик NSIS |
-| macOS 12+ (Apple Silicon / Intel) | Universal-приложение и DMG проверены в CI на обеих архитектурах; macOS-ресурса в 2.2.2 нет | Собрать тестовый ad-hoc пакет из исходников |
+| Windows 10/11 x64 | Текущая публичная версия — 2.2.3 | Скачать установщик NSIS |
+| macOS 12+ (Apple Silicon / Intel) | Universal-приложение и DMG проверены в CI на обеих архитектурах; macOS-ресурса в 2.2.3 нет | Собрать тестовый ad-hoc пакет из исходников |
 
 ### Windows 10/11 x64
 
-[**Установщик Vellora 2.2.2**](https://github.com/mirad-tech/vellora/releases/download/v2.2.2/Vellora_2.2.2_x64-setup.exe)
+[**Установщик Vellora 2.2.3**](https://github.com/mirad-tech/vellora/releases/download/v2.2.3/Vellora_2.2.3_x64-setup.exe)
 
-- Имя файла: `Vellora_2.2.2_x64-setup.exe`
+- Имя файла: `Vellora_2.2.3_x64-setup.exe`
 - Все версии: [Releases](https://github.com/mirad-tech/vellora/releases)
 - Нужен **WebView2** (обычно уже есть в системе; runtime не вшивается в установщик)
 - С 1.x (Electron): сначала удалите 1.x, затем установите последнюю версию
 
 ### macOS 12+
 
-Исходники создают Universal-приложение и DMG с `arm64` и `x86_64`. Версия 2.2.2 вышла до появления поддержки macOS, поэтому подписанного DMG для публичного распространения нет. Тестовая ad-hoc сборка описана в [инструкции по сборке и проверке macOS](mac/README.md).
+Исходники по-прежнему создают Universal-приложение и DMG с `arm64` и `x86_64`. Release 2.2.3 публикует только Windows NSIS и не содержит подписанного DMG. Тестовая ad-hoc сборка описана в [инструкции по сборке и проверке macOS](mac/README.md).
 
 ## Кратко
 

@@ -21,11 +21,14 @@
   --faint: #746c62;
   --border: #d6cec1;
   --border-strong: #bfb4a4;
-  --control-hover: #e7dfd4;
-  --control-active: #dcd2c4;
+  --control-hover: #ddd3c6;
+  --control-active: #d1c5b6;
+  --control-text: #605a52;
   --primary-hover: #3a3732;
   --danger: #bd503f;
+  --danger-text: #96382e;
   --danger-bg: #f2ded8;
+  --danger-hover: #e8cec6;
   --code-bg: #eee9e1;
   --hit: #e5ded4;
   --hit-active: #d3c9bc;
@@ -258,13 +261,13 @@ textarea:focus-visible {
 .button--danger {
   background: var(--danger-bg);
   border-color: var(--danger);
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .button--danger:hover:not(:disabled) {
-  background: var(--danger-bg);
+  background: var(--danger-hover);
   border-color: var(--danger);
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .mode-toggle {
@@ -285,11 +288,12 @@ textarea:focus-visible {
   padding: 0 var(--space-4);
   border-radius: var(--radius-control);
   background: transparent;
-  color: var(--muted);
+  color: var(--control-text);
   font-size: 12px;
 }
 
 .mode-btn:hover:not(:disabled) {
+  background: var(--control-hover);
   color: var(--text);
 }
 
@@ -297,6 +301,10 @@ textarea:focus-visible {
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-control);
+}
+
+.mode-btn.active:hover:not(:disabled) {
+  background: var(--control-active);
 }
 
 .search-bar {
@@ -307,7 +315,7 @@ textarea:focus-visible {
   z-index: 30;
   width: min(360px, calc(100% - 24px));
   overflow: hidden;
-  border: 1px solid var(--border-strong);
+  border: 0;
   border-radius: var(--radius-surface);
   background: var(--surface-raised);
   box-shadow: var(--shadow-popover);
@@ -318,8 +326,15 @@ textarea:focus-visible {
 }
 
 .search-bar:focus-within {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: 0;
+}
+
+.search-bar:has(.search-input:placeholder-shown) {
+  border-radius: var(--radius-pill);
+}
+
+.search-bar:has(.search-input:placeholder-shown) .search-navigation-row {
+  display: none;
 }
 
 .search-query-row,
@@ -389,11 +404,13 @@ textarea:focus-visible {
 }
 
 .search-icon-btn:hover:not(:disabled) {
-  background: var(--bg);
+  background: var(--control-hover);
   color: var(--text);
 }
 
 .search-close {
+  position: relative;
+  isolation: isolate;
   align-self: stretch;
   display: grid;
   place-items: center;
@@ -402,9 +419,41 @@ textarea:focus-visible {
   height: 44px;
   min-height: 44px;
   margin-left: 0;
-  border-left: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-control);
   font-size: 18px;
+}
+
+.search-close::before {
+  position: absolute;
+  z-index: -1;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
+  border-radius: var(--radius-control);
+  background: transparent;
+  content: '';
+  transition: background-color var(--motion-fast);
+}
+
+.search-bar:has(.search-input:placeholder-shown) .search-close::before {
+  border-radius: var(--radius-pill);
+}
+
+.search-close:hover:not(:disabled) {
+  background: transparent;
+}
+
+.search-close:hover:not(:disabled)::before {
+  background: var(--control-hover);
+}
+
+.search-close::after {
+  position: absolute;
+  top: 14px;
+  left: 0;
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  content: '';
 }
 
 .search-count {
@@ -546,6 +595,7 @@ textarea:focus-visible {
 }
 
 .source-editor-shell {
+  position: relative;
   flex: 1 0 auto;
   min-width: 0;
   min-height: 100%;
@@ -554,12 +604,12 @@ textarea:focus-visible {
   background: var(--surface);
 }
 
-.source-editor {
+.source-editor,
+.source-search-layer {
   display: block;
   width: min(var(--document-max-width), 100%);
   min-width: 0;
   min-height: 100%;
-  height: auto;
   margin: 0 auto;
   padding:
     var(--document-padding-block-start)
@@ -571,11 +621,47 @@ textarea:focus-visible {
   font-family: "SF Mono", ui-monospace, "Cascadia Code", "Consolas", monospace;
   font-size: 14.5px;
   line-height: 1.68;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  box-sizing: border-box;
+}
+
+.source-search-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.source-search-hit {
+  border-radius: var(--radius-highlight);
+  background: var(--hit);
+  color: inherit;
+}
+
+.source-search-hit[data-active-search='true'] {
+  background: var(--hit-active);
+}
+
+.source-editor {
+  position: relative;
+  z-index: 1;
+  height: auto;
   background: var(--surface);
   color: var(--text);
   overflow: hidden;
   field-sizing: content;
-  box-sizing: border-box;
+}
+
+.source-editor--searching {
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
 }
 
 .source-editor:focus-visible {
@@ -621,8 +707,8 @@ textarea:focus-visible {
 .markdown-body .quick-edit-active,
 .markdown-body .quick-edit-active:focus,
 .markdown-body .quick-edit-active:focus-visible {
-  outline: 1px solid var(--border);
-  outline-offset: var(--space-2);
+  outline: 0;
+  outline-offset: 0;
   border-radius: var(--radius-content);
   background: transparent;
   box-shadow: none;

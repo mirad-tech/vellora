@@ -454,6 +454,40 @@ export default function App() {
       ),
     [draftContent, editorMode, searchOpen, searchQuery, searchActiveIndex]
   );
+  const sourceSearchHighlights = useMemo(() => {
+    if (sourceSearchResult.count === 0) return null;
+
+    const content: React.ReactNode[] = [];
+    let cursor = 0;
+    sourceSearchResult.matches.forEach((match, index) => {
+      if (match.start > cursor) {
+        content.push(
+          <span key={`source-text-${cursor}-${match.start}`}>
+            {draftContent.slice(cursor, match.start)}
+          </span>
+        );
+      }
+      content.push(
+        <mark
+          key={`source-hit-${match.start}-${match.end}`}
+          className="source-search-hit"
+          data-source-search-hit={index}
+          data-active-search={index === sourceSearchResult.activeIndex ? 'true' : undefined}
+        >
+          {draftContent.slice(match.start, match.end)}
+        </mark>
+      );
+      cursor = match.end;
+    });
+    if (cursor < draftContent.length) {
+      content.push(
+        <span key={`source-text-${cursor}-${draftContent.length}`}>
+          {draftContent.slice(cursor)}
+        </span>
+      );
+    }
+    return content;
+  }, [draftContent, sourceSearchResult]);
   const readerHtml = useMemo(() => ({ __html: searchResult.html }), [searchResult.html]);
   const activeSearchCount = editorMode === 'edit' ? sourceSearchResult.count : searchResult.count;
   const activeSearchIndex = editorMode === 'edit' ? sourceSearchResult.activeIndex : searchResult.activeIndex;
@@ -1251,8 +1285,21 @@ export default function App() {
 
           {viewState.status === 'ready' && editorMode === 'edit' ? (
             <div className="source-editor-shell">
+              {sourceSearchHighlights ? (
+                <div
+                  className="source-search-layer"
+                  data-testid="source-search-highlight-layer"
+                  aria-hidden="true"
+                >
+                  {sourceSearchHighlights}
+                </div>
+              ) : null}
               <textarea
-                className="source-editor"
+                className={
+                  sourceSearchHighlights
+                    ? 'source-editor source-editor--searching'
+                    : 'source-editor'
+                }
                 data-testid="source-editor"
                 ref={sourceEditorRef}
                 value={draftContent}
