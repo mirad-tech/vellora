@@ -1,7 +1,7 @@
 # Vellora
 
 **Windows / macOS 対応**のローカル優先・軽量 Markdown ビューア / ソースエディタです。
-現在のバージョンは **2.2.4**。**Tauri 2 + React + TypeScript + Vite** で構築されています。
+現在のバージョンは **2.2.5**。**Tauri 2 + React + TypeScript + Vite** で構築されています。
 
 リポジトリ：[`mirad-tech/vellora`](https://github.com/mirad-tech/vellora)。製品名は **Vellora** です。
 
@@ -11,21 +11,21 @@
 
 | プラットフォーム | 対応状況 | 入手方法 |
 |---|---|---|
-| Windows 10/11 x64 | 現在の公開版は 2.2.4 | NSIS インストーラをダウンロード |
-| macOS 12+（Apple Silicon / Intel） | Universal アプリ / DMG を両アーキテクチャの CI で検証済み。2.2.4 の macOS アセットは未公開 | ソースから ad-hoc テスト版をビルド |
+| Windows 10/11 x64 | 現在の公開版は 2.2.5 | NSIS インストーラをダウンロード |
+| macOS 12+（Apple Silicon / Intel） | Universal アプリ / DMG を両アーキテクチャの CI で検証済み。2.2.5 の macOS アセットは未公開 | ソースから ad-hoc テスト版をビルド |
 
 ### Windows 10/11 x64
 
-[**Vellora 2.2.4 インストーラ**](https://github.com/mirad-tech/vellora/releases/download/v2.2.4/Vellora_2.2.4_x64-setup.exe)
+[**Vellora 2.2.5 インストーラ**](https://github.com/mirad-tech/vellora/releases/download/v2.2.5/Vellora_2.2.5_x64-setup.exe)
 
-- ファイル名：`Vellora_2.2.4_x64-setup.exe`
+- ファイル名：`Vellora_2.2.5_x64-setup.exe`
 - 全リリース：[Releases](https://github.com/mirad-tech/vellora/releases)
 - **WebView2** が必要（通常は OS に同梱。インストールパッケージには埋め込みません）
 - 1.x（Electron）から：先に 1.x をアンインストールしてから最新版を入れてください
 
 ### macOS 12+
 
-ソースは引き続き `arm64` / `x86_64` を含む Universal アプリと DMG に対応しています。2.2.4 Release は Windows NSIS のみを公開し、署名済み DMG は公開しません。ad-hoc テスト版は [macOS ビルド・検証手順](mac/README.md) を参照してください。
+ソースは引き続き `arm64` / `x86_64` を含む Universal アプリと DMG に対応しています。2.2.5 Release は Windows NSIS のみを公開し、署名済み DMG は公開しません。ad-hoc テスト版は [macOS ビルド・検証手順](mac/README.md) を参照してください。
 
 ## 概要
 

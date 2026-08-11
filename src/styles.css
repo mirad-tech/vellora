@@ -37,9 +37,8 @@
   --focus-ring: #6e6860;
   --radius-highlight: 3px;
   --radius-content: 6px;
-  --radius-control: 8px;
-  --radius-group: 10px;
-  --radius-surface: 12px;
+  --radius-control: 10px;
+  --radius-group: 12px;
   --radius-floating: 20px;
   --radius-pill: 999px;
   --search-width: 340px;
@@ -308,7 +307,7 @@ textarea:focus-visible {
 }
 
 .mode-btn.active:hover:not(:disabled) {
-  background: var(--control-active);
+  background: var(--surface-raised);
 }
 
 .search-bar {
@@ -419,7 +418,7 @@ textarea:focus-visible {
   min-height: var(--control-height-compact);
   flex: 0 0 var(--control-height-compact);
   padding: 0;
-  border-radius: var(--radius-surface);
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
   font-family: "Segoe UI Symbol", sans-serif;
@@ -469,7 +468,7 @@ textarea:focus-visible {
   z-index: -1;
   width: var(--control-height-compact);
   height: var(--control-height-compact);
-  border-radius: var(--radius-surface);
+  border-radius: var(--radius-control);
   background: transparent;
   content: '';
   transition: background-color var(--motion-fast);
@@ -567,7 +566,7 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.outline-item:hover {
+.outline-item:hover:where(:not(:disabled)) {
   background: var(--control-hover);
 }
 
@@ -626,7 +625,7 @@ textarea:focus-visible {
   width: 56px;
   height: 56px;
   flex: 0 0 56px;
-  border-radius: var(--radius-surface);
+  border-radius: var(--radius-group);
   object-fit: contain;
   user-select: none;
 }
@@ -831,6 +830,7 @@ textarea:focus-visible {
 
 .markdown-body pre code {
   border: 0;
+  border-radius: 0;
   background: transparent;
   padding: 0;
   font-size: 13px;
