@@ -2,8 +2,7 @@ node_modules/
 out/
 dist/
 /release/
-artifacts/releases/
-artifacts/webdriver/
+artifacts/
 src-tauri/target/
 test-results/
 playwright-report/
@@ -34,6 +33,7 @@ Agents.md
 .claude/
 .agents/
 .codex/
+.gitnexus/
 .cursor/
 .cursorrules
 .clinerules

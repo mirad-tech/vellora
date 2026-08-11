@@ -11,7 +11,7 @@
 
 ### 发布
 
-- 标签发布拆分为 Windows/macOS 构建和单一发布任务；macOS 缺少 Developer ID 或公证凭据时拒绝公开发布。
+- 标签发布自动构建并发布 Windows NSIS；macOS 继续进行双架构 CI 与 ad-hoc Universal DMG 验证，不作为正式 Release 资产。
 
 ## 2.2.5 - 2026-08-12
 

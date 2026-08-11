@@ -1455,19 +1455,32 @@ async function run() {
     assertApprox(externalVisual.elements['.modal'].borderRadius, 20, 'external modal uses floating surface radius');
     assertIntegerGeometry(externalVisual.elements['.modal'], 'external modal');
     assertIntegerGeometry(externalVisual.elements['.modal-actions'], 'external modal actions');
-    assertIntegerGeometry(
-      externalVisual.elements['[data-testid="external-cancel"]'],
-      'external cancel button'
+    const externalActions = externalVisual.elements['.modal-actions'];
+    const externalCancel = externalVisual.elements['[data-testid="external-cancel"]'];
+    const externalConfirm = externalVisual.elements['[data-testid="external-confirm"]'];
+    for (const [button, label] of [
+      [externalCancel, 'external cancel button'],
+      [externalConfirm, 'external confirm button']
+    ]) {
+      for (const key of ['x', 'y', 'width', 'height', 'right', 'bottom']) {
+        assert(Number.isFinite(button[key]), `${label} ${key} is finite`);
+      }
+      assert(button.width > 0, `${label} has positive width`);
+      assert(button.height > 0, `${label} has positive height`);
+    }
+    assert(externalCancel.right < externalConfirm.x, 'external buttons keep cancel before confirm');
+    assertApprox(externalCancel.y, externalConfirm.y, 'external buttons share their top edge');
+    assertApprox(externalCancel.bottom, externalConfirm.bottom, 'external buttons share their bottom edge');
+    assert(
+      externalCancel.x >= externalActions.x && externalConfirm.right <= externalActions.right,
+      'external buttons stay inside the action row'
     );
-    assertIntegerGeometry(
-      externalVisual.elements['[data-testid="external-confirm"]'],
-      'external confirm button'
-    );
+    assertApprox(externalConfirm.right, externalActions.right, 'external confirm aligns to the action row end');
     assertApprox(externalVisual.elements['.modal-url'].borderRadius, 10, 'modal URL surface radius');
-    assertApprox(externalVisual.elements['[data-testid="external-cancel"]'].height, 32, 'external cancel height');
-    assertApprox(externalVisual.elements['[data-testid="external-cancel"]'].borderRadius, 10, 'external cancel radius');
-    assertApprox(externalVisual.elements['[data-testid="external-confirm"]'].height, 32, 'external primary height');
-    assertApprox(externalVisual.elements['[data-testid="external-confirm"]'].borderRadius, 10, 'external primary radius');
+    assertApprox(externalCancel.height, 32, 'external cancel height');
+    assertApprox(externalCancel.borderRadius, 10, 'external cancel radius');
+    assertApprox(externalConfirm.height, 32, 'external primary height');
+    assertApprox(externalConfirm.borderRadius, 10, 'external primary radius');
     await assertHoverVisual(page, '[data-testid="external-cancel"]', 'external modal secondary button');
     await assertHoverVisual(
       page,
@@ -1476,6 +1489,8 @@ async function run() {
       '--primary-hover'
     );
     await capture('08-external-modal-primary-hover-1280x800.png');
+    await assertPressedGeometry(page, '[data-testid="external-cancel"]', 'external modal secondary button');
+    await assertPressedGeometry(page, '[data-testid="external-confirm"]', 'external modal primary button');
     await page.click('[data-testid="external-cancel"]');
     await page.waitForSelector('[data-testid="external-link-modal"]', { hidden: true, timeout: 5000 });
 

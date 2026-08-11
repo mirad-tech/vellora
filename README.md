@@ -15,7 +15,7 @@ Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 
 | 平台 | 支持状态 | 获取方式 |
 |---|---|---|
 | Windows 10/11 x64 | 当前公开版本为 2.2.5 | 下载 NSIS 安装包 |
-| macOS 12+（Apple Silicon / Intel） | Universal 应用与 DMG 已通过双架构 CI；2.2.5 暂无正式 macOS 资产 | 按 macOS 说明构建 ad-hoc 测试包 |
+| macOS 12+（Apple Silicon / Intel） | 源码与 Universal DMG 构建已通过双架构 CI；不提供正式 macOS Release 资产 | 按 macOS 说明构建 ad-hoc 测试包 |
 
 ### Windows 10/11 x64
 
@@ -28,7 +28,7 @@ Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 
 
 ### macOS 12+
 
-当前源码继续支持同时包含 `arm64` 与 `x86_64` 的 Universal 应用和 DMG。本次 2.2.5 Release 仅提供 Windows NSIS 安装包，暂不发布签名 DMG；可按 [macOS 构建与验证说明](mac/README.md) 在 Mac 或 GitHub Actions 中生成 ad-hoc 测试包。
+当前源码继续支持同时包含 `arm64` 与 `x86_64` 的 Universal 应用和 DMG。正式 GitHub Release 仅提供 Windows NSIS 安装包；macOS DMG 用于本机和 CI 的 ad-hoc 验证，不作为正式发布资产。可按 [macOS 构建与验证说明](mac/README.md) 生成测试包。
 
 ## 主要功能
 
@@ -130,7 +130,7 @@ npm run test:e2e:mac
 npm run dist:mac
 ```
 
-具体的 ad-hoc/正式签名模式、产物位置和实机验收要求见 [mac/README.md](mac/README.md)。
+具体的 ad-hoc 模式、未来公开 DMG 的签名要求、产物位置和实机验收边界见 [mac/README.md](mac/README.md)。
 
 ## 项目结构
 
@@ -155,15 +155,17 @@ docs/                   仓库结构与发布产物文档
 当前版本：**2.2.5**。
 
 - `main` 和 Pull Request 会在 Windows、Apple Silicon 与 Intel GitHub Actions 中运行版本检查、类型检查、前端/Rust 测试、浏览器 E2E 和构建
-- macOS CI 还会运行真实桌面 E2E、构建 Universal DMG，并在 Intel runner 上复核 Apple Silicon runner 生成的同一份产物
+- macOS CI 还会运行真实桌面 E2E、构建 ad-hoc Universal DMG，并在 Intel runner 上复核 Apple Silicon runner 生成的同一份验证产物
 - 版本号同步维护于 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`
 - `npm run version:check` 会阻止这些版本号不一致的提交或发布
 - 更新 [CHANGELOG.md](CHANGELOG.md) 后推送 `vX.Y.Z` 标签
-- Release 工作流会构建 NSIS、创建 GitHub Release，并上传同版本安装包
+- Release 工作流会构建并验证 Windows NSIS、创建 GitHub Release，并上传同版本 Windows 安装包；macOS 源码、构建和 CI 支持不包含正式签名 DMG 资产
+
+将 `X.Y.Z` 替换为已经同步并通过版本检查的版本号：
 
 ```powershell
-git tag -a v2.2.5 -m "Vellora 2.2.5"
-git push origin v2.2.5
+git tag -a vX.Y.Z -m "Vellora X.Y.Z"
+git push origin vX.Y.Z
 ```
 
 ## 许可证与反馈

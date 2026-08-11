@@ -10,7 +10,7 @@ Vellora 目前只维护最新 GitHub Release。发现问题后，请先确认所
 
 使用仓库的 [私密漏洞报告](https://github.com/mirad-tech/vellora/security/advisories/new) 提交以下信息：
 
-- 受影响版本与 Windows 版本
+- 受影响的 Vellora 版本、操作系统、系统版本与架构
 - 最小复现步骤或概念验证
 - 实际影响与可利用条件
 - 已知缓解方式

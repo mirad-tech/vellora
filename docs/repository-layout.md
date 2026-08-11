@@ -1,7 +1,7 @@
 # 仓库目录说明
 
-Vellora 的目录按运行代码、测试、维护工具、静态资源和本地产物分开。根目录只保留
-项目清单、通用配置、许可证、变更记录和多语言 README。
+Vellora 的目录按运行代码、测试、维护工具、静态资源和本地产物分开。根目录保留
+项目清单、构建与通用配置、前端入口、许可证、社区文档、变更记录和多语言 README。
 
 | 目录 | 职责 | 是否提交 |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ Vellora 的目录按运行代码、测试、维护工具、静态资源和本地
 | `src-tauri/` | Rust/Tauri 后端、权限、图标和打包配置 | 是 |
 | `tests/` | E2E、测试夹具和相关配置 | 是 |
 | `tools/` | 图标、版本、发布产物和 WebDriver 维护脚本 | 是 |
-| `artifacts/` | 当前安装包、WebDriver 等本地生成产物 | 否 |
+| `artifacts/` | 当前安装包、macOS 验证包、WebDriver、E2E 截图等本地生成产物 | 否 |
 | `dist/`、`src-tauri/target/`、`src-tauri/gen/schemas/` | 可重建的前端、Rust/Tauri 输出和能力 Schema | 否 |
 | `node_modules/` | npm 安装依赖 | 否 |
 

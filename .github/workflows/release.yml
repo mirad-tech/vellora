@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,92 +29,22 @@ jobs:
       - run: npm run test:rust
       - run: npm run test:e2e:ci
       - run: npm run dist
-      - name: Upload Windows installer
+      - run: npm run release:check
+      - name: Upload verified Windows release inputs
         uses: actions/upload-artifact@v4
         with:
           name: vellora-windows-installer
-          path: src-tauri/target/release/bundle/nsis/Vellora_*_x64-setup.exe
+          path: |
+            artifacts/releases/current/Vellora_*_x64-setup.exe
+            artifacts/releases/manifest.json
           if-no-files-found: error
-
-  macos:
-    runs-on: macos-15
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - run: npm ci
-      - run: npm run version:check
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run test:rust
-      - run: npm run test:e2e:ci
-      - run: npm run test:e2e:mac
-      - name: Require Apple signing and notarization secrets
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-        run: |
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
-            if [ -z "${!name}" ]; then
-              echo "Required release secret is missing: $name" >&2
-              exit 1
-            fi
-          done
-      - name: Import Developer ID certificate and notarization key
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-        run: |
-          KEYCHAIN_PATH="$RUNNER_TEMP/vellora-build.keychain-db"
-          CERTIFICATE_PATH="$RUNNER_TEMP/vellora-certificate.p12"
-          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
-          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$CERTIFICATE_PATH"
-          printf '%s' "$APPLE_API_KEY_P8" > "$API_KEY_PATH"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
-          CERT_ID=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n 1)
-          if [ -z "$CERT_ID" ]; then
-            echo "Developer ID Application identity was not found." >&2
-            exit 1
-          fi
-          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
-          echo "APPLE_API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"
-      - name: Build, sign, notarize and verify Universal DMG
-        env:
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          VELLORA_REQUIRE_NOTARIZATION: '1'
-        run: npm run dist:mac
-      - name: Upload macOS installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: vellora-macos-installer
-          path: artifacts/releases/macos
-          if-no-files-found: error
-      - name: Remove temporary signing keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/vellora-build.keychain-db" || true
 
   publish:
-    needs: [windows, macos]
+    needs: windows
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -124,22 +54,64 @@ jobs:
         with:
           name: vellora-windows-installer
           path: release-assets
-      - uses: actions/download-artifact@v5
-        with:
-          name: vellora-macos-installer
-          path: release-assets/macos
-      - name: Create one GitHub release with both platforms
+      - name: Verify and publish Windows-only GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
           VERSION=$(node -p "require('./package.json').version")
           if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
             echo "Tag $GITHUB_REF_NAME does not match package version $VERSION." >&2
             exit 1
           fi
-          mapfile -t ASSETS < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name 'SHA256SUMS.txt' \) -print | sort)
-          if [ "${#ASSETS[@]}" -ne 3 ]; then
-            echo "Expected Windows installer, macOS DMG and SHA256SUMS.txt; found ${#ASSETS[@]}." >&2
+
+          EXPECTED_NAME="Vellora_${VERSION}_x64-setup.exe"
+          mapfile -t INPUTS < <(find release-assets -type f -print | sort)
+          mapfile -t INSTALLERS < <(find release-assets -type f -name "$EXPECTED_NAME" -print)
+          mapfile -t MANIFESTS < <(find release-assets -type f -name 'manifest.json' -print)
+          if [ "${#INPUTS[@]}" -ne 2 ] || [ "${#INSTALLERS[@]}" -ne 1 ] || [ "${#MANIFESTS[@]}" -ne 1 ]; then
+            echo "Expected exactly $EXPECTED_NAME and manifest.json; found ${#INPUTS[@]} file(s)." >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" --verify-tag --generate-notes --title "Vellora $VERSION"
+
+          INSTALLER=${INSTALLERS[0]}
+          MANIFEST=${MANIFESTS[0]}
+          mapfile -t MANIFEST_FIELDS < <(
+            node -e "const fs=require('node:fs');const m=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));for(const value of [m.projectVersion,m.current?.path,m.current?.bytes,m.current?.sha256])console.log(value??'');" "$MANIFEST"
+          )
+          if [ "${#MANIFEST_FIELDS[@]}" -ne 4 ]; then
+            echo "Release manifest is incomplete." >&2
+            exit 1
+          fi
+
+          MANIFEST_VERSION=${MANIFEST_FIELDS[0]}
+          MANIFEST_PATH=${MANIFEST_FIELDS[1]}
+          EXPECTED_BYTES=${MANIFEST_FIELDS[2]}
+          EXPECTED_SHA=${MANIFEST_FIELDS[3]}
+          if [ "$MANIFEST_VERSION" != "$VERSION" ] || [ "$MANIFEST_PATH" != "current/$EXPECTED_NAME" ]; then
+            echo "Release manifest does not match tag $GITHUB_REF_NAME or installer $EXPECTED_NAME." >&2
+            exit 1
+          fi
+          if ! [[ "$EXPECTED_BYTES" =~ ^[1-9][0-9]*$ && "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Release manifest has an invalid size or SHA-256." >&2
+            exit 1
+          fi
+
+          ACTUAL_BYTES=$(stat -c '%s' "$INSTALLER")
+          ACTUAL_SHA=$(sha256sum "$INSTALLER" | awk '{print $1}')
+          if [ "$ACTUAL_BYTES" != "$EXPECTED_BYTES" ] || [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "Downloaded installer does not match the verified Windows manifest." >&2
+            exit 1
+          fi
+
+          CHECKSUM_PATH="$(dirname "$INSTALLER")/SHA256SUMS.txt"
+          printf '%s  %s\n' "$ACTUAL_SHA" "$EXPECTED_NAME" > "$CHECKSUM_PATH"
+          (cd "$(dirname "$INSTALLER")" && sha256sum --check SHA256SUMS.txt)
+
+          gh release create "$GITHUB_REF_NAME" "$INSTALLER" "$CHECKSUM_PATH" \
+            --verify-tag \
+            --fail-on-no-commits \
+            --generate-notes \
+            --notes '本版本仅发布 Windows NSIS 安装包；macOS 继续由 CI 验证，不作为此 Release 的资产。' \
+            --title "Vellora $VERSION"

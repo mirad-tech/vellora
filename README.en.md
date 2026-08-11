@@ -15,7 +15,7 @@ Built with **Tauri 2 + React + TypeScript + Vite**. Documents stay on the local 
 | Platform | Support status | How to get it |
 |---|---|---|
 | Windows 10/11 x64 | Current public release: 2.2.5 | Download the NSIS installer |
-| macOS 12+ (Apple Silicon / Intel) | Universal app and DMG verified by native CI on both architectures; no macOS asset in 2.2.5 | Build an ad-hoc test package from source |
+| macOS 12+ (Apple Silicon / Intel) | Source and Universal DMG builds verified by native CI on both architectures; no official macOS Release asset | Build an ad-hoc test package from source |
 
 ### Windows 10/11 x64
 
@@ -28,7 +28,7 @@ Built with **Tauri 2 + React + TypeScript + Vite**. Documents stay on the local 
 
 ### macOS 12+
 
-The source tree continues to build a Universal app and DMG containing both `arm64` and `x86_64`. The 2.2.5 Release is Windows-only and does not publish a signed DMG; see the [macOS build and verification guide](mac/README.md) for an ad-hoc test build.
+The source tree continues to build a Universal app and DMG containing both `arm64` and `x86_64`. Official GitHub Releases publish the Windows NSIS installer only; macOS DMGs are ad-hoc artifacts for local and CI verification, not official release assets. See the [macOS build and verification guide](mac/README.md) for a test build.
 
 ## Features
 
@@ -89,7 +89,7 @@ On macOS, install Xcode Command Line Tools and both Apple Rust targets, then use
 
 ## Repository and releases
 
-Version: **2.2.5**. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies a Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds Windows and macOS assets; the macOS release job fails closed unless Developer ID signing and notarization secrets are configured.
+Version: **2.2.5**. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies an ad-hoc Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds and publishes the Windows NSIS installer; macOS remains supported for source builds and CI verification without an official signed DMG asset.
 
 - [Changelog](CHANGELOG.md)
 - [Issues](https://github.com/mirad-tech/vellora/issues)

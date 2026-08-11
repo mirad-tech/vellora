@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Vellora 专注于 Windows 本地 Markdown 阅读与轻量编辑。请先说明真实使用场景。
+        Vellora 专注于 Windows 与 macOS 的本地优先 Markdown 阅读与轻量编辑；macOS 当前仅提供源码、构建与 CI 支持。请先说明真实使用场景。
 
   - type: textarea
     id: problem

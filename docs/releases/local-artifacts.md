@@ -1,7 +1,8 @@
 # 本地发布产物管理
 
-本项目使用 Tauri 2 生成 Windows NSIS 和 macOS Universal DMG。GitHub Releases 是对外发布源，
-本地 `artifacts/releases/` 只保留当前构建产物；历史正式版本由 GitHub Releases 保留。
+本项目使用 Tauri 2 生成 Windows NSIS 和 macOS Universal DMG。正式 GitHub Release 仅发布
+Windows NSIS；macOS DMG 是本机或 CI 的 ad-hoc 验证产物。本地 `artifacts/releases/` 只保留
+当前构建产物，历史正式 Windows 版本由 GitHub Releases 保留。
 
 ## 目录职责
 
@@ -37,5 +38,6 @@ npm run release:check:mac  # 校验 DMG、双架构、签名、Info.plist 与 SH
 `release:organize` 会以最新构建覆盖同版本本地副本，并删除本地旧版。对外发布与
 历史追溯仍以 GitHub Releases 为准。
 
-macOS 测试构建默认使用 ad-hoc 签名，只用于本机或 CI。正式标签发布必须完成 Developer ID
-签名、公证和 stapling；工作流不会把缺少凭据的 DMG 公开发布。
+macOS 测试构建默认使用 ad-hoc 签名，只用于本机或 CI；当前标签 Release 不包含 macOS DMG。
+若未来恢复公开 DMG，必须完成 Developer ID 签名、公证和 stapling，并在缺少任一凭据时停止
+macOS 资产发布。

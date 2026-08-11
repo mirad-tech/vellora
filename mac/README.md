@@ -6,7 +6,7 @@
 
 - macOS 12 Monterey 及以上
 - Universal 应用：Apple Silicon (`arm64`) 与 Intel (`x86_64`)
-- 站外分发 `.dmg`，不启用 Mac App Store 沙盒或额外 entitlement
+- 本机与 CI 可生成 Universal `.dmg` 验证包，不启用 Mac App Store 沙盒或额外 entitlement
 - Finder 双击/“打开方式”、拖放、单实例、保存和未保存保护
 - 原生窗口语义：红色关闭按钮隐藏窗口，Dock 点击重新显示，`⌘Q` 退出
 
@@ -49,13 +49,13 @@ artifacts/releases/macos/<version>/SHA256SUMS.txt
 - 两种架构都构建并检查 Universal 应用和 DMG
 - Apple Silicon runner 上传的同一份 DMG 会再由 Intel runner 下载并执行 `release:check:mac`
 
-这些结果证明当前源码能在两种 Mac 架构上构建并运行核心自动化流程，但 runner 使用 macOS 15，不能替代 macOS 12 的启动 smoke 或 Finder、Dock、原生窗口交互等实机验收。
+这些 DMG 是 ad-hoc CI 验证产物，不作为正式 GitHub Release 资产。结果证明当前源码能在两种 Mac 架构上构建并运行核心自动化流程，但 runner 使用 macOS 15，不能替代 macOS 12 的启动 smoke 或 Finder、Dock、原生窗口交互等实机验收。
 
 ## 签名模式
 
 没有 Apple 凭据时使用 `signingIdentity: "-"` 生成 ad-hoc 测试包。此类包适合本机/CI 验证，但 Gatekeeper 仍会显示未验证提示，不得作为正式公开版本。
 
-正式标签发布要求以下 GitHub Actions secrets 全部存在：
+当前标签 Release 仅发布 Windows NSIS，不使用 macOS 签名与公证凭据。若未来恢复公开签名 DMG，需要配置以下 GitHub Actions secrets：
 
 - `APPLE_CERTIFICATE`
 - `APPLE_CERTIFICATE_PASSWORD`
@@ -64,7 +64,7 @@ artifacts/releases/macos/<version>/SHA256SUMS.txt
 - `APPLE_API_KEY`
 - `APPLE_API_KEY_P8`
 
-发布工作流导入 Developer ID Application 证书，并通过 App Store Connect API key 完成公证和 stapling；任一凭据缺失都会停止发布。
+未来的正式 macOS 发布流程还必须导入 Developer ID Application 证书，并通过 App Store Connect API key 完成公证和 stapling；任一凭据缺失都应停止 macOS 资产发布。
 
 参考：[Tauri macOS 签名](https://v2.tauri.app/distribute/sign/macos/)、[Tauri DMG](https://v2.tauri.app/distribute/dmg/)、[Tauri WebDriver](https://v2.tauri.app/develop/tests/webdriver/)。
 

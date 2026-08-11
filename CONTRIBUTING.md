@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你改进 Vellora。本项目专注于 Windows 本地 Markdown 阅读与轻量编辑；提交应保持这一范围，并优先保证文件安全、权限最小化和可恢复性。
+感谢你改进 Vellora。本项目面向 Windows 与 macOS 的本地优先 Markdown 阅读与轻量编辑；Windows 提供正式 Release，macOS 保持源码、构建与 CI 支持。提交应保持这一范围，并优先保证文件安全、权限最小化和可恢复性。
 
 ## 开始之前
 
@@ -12,9 +12,10 @@
 
 ## 本地环境
 
-需要 Windows 10/11、Node.js 20.19+ 或 22.12+、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Microsoft WebView2 Runtime。
+- Windows：Windows 10/11、Node.js 20.19+ 或 22.12+、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Microsoft WebView2 Runtime
+- macOS：macOS 12+、Node.js 22、Rust stable、Xcode Command Line Tools，以及 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target
 
-```powershell
+```
 npm install
 npm run dev
 ```
@@ -23,6 +24,7 @@ npm run dev
 
 - `src/`：React、Markdown 渲染与前端交互
 - `src-tauri/`：Rust/Tauri 文件操作、链接处理和桌面生命周期
+- `mac/`：macOS 配置、Universal 构建、验证脚本与桌面 E2E
 - `tests/`：单元测试、浏览器 E2E 与 Markdown 样本
 - `.github/workflows/`：持续集成与标签发布
 
@@ -48,13 +50,15 @@ npm run test:e2e
 npm run build:web
 ```
 
-桌面 E2E 依赖 `tauri-driver` 和本机 Edge 对应版本的 `msedgedriver`，不作为普通 PR 的必需本地检查：
+Windows 桌面 E2E 依赖 `tauri-driver` 和本机 Edge 对应版本的 `msedgedriver`，不作为普通 PR 的必需本地检查：
 
 ```powershell
 cargo install tauri-driver --locked
 npm run tools:msedgedriver
 npm run test:e2e:desktop
 ```
+
+macOS 桌面 E2E 使用仅测试构建启用的内嵌驱动；运行 `npm run test:e2e:mac`，环境和验收边界见 [macOS 构建与验证说明](mac/README.md)。
 
 ## Pull Request
 
@@ -74,4 +78,4 @@ npm run test:e2e:desktop
 - `src-tauri/Cargo.lock`
 - `src-tauri/tauri.conf.json`
 
-更新版本与 `CHANGELOG.md` 后，`npm run version:check` 必须通过。推送 `vX.Y.Z` 标签会触发 GitHub Release；贡献者不要在普通 PR 中创建或推送标签。
+更新版本与 `CHANGELOG.md` 后，`npm run version:check` 必须通过。推送 `vX.Y.Z` 标签会启动 Windows 正式 Release，构建并发布同版本 NSIS 安装包；macOS 仅保留源码、CI 与 ad-hoc 构建验证，不作为正式 Release 资产。贡献者不要在普通 PR 中创建或推送标签。

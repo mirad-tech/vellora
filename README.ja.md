@@ -5,14 +5,14 @@
 
 リポジトリ：[`mirad-tech/vellora`](https://github.com/mirad-tech/vellora)。製品名は **Vellora** です。
 
-詳細は [中文 README](README.md) または [English README](README.en.md) を参照してください。
+[中文](README.md) · [English](README.en.md) · 日本語 · [Русский](README.ru.md)
 
 ## ダウンロード
 
 | プラットフォーム | 対応状況 | 入手方法 |
 |---|---|---|
 | Windows 10/11 x64 | 現在の公開版は 2.2.5 | NSIS インストーラをダウンロード |
-| macOS 12+（Apple Silicon / Intel） | Universal アプリ / DMG を両アーキテクチャの CI で検証済み。2.2.5 の macOS アセットは未公開 | ソースから ad-hoc テスト版をビルド |
+| macOS 12+（Apple Silicon / Intel） | ソースと Universal DMG ビルドを両アーキテクチャの CI で検証済み。正式な macOS Release アセットは未提供 | ソースから ad-hoc テスト版をビルド |
 
 ### Windows 10/11 x64
 
@@ -25,7 +25,7 @@
 
 ### macOS 12+
 
-ソースは引き続き `arm64` / `x86_64` を含む Universal アプリと DMG に対応しています。2.2.5 Release は Windows NSIS のみを公開し、署名済み DMG は公開しません。ad-hoc テスト版は [macOS ビルド・検証手順](mac/README.md) を参照してください。
+ソースは引き続き `arm64` / `x86_64` を含む Universal アプリと DMG に対応しています。正式な GitHub Release は Windows NSIS のみを公開し、macOS DMG はローカル / CI 用の ad-hoc 検証成果物で、正式な Release アセットではありません。テスト版は [macOS ビルド・検証手順](mac/README.md) を参照してください。
 
 ## 概要
 
