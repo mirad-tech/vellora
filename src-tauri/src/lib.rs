@@ -8,8 +8,6 @@ mod types;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
-#[cfg(not(target_os = "macos"))]
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult};
 #[cfg(target_os = "macos")]
 use tauri::RunEvent;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
@@ -397,36 +395,20 @@ fn handle_second_instance(app: &AppHandle, args: Vec<String>) {
   focus_main_window(app);
 }
 
-#[cfg(not(target_os = "macos"))]
-fn native_discard_dialog() -> bool {
-  let result = MessageDialog::new()
-    .set_title("未保存更改")
-    .set_description("当前文档有未保存更改。")
-    .set_buttons(MessageButtons::OkCancelCustom(
-      "放弃更改".to_string(),
-      "继续编辑".to_string(),
-    ))
-    .show();
-
-  matches!(result, MessageDialogResult::Ok)
-}
-
 fn request_close_confirmation(app: &AppHandle, action: CloseAction) {
   let state = app.state::<AppState>();
   let already_pending = begin_close_request(&state, action);
 
   if already_pending {
-    #[cfg(not(target_os = "macos"))]
-    if native_discard_dialog() {
-      let _ = complete_close_request(app, &state);
-    }
     #[cfg(target_os = "macos")]
     {
       // Keep one renderer-owned confirmation open so its discard callback can
       // reset the reusable window's in-memory draft before a later Dock reopen.
       let _ = app.emit("close-requested", ());
-      focus_main_window(app);
     }
+    // The renderer already owns the close decision. Refocus that surface instead
+    // of opening a native discard path that could bypass save-and-exit.
+    focus_main_window(app);
     return;
   }
 
@@ -723,10 +705,12 @@ mod session_link_tests {
 
     assert!(!begin_close_request(&state, CloseAction::HideWindow));
     assert!(begin_close_request(&state, CloseAction::QuitApp));
-    assert_eq!(
-      lock_mutex(&state.close_state).action,
-      Some(CloseAction::QuitApp)
-    );
+    {
+      let close = lock_mutex(&state.close_state);
+      assert!(close.prompt_pending);
+      assert!(!close.allow_window_close);
+      assert_eq!(close.action, Some(CloseAction::QuitApp));
+    }
 
     cancel_close_request(&state);
     let close = lock_mutex(&state.close_state);

@@ -204,6 +204,11 @@ describe('App', () => {
     render(<App />);
     expect(screen.getByTestId('empty-state')).toBeTruthy();
     expect(screen.getByTestId('empty-state').textContent).toContain('未打开文件');
+    const emptyAppIcon = screen.getByTestId('empty-app-icon');
+    expect(emptyAppIcon.tagName).toBe('IMG');
+    expect(emptyAppIcon.getAttribute('src')).toBeTruthy();
+    expect(emptyAppIcon.getAttribute('alt')).toBe('');
+    expect(emptyAppIcon.getAttribute('aria-hidden')).toBe('true');
 
     fireEvent.click(screen.getByTestId('btn-open'));
 
@@ -302,7 +307,14 @@ describe('App', () => {
 
     await pressCtrlKey('f');
     const input = screen.getByTestId('search-input');
+    const searchBar = screen.getByTestId('search-bar');
+    const navigationRow = searchBar.querySelector('.search-navigation-row');
+    expect(searchBar.getAttribute('data-expanded')).toBe('false');
+    expect(navigationRow?.getAttribute('aria-hidden')).toBe('true');
+
     fireEvent.change(input, { target: { value: '搜索词' } });
+    expect(searchBar.getAttribute('data-expanded')).toBe('true');
+    expect(navigationRow?.getAttribute('aria-hidden')).toBe('false');
 
     await waitFor(() => {
       expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*1/);
@@ -690,7 +702,7 @@ describe('App', () => {
     });
     await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('discard-cancel'));
+    fireEvent.click(screen.getByTestId('discard-modal'));
     expect(screen.queryByTestId('discard-modal')).toBeNull();
     await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(false));
     confirmClose.mockClear();
@@ -699,7 +711,7 @@ describe('App', () => {
       closeRequestedHandler!();
     });
     await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('discard-cancel'));
+    fireEvent.click(screen.getByTestId('discard-modal'));
     await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(false));
 
     // Failed open must still save back to the source path, never a dead target path.
@@ -732,6 +744,153 @@ describe('App', () => {
     );
   });
 
+  test('clicking outside a close confirmation continues editing', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 点击遮罩后继续编辑\n' }
+    });
+    await act(async () => closeRequestedHandler!());
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('discard-modal'));
+    await waitFor(() => expect(screen.queryByTestId('discard-modal')).toBeNull());
+    expect(confirmClose).toHaveBeenCalledWith(false);
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe(
+      '# 点击遮罩后继续编辑\n'
+    );
+  });
+
+  test('saves successfully before exiting', async () => {
+    const savedDraft = '# 保存后退出\n';
+    saveMarkdownFile.mockResolvedValueOnce({
+      ok: true,
+      document: { ...sampleDoc, content: savedDraft }
+    });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: savedDraft } });
+    await act(async () => closeRequestedHandler!());
+    await waitFor(() => expect(screen.getByTestId('close-save')).toBeTruthy());
+    expect(screen.getByTestId('close-save').textContent).toBe('保存并退出');
+    expect(screen.getByTestId('close-discard').textContent).toBe('不保存并退出');
+    expect(screen.queryByTestId('discard-cancel')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('close-save'));
+    await waitFor(() =>
+      expect(saveMarkdownFile).toHaveBeenCalledWith(sampleDoc.path, savedDraft)
+    );
+    await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(true));
+    expect(saveMarkdownFile.mock.invocationCallOrder[0]).toBeLessThan(
+      confirmClose.mock.invocationCallOrder[0]
+    );
+    expect(screen.queryByTestId('discard-modal')).toBeNull();
+  });
+
+  test('keeps the close confirmation open when saving fails', async () => {
+    saveMarkdownFile.mockResolvedValueOnce({
+      ok: false,
+      code: 'SAVE_FAILED',
+      message: '无法保存测试文档。'
+    });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 保存失败时保留弹窗\n' }
+    });
+    await act(async () => closeRequestedHandler!());
+    await waitFor(() => expect(screen.getByTestId('close-save')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('close-save'));
+    await waitFor(() => expect(saveMarkdownFile).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('close-save-feedback').textContent).toContain('无法保存测试文档。')
+    );
+    expect(screen.getByTestId('close-save-feedback').getAttribute('role')).toBe('alert');
+    expect(screen.getByTestId('discard-modal')).toBeTruthy();
+    expect(confirmClose).not.toHaveBeenCalledWith(true);
+  });
+
+  test('disables save-and-exit while a document open request is pending', async () => {
+    type CanceledOpen = { ok: false; code: 'CANCELED'; message: string };
+    let resolveOpen!: (value: CanceledOpen) => void;
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 打开请求期间关闭\n' }
+    });
+    chooseMarkdownFile.mockReturnValueOnce(
+      new Promise<CanceledOpen>((resolve) => {
+        resolveOpen = resolve;
+      })
+    );
+
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('discard-confirm')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('discard-confirm'));
+    await waitFor(() => expect(chooseMarkdownFile).toHaveBeenCalledTimes(2));
+
+    await act(async () => closeRequestedHandler!());
+    const closeSave = await screen.findByTestId('close-save') as HTMLButtonElement;
+    expect(closeSave.disabled).toBe(true);
+    expect(screen.getByTestId('close-save-feedback').textContent).toBe('正在打开文档，请稍候。');
+    expect(screen.getByTestId('close-save-feedback').getAttribute('role')).toBe('status');
+    expect(saveMarkdownFile).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveOpen({ ok: false, code: 'CANCELED', message: '已取消。' });
+    });
+    await waitFor(() => expect(closeSave.disabled).toBe(false));
+    expect(screen.queryByTestId('close-save-feedback')).toBeNull();
+  });
+
+  test('does not exit when the close confirmation is canceled during saving', async () => {
+    let finishSave: ((result: Awaited<ReturnType<typeof saveMarkdownFile>>) => void) | null = null;
+    saveMarkdownFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSave = resolve;
+        })
+    );
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), {
+      target: { value: '# 保存过程中取消退出\n' }
+    });
+    await act(async () => closeRequestedHandler!());
+    await waitFor(() => expect(screen.getByTestId('close-save')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('close-save'));
+    await waitFor(() => expect(saveMarkdownFile).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('discard-modal'));
+    await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(false));
+
+    await act(async () => {
+      finishSave?.({
+        ok: true,
+        document: { ...sampleDoc, content: '# 保存过程中取消退出\n' }
+      });
+    });
+    await waitFor(() => expect(screen.queryByTestId('discard-modal')).toBeNull());
+    expect(confirmClose).not.toHaveBeenCalledWith(true);
+  });
+
   test('confirming close discards the in-memory draft for a later Dock reopen', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
@@ -744,7 +903,7 @@ describe('App', () => {
     await act(async () => closeRequestedHandler!());
     await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('discard-confirm'));
+    fireEvent.click(screen.getByTestId('close-discard'));
     await waitFor(() => expect(confirmClose).toHaveBeenCalledWith(true));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
     fireEvent.click(screen.getByTestId('btn-edit'));
@@ -1182,7 +1341,7 @@ describe('App', () => {
     fireEvent.input(quickEditor);
     await act(async () => closeRequestedHandler?.());
     expect(screen.getByTestId('discard-modal')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('discard-cancel'));
+    fireEvent.click(screen.getByTestId('discard-modal'));
 
     await pressCtrlKey('s');
     await waitFor(() => {

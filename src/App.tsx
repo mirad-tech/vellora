@@ -23,6 +23,7 @@ import {
   saveMarkdownFile,
   setUnsavedChanges
 } from './api/tauri';
+import appIconUrl from '../src-tauri/icons/128x128.png';
 import {
   renderMarkdownDocument,
   type MarkdownEditableBlockKind
@@ -106,6 +107,13 @@ type QuickEditState = {
 };
 
 const IMAGE_RESOLVE_DEBOUNCE_MS = 300;
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+
+function getPreferredScrollBehavior(): ScrollBehavior {
+  return typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_MOTION_QUERY).matches
+    ? 'auto'
+    : 'smooth';
+}
 
 function isReadyDirty(state: ViewState, draft: string): boolean {
   return state.status === 'ready' && draft !== state.document.content;
@@ -336,11 +344,13 @@ export default function App() {
   const documentOpenPendingRef = useRef(false);
   const viewStateRef = useRef(viewState);
   const draftRef = useRef(draftContent);
+  const discardDialogRef = useRef(discardDialog);
   const initialLoadStarted = useRef(false);
 
   const effectiveDraftContent = quickEdit?.candidateDraft ?? draftContent;
   viewStateRef.current = viewState;
   draftRef.current = effectiveDraftContent;
+  discardDialogRef.current = discardDialog;
   quickEditStateRef.current = quickEdit;
 
   const hasUnsaved = isReadyDirty(viewState, effectiveDraftContent);
@@ -491,6 +501,7 @@ export default function App() {
   const readerHtml = useMemo(() => ({ __html: searchResult.html }), [searchResult.html]);
   const activeSearchCount = editorMode === 'edit' ? sourceSearchResult.count : searchResult.count;
   const activeSearchIndex = editorMode === 'edit' ? sourceSearchResult.activeIndex : searchResult.activeIndex;
+  const searchExpanded = searchQuery.trim().length > 0;
 
   const navigateSearch = useCallback(
     (delta: number) => {
@@ -555,7 +566,7 @@ export default function App() {
 
     const active = readerRef.current?.querySelector<HTMLElement>('[data-active-search="true"]');
     if (active && typeof active.scrollIntoView === 'function') {
-      active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      active.scrollIntoView({ block: 'center', behavior: getPreferredScrollBehavior() });
     }
   }, [editorMode, searchOpen, sourceSearchResult.activeIndex, sourceSearchResult.count, sourceSearchResult.matches, searchResult.activeIndex, searchResult.count, searchResult.html]);
 
@@ -593,6 +604,7 @@ export default function App() {
     if (discardDialog?.reason === 'close') {
       void confirmClose(false);
     }
+    discardDialogRef.current = null;
     setDiscardDialog(null);
   }, [discardDialog]);
 
@@ -710,7 +722,7 @@ export default function App() {
   ]);
 
   const handleSave = useCallback(async () => {
-    if (viewState.status !== 'ready' || documentOpenPendingRef.current) return;
+    if (viewState.status !== 'ready' || documentOpenPendingRef.current) return false;
     const contentToSave = draftRef.current;
     commitQuickEdit();
     setSaveState({ status: 'saving' });
@@ -723,10 +735,21 @@ export default function App() {
       syncUnsaved(false);
       setSaveState({ status: 'saved' });
       window.setTimeout(() => setSaveState({ status: 'idle' }), 1500);
-    } else {
-      setSaveState({ status: 'error', message: result.message });
+      return true;
     }
+    setSaveState({ status: 'error', message: result.message });
+    return false;
   }, [commitQuickEdit, syncUnsaved, viewState]);
+
+  const handleSaveAndClose = useCallback(async () => {
+    if (!discardDialog || discardDialog.reason !== 'close') return;
+    const dialog = discardDialog;
+    const saved = await handleSave();
+    if (!saved || discardDialogRef.current !== dialog) return;
+    discardDialogRef.current = null;
+    setDiscardDialog(null);
+    dialog.proceed();
+  }, [discardDialog, handleSave]);
 
   const resolveAnchorHref = (anchor: HTMLAnchorElement): string | null => {
     const fromData = anchor.getAttribute('data-md-href');
@@ -859,7 +882,10 @@ export default function App() {
         if (id) {
           const el = readerRef.current?.querySelector(`#${CSS.escape(id)}`);
           if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
-            (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+            (el as HTMLElement).scrollIntoView({
+              behavior: getPreferredScrollBehavior(),
+              block: 'start'
+            });
           }
         }
         return;
@@ -1123,7 +1149,12 @@ export default function App() {
       </header>
 
       {searchOpen && viewState.status === 'ready' ? (
-        <div className="search-bar" data-testid="search-bar" role="search">
+        <div
+          className="search-bar"
+          data-testid="search-bar"
+          data-expanded={searchExpanded}
+          role="search"
+        >
           <div className="search-query-row">
             <svg className="search-icon" viewBox="0 0 20 20" aria-hidden="true">
               <circle cx="8.5" cy="8.5" r="5.25" />
@@ -1162,10 +1193,17 @@ export default function App() {
               onClick={() => setSearchOpen(false)}
               aria-label="关闭查找"
             >
-              ×
+              <svg
+                className="search-control-icon search-close-icon"
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M5.53 4.47a.75.75 0 0 0-1.06 1.06L6.94 8l-2.47 2.47a.75.75 0 0 0 1.06 1.06L8 9.06l2.47 2.47a.75.75 0 0 0 1.06-1.06L9.06 8l2.47-2.47a.75.75 0 0 0-1.06-1.06L8 6.94 5.53 4.47Z" />
+              </svg>
             </button>
           </div>
-          <div className="search-navigation-row">
+          <div className="search-navigation-row" aria-hidden={!searchExpanded}>
             <div className="search-navigation-actions">
               <button
                 type="button"
@@ -1177,7 +1215,14 @@ export default function App() {
                 }}
                 aria-label="上一个匹配项"
               >
-                ↑
+                <svg
+                  className="search-control-icon search-arrow-icon"
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="M6 6l2-2 2 2M8 4v8" />
+                </svg>
               </button>
               <button
                 type="button"
@@ -1189,7 +1234,14 @@ export default function App() {
                 }}
                 aria-label="下一个匹配项"
               >
-                ↓
+                <svg
+                  className="search-control-icon search-arrow-icon"
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="m6 10 2 2 2-2M8 12V4" />
+                </svg>
               </button>
             </div>
             <span className="search-count" data-testid="search-count">
@@ -1227,7 +1279,10 @@ export default function App() {
                         const reader = readerRef.current;
                         const heading = reader?.ownerDocument.getElementById(entry.id);
                         if (reader && heading && reader.contains(heading)) {
-                          heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          heading.scrollIntoView({
+                            behavior: getPreferredScrollBehavior(),
+                            block: 'start'
+                          });
                         }
                       }, 0);
                     }}
@@ -1248,7 +1303,16 @@ export default function App() {
         >
           {viewState.status === 'empty' ? (
             <div className="empty-state" data-testid="empty-state">
-              <div className="empty-mark" aria-hidden="true">MD</div>
+              <img
+                className="empty-app-icon"
+                data-testid="empty-app-icon"
+                src={appIconUrl}
+                width="56"
+                height="56"
+                alt=""
+                aria-hidden="true"
+                draggable="false"
+              />
               <p>未打开文件</p>
               <p className="muted">请选择 .md 或 .markdown 文件。</p>
               <button
@@ -1404,32 +1468,86 @@ export default function App() {
       ) : null}
 
       {discardDialog ? (
-        <div className="modal-backdrop" data-testid="discard-modal">
+        <div
+          className="modal-backdrop"
+          data-testid="discard-modal"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && discardDialog.reason === 'close') {
+              cancelDiscardDialog();
+            }
+          }}
+        >
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="discard-title">
             <h2 id="discard-title">未保存更改</h2>
             <p>当前文档有未保存更改。</p>
+            {discardDialog.reason === 'close' && documentOpenPending ? (
+              <p
+                className="modal-feedback"
+                data-testid="close-save-feedback"
+                role="status"
+              >
+                正在打开文档，请稍候。
+              </p>
+            ) : discardDialog.reason === 'close' && saveState.status === 'error' ? (
+              <p
+                className="modal-feedback modal-feedback--error"
+                data-testid="close-save-feedback"
+                role="alert"
+              >
+                {saveState.message}
+              </p>
+            ) : null}
             <div className="modal-actions">
-              <button
-                type="button"
-                className="button"
-                data-testid="discard-cancel"
-                onClick={cancelDiscardDialog}
-              >
-                继续编辑
-              </button>
-              <button
-                type="button"
-                className="button button--danger"
-                data-testid="discard-confirm"
-                onClick={() => {
-                  const { proceed } = discardDialog;
-                  setDiscardDialog(null);
-                  // Do not clear dirty here — only successful document replace clears it.
-                  proceed();
-                }}
-              >
-                放弃更改
-              </button>
+              {discardDialog.reason === 'close' ? (
+                <>
+                  <button
+                    type="button"
+                    className="button button--danger"
+                    data-testid="close-discard"
+                    disabled={saveState.status === 'saving'}
+                    onClick={() => {
+                      const { proceed } = discardDialog;
+                      setDiscardDialog(null);
+                      proceed();
+                    }}
+                  >
+                    不保存并退出
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    data-testid="close-save"
+                    disabled={saveState.status === 'saving' || documentOpenPending}
+                    onClick={() => void handleSaveAndClose()}
+                  >
+                    保存并退出
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="button"
+                    data-testid="discard-cancel"
+                    onClick={cancelDiscardDialog}
+                  >
+                    继续编辑
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--danger"
+                    data-testid="discard-confirm"
+                    onClick={() => {
+                      const { proceed } = discardDialog;
+                      setDiscardDialog(null);
+                      // Do not clear dirty here — only successful document replace clears it.
+                      proceed();
+                    }}
+                  >
+                    放弃更改
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
