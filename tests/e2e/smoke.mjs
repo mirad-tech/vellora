@@ -346,12 +346,23 @@ async function assertHoverVisual(
         transitionDuration: style.transitionDuration
       };
     });
+  const waitForTransition = () =>
+    page.$eval(selector, async (element) => {
+      await Promise.allSettled(
+        element.getAnimations().map((animation) => animation.finished)
+      );
+    });
   await page.mouse.move(0, 0);
-  await new Promise((resolve) => setTimeout(resolve, 180));
+  await page.waitForFunction(
+    (requestedSelector) => {
+      const element = document.querySelector(requestedSelector);
+      return element instanceof HTMLElement && !element.matches(':hover');
+    },
+    { timeout: 2000 },
+    selector
+  );
+  await waitForTransition();
   const before = await readState();
-  await page.hover(selector);
-  await new Promise((resolve) => setTimeout(resolve, 180));
-  const after = await readState();
   const expectedBackground = await page.evaluate((variableName) => {
     const probe = document.createElement('span');
     probe.style.backgroundColor = `var(${variableName})`;
@@ -360,6 +371,25 @@ async function assertHoverVisual(
     probe.remove();
     return resolved;
   }, backgroundVariable);
+  await page.mouse.move(
+    before.x + before.width / 2,
+    before.y + before.height / 2,
+    { steps: 4 }
+  );
+  await page.waitForFunction(
+    ({ requestedSelector, expectedColor }) => {
+      const element = document.querySelector(requestedSelector);
+      return (
+        element instanceof HTMLElement &&
+        element.matches(':hover') &&
+        getComputedStyle(element).backgroundColor === expectedColor
+      );
+    },
+    { timeout: 2000 },
+    { requestedSelector: selector, expectedColor: expectedBackground }
+  );
+  await waitForTransition();
+  const after = await readState();
 
   assert(!before.disabled, `${label} is enabled before hover`);
   for (const key of ['x', 'y', 'width', 'height']) {
