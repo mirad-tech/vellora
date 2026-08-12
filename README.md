@@ -1,5 +1,7 @@
 # Vellora
 
+[![CI](https://github.com/mirad-tech/vellora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mirad-tech/vellora/actions/workflows/ci.yml)
+
 <p align="center">
   <img src="src-tauri/icons/128x128.png" width="96" height="96" alt="Vellora 图标">
 </p>

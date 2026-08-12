@@ -55,8 +55,10 @@ jobs:
       - run: npm run build:web
       - run: npm run test:e2e:mac
       - name: Install Universal Rust targets
+        if: matrix.runner == 'macos-15'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Build and verify ad-hoc Universal DMG
+        if: matrix.runner == 'macos-15'
         run: npm run dist:mac
       - name: Upload Universal DMG test artifact
         if: matrix.runner == 'macos-15'

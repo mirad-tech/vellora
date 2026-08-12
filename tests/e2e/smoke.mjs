@@ -346,22 +346,19 @@ async function assertHoverVisual(
         transitionDuration: style.transitionDuration
       };
     });
-  const waitForTransition = () =>
-    page.$eval(selector, async (element) => {
-      await Promise.allSettled(
-        element.getAnimations().map((animation) => animation.finished)
-      );
-    });
   await page.mouse.move(0, 0);
   await page.waitForFunction(
     (requestedSelector) => {
       const element = document.querySelector(requestedSelector);
-      return element instanceof HTMLElement && !element.matches(':hover');
+      return (
+        element instanceof HTMLElement &&
+        !element.matches(':hover') &&
+        element.getAnimations().every((animation) => animation.playState !== 'running')
+      );
     },
     { timeout: 2000 },
     selector
   );
-  await waitForTransition();
   const before = await readState();
   const expectedBackground = await page.evaluate((variableName) => {
     const probe = document.createElement('span');
@@ -388,7 +385,6 @@ async function assertHoverVisual(
     { timeout: 2000 },
     { requestedSelector: selector, expectedColor: expectedBackground }
   );
-  await waitForTransition();
   const after = await readState();
 
   assert(!before.disabled, `${label} is enabled before hover`);

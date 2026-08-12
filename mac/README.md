@@ -46,8 +46,8 @@ artifacts/releases/macos/<version>/SHA256SUMS.txt
 `.github/workflows/ci.yml` 分别使用 Apple Silicon `macos-15` 与 Intel `macos-15-intel` runner：
 
 - 两种架构都运行前端/Rust 测试、浏览器 E2E 和真实 Tauri 桌面 E2E
-- 两种架构都构建并检查 Universal 应用和 DMG
-- Apple Silicon runner 上传的同一份 DMG 会再由 Intel runner 下载并执行 `release:check:mac`
+- Apple Silicon runner 构建、检查并上传一份 Universal 应用和 DMG
+- 独立 Intel job 下载同一份 DMG，并再次执行 `release:check:mac`
 
 这些 DMG 是 ad-hoc CI 验证产物，不作为正式 GitHub Release 资产。结果证明当前源码能在两种 Mac 架构上构建并运行核心自动化流程，但 runner 使用 macOS 15，不能替代 macOS 12 的启动 smoke 或 Finder、Dock、原生窗口交互等实机验收。
 
