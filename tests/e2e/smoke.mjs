@@ -426,22 +426,54 @@ async function assertInsetHoverVisual(page, selector, label, expectedRadius = 10
         insetTransitionDuration: insetStyle.transitionDuration
       };
     });
-  await page.mouse.move(0, 0);
-  await new Promise((resolve) => setTimeout(resolve, 180));
-  const before = await readState();
-  await page.hover(selector);
-  await new Promise((resolve) => setTimeout(resolve, 180));
-  const after = await readState();
-  const expectedBackground = await page.evaluate(() => {
+  const expectedColors = await page.evaluate(() => {
     const probe = document.createElement('span');
-    probe.style.backgroundColor = 'var(--control-hover)';
     document.body.append(probe);
-    const resolved = getComputedStyle(probe).backgroundColor;
+    probe.style.backgroundColor = 'transparent';
+    const transparent = getComputedStyle(probe).backgroundColor;
+    probe.style.backgroundColor = 'var(--control-hover)';
+    const hover = getComputedStyle(probe).backgroundColor;
     probe.remove();
-    return resolved;
+    return { transparent, hover };
   });
+  await page.mouse.move(0, 0);
+  await page.waitForFunction(
+    ({ requestedSelector, expectedColor }) => {
+      const element = document.querySelector(requestedSelector);
+      return (
+        element instanceof HTMLElement &&
+        !element.matches(':hover') &&
+        getComputedStyle(element, '::before').backgroundColor === expectedColor
+      );
+    },
+    { timeout: 2000 },
+    { requestedSelector: selector, expectedColor: expectedColors.transparent }
+  );
+  const before = await readState();
+  await page.mouse.move(
+    before.x + before.width / 2,
+    before.y + before.height / 2,
+    { steps: 4 }
+  );
+  await page.waitForFunction(
+    ({ requestedSelector, expectedColor }) => {
+      const element = document.querySelector(requestedSelector);
+      return (
+        element instanceof HTMLElement &&
+        element.matches(':hover') &&
+        getComputedStyle(element, '::before').backgroundColor === expectedColor
+      );
+    },
+    { timeout: 2000 },
+    { requestedSelector: selector, expectedColor: expectedColors.hover }
+  );
+  const after = await readState();
 
   assert(!before.disabled, `${label} is enabled before hover`);
+  assert(
+    before.insetBackgroundColor === expectedColors.transparent,
+    `${label} inset background starts transparent`
+  );
   for (const key of ['x', 'y', 'width', 'height']) {
     assertApprox(after[key], before[key], `${label} hover keeps ${key}`);
   }
@@ -458,8 +490,8 @@ async function assertInsetHoverVisual(page, selector, label, expectedRadius = 10
     `${label} outer click area stays transparent`
   );
   assert(
-    after.insetBackgroundColor === expectedBackground,
-    `${label} inset hover background: expected ${expectedBackground}, got ${after.insetBackgroundColor}`
+    after.insetBackgroundColor === expectedColors.hover,
+    `${label} inset hover background: expected ${expectedColors.hover}, got ${after.insetBackgroundColor}`
   );
   assert(
     after.insetBackgroundColor !== before.insetBackgroundColor,
