@@ -58,7 +58,7 @@ Find and save are keyboard-first and do not occupy toolbar buttons.
 
 ## Build from source
 
-Requirements: Windows 10/11, Node.js 20.19+, 22.12+, or newer; [Rust MSVC](https://rustup.rs/); Visual Studio C++ Build Tools; and WebView2.
+Requirements: Windows 10/11, Node.js 22.13+ on the 22.x line or Node.js 24+; [Rust MSVC](https://rustup.rs/); Visual Studio C++ Build Tools; and WebView2.
 
 ```powershell
 npm install

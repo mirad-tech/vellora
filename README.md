@@ -73,7 +73,7 @@ Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 
 ### Windows 环境要求
 
 - Windows 10/11
-- Node.js 20.19+、22.12+ 或更高版本
+- Node.js 22.13+（22.x）或 24+
 - [Rust MSVC 工具链](https://rustup.rs/)
 - Visual Studio C++ Build Tools
 - Microsoft WebView2 Runtime
@@ -123,7 +123,7 @@ npm run test:e2e:desktop
 
 ### macOS 开发与构建
 
-macOS 需要 Node.js 22、Rust stable 与 Xcode Command Line Tools。Universal 构建还需 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target：
+macOS 需要 Node.js 22.13+（22.x）或 24+、Rust stable 与 Xcode Command Line Tools。Universal 构建还需 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target：
 
 ```bash
 npm ci

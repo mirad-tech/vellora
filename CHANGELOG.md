@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### 安全
+
+- 更新 Markdown 清洗器及测试工具链依赖，修复 HTML 清洗、YAML 解析、ZIP 解压和模式展开相关安全告警。
+- 将开发与测试工具链统一为 Node.js 22.13+（22.x）或 24+，匹配当前依赖的运行要求。
+
 ### macOS
 
 - 新增根目录 `mac/` 覆盖层，支持 macOS 12+、Apple Silicon/Intel Universal `.app` 与 `.dmg`。

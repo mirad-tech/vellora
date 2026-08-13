@@ -12,8 +12,8 @@
 
 ## 本地环境
 
-- Windows：Windows 10/11、Node.js 20.19+ 或 22.12+、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Microsoft WebView2 Runtime
-- macOS：macOS 12+、Node.js 22、Rust stable、Xcode Command Line Tools，以及 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target
+- Windows：Windows 10/11、Node.js 22.13+（22.x）或 24+、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Microsoft WebView2 Runtime
+- macOS：macOS 12+、Node.js 22.13+（22.x）或 24+、Rust stable、Xcode Command Line Tools，以及 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target
 
 ```
 npm install
