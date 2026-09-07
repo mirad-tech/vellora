@@ -5,9 +5,9 @@ Vellora 的目录按运行代码、测试、维护工具、静态资源和本地
 
 | 目录 | 职责 | 是否提交 |
 | --- | --- | --- |
-| `.github/` | CI、Release、Dependabot 与社区模板 | 是 |
+| `.github/` | CI、Release、CodeQL、Dependabot 与社区模板 | 是 |
 | `assets/icons/` | 图标设计源文件 | 是 |
-| `docs/` | 当前仓库和发布流程文档 | 是 |
+| `docs/` | 当前仓库、发布流程文档与公开预览图 | 是 |
 | `mac/` | macOS 配置、Universal 构建、验证脚本和桌面 E2E | 是 |
 | `src/` | React 前端、Markdown 处理与交互 | 是 |
 | `src-tauri/` | Rust/Tauri 后端、权限、图标和打包配置 | 是 |

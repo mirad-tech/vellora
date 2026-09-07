@@ -1,4 +1,6 @@
-# 贡献指南
+# 贡献指南 / Contributing
+
+[中文](#贡献指南--contributing) · [English](#english-quick-guide)
 
 感谢你改进 Vellora。本项目面向 Windows 与 macOS 的本地优先 Markdown 阅读与轻量编辑；Windows 提供正式 Release，macOS 保持源码、构建与 CI 支持。提交应保持这一范围，并优先保证文件安全、权限最小化和可恢复性。
 
@@ -12,8 +14,8 @@
 
 ## 本地环境
 
-- Windows：Windows 10/11、Node.js 22.13+（22.x）或 24+、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Microsoft WebView2 Runtime
-- macOS：macOS 12+、Node.js 22.13+（22.x）或 24+、Rust stable、Xcode Command Line Tools，以及 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target
+- Windows：Windows 10/11、Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+、Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Microsoft WebView2 Runtime
+- macOS：macOS 12+、Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+、Rust stable、Xcode Command Line Tools，以及 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target
 
 ```
 npm install
@@ -26,7 +28,7 @@ npm run dev
 - `src-tauri/`：Rust/Tauri 文件操作、链接处理和桌面生命周期
 - `mac/`：macOS 配置、Universal 构建、验证脚本与桌面 E2E
 - `tests/`：单元测试、浏览器 E2E 与 Markdown 样本
-- `.github/workflows/`：持续集成与标签发布
+- `.github/workflows/`：持续集成、代码扫描与标签发布
 
 ## 变更原则
 
@@ -79,3 +81,14 @@ macOS 桌面 E2E 使用仅测试构建启用的内嵌驱动；运行 `npm run te
 - `src-tauri/tauri.conf.json`
 
 更新版本与 `CHANGELOG.md` 后，`npm run version:check` 必须通过。推送 `vX.Y.Z` 标签会启动 Windows 正式 Release，构建并发布同版本 NSIS 安装包；macOS 仅保留源码、CI 与 ad-hoc 构建验证，不作为正式 Release 资产。贡献者不要在普通 PR 中创建或推送标签。
+
+## English quick guide
+
+Vellora is a local-first Markdown reader and lightweight editor. Windows has official Releases; macOS has source, build, CI, and ad-hoc build verification only. Contributions must preserve privacy, least privilege, and recoverability.
+
+- By contributing, you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). Use the Issue forms for bugs and features. Report vulnerabilities privately under the [Security Policy](SECURITY.md), never in public Issues, PRs, discussions, logs, or real private documents.
+- Use Windows 10/11 or macOS 12+, Node.js 22.22.2+ on 22.x, 24.15+ on 24.x, or 26+, plus the platform prerequisites listed above. Install and run with `npm install` and `npm run dev`.
+- Keep the security boundaries: only `.md` / `.markdown` files; local images and Markdown links stay inside the current document directory and images are at most 10 MiB; HTTP(S) links require confirmation; do not grant arbitrary filesystem, Shell, or URL permissions.
+- Keep each PR focused. Describe the user-visible change, risk boundary, checks actually run, and any skipped checks. Attach screenshots for UI changes. Do not commit generated directories or unrelated formatting.
+- Run the relevant checks before review: `npm run version:check`, `npm run typecheck`, `npm test`, `npm run test:rust`, `npm run test:e2e`, and `npm run build:web`. Changes to file access, images, links, search, or close protection require both frontend and Rust unit tests.
+- Maintainers alone release versions. Keep version files and `CHANGELOG.md` aligned, and do not create or push release tags from ordinary PRs.

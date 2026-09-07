@@ -1,16 +1,30 @@
-# Vellora
-
-[![CI](https://github.com/mirad-tech/vellora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mirad-tech/vellora/actions/workflows/ci.yml)
-
 <p align="center">
   <img src="src-tauri/icons/128x128.png" width="96" height="96" alt="Vellora 图标">
 </p>
 
-Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 阅读与源码编辑器**。它专注于一个清晰流程：打开 `.md` 文件，舒适阅读，需要时快速修改并保存。
+<h1 align="center">Vellora</h1>
 
-基于 **Tauri 2 + React + TypeScript + Vite**。文档在本机处理，不上传到服务器。
+<p align="center">
+  本地优先的 Markdown 阅读与源码编辑器。Windows 提供正式安装包；macOS 提供源码、CI 与 ad-hoc 构建支持。
+</p>
 
-[English](README.en.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
+<p align="center">
+  <a href="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml"><img src="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/mirad-tech/vellora/releases/latest"><img src="https://img.shields.io/github/v/release/mirad-tech/vellora?display_name=tag&amp;sort=semver" alt="最新版本"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mirad-tech/vellora" alt="MIT 许可证"></a>
+</p>
+
+<p align="center">
+  <a href="README.en.md">English</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/vellora-preview.png" width="960" alt="Vellora 在 Windows 中预览 Markdown 文档">
+</p>
+
+文档在本机处理，不上传到服务器。Vellora 基于 **Tauri 2 + React + TypeScript + Vite**，专注于打开、阅读、快速修改并保存单个 Markdown 文档。
 
 ## 下载与安装
 
@@ -73,7 +87,7 @@ Vellora 是一款面向 **Windows 与 macOS、本地优先、轻量的 Markdown 
 ### Windows 环境要求
 
 - Windows 10/11
-- Node.js 22.13+（22.x）或 24+
+- Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+
 - [Rust MSVC 工具链](https://rustup.rs/)
 - Visual Studio C++ Build Tools
 - Microsoft WebView2 Runtime
@@ -123,7 +137,7 @@ npm run test:e2e:desktop
 
 ### macOS 开发与构建
 
-macOS 需要 Node.js 22.13+（22.x）或 24+、Rust stable 与 Xcode Command Line Tools。Universal 构建还需 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target：
+macOS 需要 Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+、Rust stable 与 Xcode Command Line Tools。Universal 构建还需 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target：
 
 ```bash
 npm ci

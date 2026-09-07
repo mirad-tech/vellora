@@ -1,11 +1,32 @@
-# Vellora
+<p align="center">
+  <img src="src-tauri/icons/128x128.png" width="96" height="96" alt="Vellora アイコン">
+</p>
 
-**Windows / macOS 対応**のローカル優先・軽量 Markdown ビューア / ソースエディタです。
-現在のバージョンは **2.2.5**。**Tauri 2 + React + TypeScript + Vite** で構築されています。
+<h1 align="center">Vellora</h1>
+
+<p align="center">
+  Windows / macOS 対応のローカル優先・軽量 Markdown ビューア / ソースエディタです。
+</p>
+
+<p align="center">
+  <a href="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml"><img src="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/mirad-tech/vellora/releases/latest"><img src="https://img.shields.io/github/v/release/mirad-tech/vellora?display_name=tag&amp;sort=semver" alt="最新リリース"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mirad-tech/vellora" alt="MIT ライセンス"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">中文</a> ·
+  <a href="README.en.md">English</a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/vellora-preview.png" width="960" alt="Windows で Markdown をプレビューする Vellora">
+</p>
+
+現在のバージョンは **2.2.5**。**Tauri 2 + React + TypeScript + Vite** で構築されています。ドキュメントはローカルで処理し、サーバーへアップロードしません。
 
 リポジトリ：[`mirad-tech/vellora`](https://github.com/mirad-tech/vellora)。製品名は **Vellora** です。
-
-[中文](README.md) · [English](README.en.md) · 日本語 · [Русский](README.ru.md)
 
 ## ダウンロード
 
@@ -35,6 +56,8 @@
 - Windows は `Ctrl+S` / `Ctrl+F`、macOS は `⌘S` / `⌘F`。プレビューとソース表示は同じ右端スクロールバーを使用
 
 ## 開発
+
+Node.js 22.22.2+（22.x）、24.15+（24.x）または 26+ が必要です。
 
 ```bash
 npm install

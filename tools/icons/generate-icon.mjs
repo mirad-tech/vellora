@@ -34,7 +34,6 @@ await copyFile(
   join(generatedDir, '128x128@2x.png'),
   join(iconsDir, '128x128@2x.png')
 );
-await copyFile(join(generatedDir, 'icon.png'), join(iconsDir, 'icon.png'));
 await copyFile(join(generatedDir, 'icon.ico'), join(iconsDir, 'icon.ico'));
 await copyFile(join(generatedDir, 'icon.icns'), join(iconsDir, 'icon.icns'));
 await rm(generatedDir, { recursive: true, force: true });

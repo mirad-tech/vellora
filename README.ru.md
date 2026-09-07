@@ -1,11 +1,32 @@
-# Vellora
+<p align="center">
+  <img src="src-tauri/icons/128x128.png" width="96" height="96" alt="Значок Vellora">
+</p>
 
-Локальный лёгкий просмотрщик и редактор Markdown для **Windows и macOS**.
-Текущая версия — **2.2.5**, на **Tauri 2 + React + TypeScript + Vite**.
+<h1 align="center">Vellora</h1>
+
+<p align="center">
+  Локальный лёгкий просмотрщик и редактор Markdown для Windows и macOS.
+</p>
+
+<p align="center">
+  <a href="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml"><img src="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/mirad-tech/vellora/releases/latest"><img src="https://img.shields.io/github/v/release/mirad-tech/vellora?display_name=tag&amp;sort=semver" alt="Последний выпуск"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mirad-tech/vellora" alt="Лицензия MIT"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">中文</a> ·
+  <a href="README.en.md">English</a> ·
+  <a href="README.ja.md">日本語</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/vellora-preview.png" width="960" alt="Vellora просматривает документ Markdown в Windows">
+</p>
+
+Текущая версия — **2.2.5**, на **Tauri 2 + React + TypeScript + Vite**. Документы обрабатываются локально и не загружаются на сервер.
 
 Репозиторий: [`mirad-tech/vellora`](https://github.com/mirad-tech/vellora). Продукт: **Vellora**.
-
-[中文](README.md) · [English](README.en.md) · [日本語](README.ja.md) · Русский
 
 ## Скачать
 
@@ -35,6 +56,8 @@
 - Windows: `Ctrl+S` / `Ctrl+F`; macOS: `⌘S` / `⌘F`; просмотр и исходник используют общую полосу прокрутки справа
 
 ## Разработка
+
+Нужен Node.js 22.22.2+ (22.x), 24.15+ (24.x) или 26+.
 
 ```bash
 npm install

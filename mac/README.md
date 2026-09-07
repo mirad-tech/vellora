@@ -12,7 +12,7 @@
 
 ## 本机准备
 
-需要 Node.js 22.13+（22.x）或 24+、Rust stable、Xcode Command Line Tools，并安装两个 Rust 目标：
+需要 Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+、Rust stable、Xcode Command Line Tools，并安装两个 Rust 目标：
 
 ```bash
 xcode-select --install

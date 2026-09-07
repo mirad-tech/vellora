@@ -2,7 +2,8 @@
   "name": "vellora-editor",
   "productName": "Vellora",
   "version": "2.2.5",
-  "description": "Vellora lightweight Markdown viewer and editor",
+  "private": true,
+  "description": "Local-first Markdown reader and source editor built with Tauri 2 and React",
   "author": "Vellora Contributors",
   "type": "module",
   "license": "MIT",
@@ -15,7 +16,7 @@
   },
   "homepage": "https://github.com/mirad-tech/vellora#readme",
   "engines": {
-    "node": "^22.13.0 || >=24.0.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "dev": "tauri dev",
