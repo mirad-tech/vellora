@@ -80,6 +80,66 @@ export function serializeEditableBlock(element: HTMLElement): string {
   return serializeChildren(element).replace(/\n+$/g, '');
 }
 
+function stripTrailingFenceNewline(value: string): string {
+  return value.replace(/\r\n$/, "").replace(/\n$/, "");
+}
+
+const OPEN_FENCE = /^([ \t]{0,3})(`{3,}|~{3,})(.*)$/;
+const CLOSE_FENCE = /^([ \t]{0,3})(`{3,}|~{3,})([ \t]*)$/;
+
+function parseFenceSource(originalSource: string) {
+  const lines = originalSource.replace(/\r\n|\r/g, "\n").split("\n");
+  if (lines.length < 2) return null;
+  const open = lines[0].match(OPEN_FENCE);
+  const close = lines[lines.length - 1].match(CLOSE_FENCE);
+  if (!open || !close) return null;
+  const fenceChar = open[2][0];
+  if (close[2][0] !== fenceChar) return null;
+  return {
+    openIndent: open[1],
+    closeIndent: close[1],
+    fenceChar,
+    openLength: open[2].length,
+    closeLength: close[2].length,
+    info: open[3],
+    closeSuffix: close[3]
+  };
+}
+
+function longestFenceRun(content: string, fenceChar: string): number {
+  const pattern = fenceChar === String.fromCharCode(96) ? /`+/g : /~+/g;
+  return Math.max(0, ...Array.from(content.matchAll(pattern), (match) => match[0].length));
+}
+
+function rebuildFenceSource(
+  originalSource: string,
+  edited: string,
+  lineEnding: "\r\n" | "\n"
+): string {
+  const parsed = parseFenceSource(originalSource);
+  if (!parsed) return originalSource;
+  const content = edited.replace(/\r\n|\r/g, "\n");
+  const length = Math.max(parsed.openLength, parsed.closeLength, longestFenceRun(content, parsed.fenceChar) + 1, 3);
+  const opener = parsed.openIndent + parsed.fenceChar.repeat(length) + parsed.info;
+  const closer = parsed.closeIndent + parsed.fenceChar.repeat(length) + parsed.closeSuffix;
+  if (content.length === 0) return opener + lineEnding + closer;
+  return opener + lineEnding + content + lineEnding + closer;
+}
+
+export function extractFenceContent(element: HTMLElement): string {
+  const code = element.tagName === 'CODE' ? element : element.querySelector('code') ?? element;
+  const raw = (code.textContent ?? "").replace(/\u00a0/g, " ");
+  return stripTrailingFenceNewline(raw);
+}
+
+export function extractEditableBlockContent(
+  kind: MarkdownEditableBlockKind,
+  element: HTMLElement
+): string {
+  if (kind === 'code-fence') return extractFenceContent(element);
+  return serializeEditableBlock(element);
+}
+
 function normalizeLineEndings(value: string, lineEnding: '\r\n' | '\n'): string {
   return value.replace(/\r\n|\r|\n/g, lineEnding);
 }
@@ -141,6 +201,8 @@ export function rebuildEditableBlockSource(
       return rebuildBlockquote(originalSource, editedMarkdown, lineEnding);
     case 'paragraph':
       return normalizeLineEndings(editedMarkdown, lineEnding);
+    case 'code-fence':
+      return rebuildFenceSource(originalSource, editedMarkdown, lineEnding);
   }
 }
 
@@ -151,7 +213,7 @@ export function isEditableBlockRoundTripSafe(
   lineEnding: '\r\n' | '\n'
 ): boolean {
   return (
-    rebuildEditableBlockSource(kind, originalSource, serializeEditableBlock(element), lineEnding) ===
+    rebuildEditableBlockSource(kind, originalSource, extractEditableBlockContent(kind, element), lineEnding) ===
     originalSource
   );
 }

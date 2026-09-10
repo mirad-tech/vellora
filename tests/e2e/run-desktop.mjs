@@ -14,6 +14,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -155,6 +156,17 @@ function runSync(cmd, args) {
   }
 }
 
+async function availablePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = server.address().port;
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return port;
+}
+
 async function main() {
   if (process.platform !== 'win32') {
     fail('Desktop E2E is Windows-only.');
@@ -197,7 +209,8 @@ async function main() {
     const { tauriDriver, msedgedriver } = ensureDrivers();
 
     fixtures = writeFixtures();
-    const driverPort = Number(process.env.TAURI_DRIVER_PORT || 4444);
+    const driverPort = process.env.TAURI_DRIVER_PORT ? Number(process.env.TAURI_DRIVER_PORT) : await availablePort();
+    const nativePort = process.env.TAURI_NATIVE_DRIVER_PORT ? Number(process.env.TAURI_NATIVE_DRIVER_PORT) : await availablePort();
 
     console.log('[e2e:desktop] building web + release binary (custom-protocol)…');
     const npmCli = process.env.npm_execpath;
@@ -226,7 +239,7 @@ async function main() {
     console.log(`[e2e:desktop] starting tauri-driver on :${driverPort}`);
     driverProc = spawn(
       tauriDriver,
-      ['--port', String(driverPort), '--native-driver', msedgedriver],
+      ['--port', String(driverPort), '--native-port', String(nativePort), '--native-driver', msedgedriver],
       {
         cwd: root,
         stdio: 'inherit',

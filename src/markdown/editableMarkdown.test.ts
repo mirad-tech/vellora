@@ -60,4 +60,35 @@ describe('caret-only Markdown block editing', () => {
       false
     );
   });
+
+  test("rebuilds fenced code content while keeping the original fence and language", () => {
+    expect(
+      rebuildEditableBlockSource("code-fence", "```ts\nconst title = 1;\n```", "const title = 2;", "\n")
+    ).toBe("```ts\nconst title = 2;\n```");
+    expect(
+      rebuildEditableBlockSource("code-fence", "~~~bash\necho hi\n~~~", "echo bye", "\n")
+    ).toBe("~~~bash\necho bye\n~~~");
+    expect(
+      rebuildEditableBlockSource("code-fence", "```text\r\ncode\r\n```", "saved", "\r\n")
+    ).toBe("```text\r\nsaved\r\n```");
+  });
+
+  test("lengthens a code fence only when the edited content would break it", () => {
+    expect(
+      rebuildEditableBlockSource("code-fence", "```text\nhello\n```", "hello\n```\nworld", "\n")
+    ).toBe("````text\nhello\n```\nworld\n````");
+  });
+
+  test("round-trips rendered fenced code from highlight spans back to the original Markdown", () => {
+    const block = element(
+      "<pre><code class=\"language-text\">code<span class=\"hljs-title\">x</span>\n</code></pre>"
+    );
+
+    expect(isEditableBlockRoundTripSafe("code-fence", "```text\ncodex\n```", block, "\n")).toBe(
+      true
+    );
+    expect(
+      isEditableBlockRoundTripSafe("code-fence", "  ```text\n  indented\n  ```", block, "\n")
+    ).toBe(false);
+  });
 });

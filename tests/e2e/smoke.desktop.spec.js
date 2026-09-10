@@ -14,6 +14,9 @@ async function clickLinkByHrefFragment(fragment) {
     const href = (await a.getAttribute('data-md-href')) || (await a.getAttribute('href')) || '';
     if (href.includes(fragment)) {
       await a.click();
+      await $('button=链接').click();
+      expect(await $('[aria-label="链接地址"]').getValue()).toBe(href);
+      await $('button=打开链接').click();
       return true;
     }
   }
@@ -59,7 +62,7 @@ async function setContentEditableText(selector, value) {
 }
 
 describe('Vellora desktop E2E (real IPC)', () => {
-  it('CLI open, quick edit, save, failed link, success link, search, outline, external cancel', async () => {
+  it('CLI open, continuous code editing, disk save, local links, search, outline, external and native close guards', async () => {
     expect(Boolean(sourcePath && fs.existsSync(sourcePath))).toBe(true);
     expect(Boolean(targetPath && fs.existsSync(targetPath))).toBe(true);
 
@@ -89,16 +92,96 @@ describe('Vellora desktop E2E (real IPC)', () => {
     }
     expect(await body.getText()).toContain('源文档');
 
-    // 2) Quick edit in read mode + save source on disk
+    // 2) Continuous keyboard editing and real disk persistence.
     await $('[data-testid="markdown-body"] h1').click();
-    const quickEditor = await $('[data-testid="quick-edit-surface"]');
-    await quickEditor.waitForDisplayed({ timeout: 10000 });
-    await setContentEditableText('[data-testid="quick-edit-surface"]', '源文档（阅读模式修改）');
+    await browser.execute(() => {
+      const editor = document.querySelector('[data-testid="markdown-body"]').editor;
+      editor.commands.setTextSelection({ from: 1, to: editor.state.doc.firstChild.nodeSize - 1 });
+    });
+    await browser.keys('源文档（阅读模式修改）');
     await browser.keys([modifierKey, 's']);
-    await browser.waitUntil(
-      async () => fs.readFileSync(sourcePath, 'utf8').includes('阅读模式修改'),
-      { timeout: 15000, timeoutMsg: 'quick edit was not saved to disk' }
-    );
+    await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('阅读模式修改'),
+      { timeout: 15000, timeoutMsg: 'continuous editing was not saved to disk' });
+
+    // Code blocks must survive actual WebView input and saving through Rust.
+    await enterEditAndSetValue(fs.readFileSync(sourcePath, 'utf8') + '\n```js\noriginal\n```\n');
+    await $('[data-testid="btn-read"]').click();
+    await $('[data-testid="markdown-body"] pre code').click();
+    await browser.execute(() => {
+      const editor = document.querySelector('[data-testid="markdown-body"]').editor;
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'codeBlock') editor.commands.setTextSelection({ from: pos + 1, to: pos + node.nodeSize - 1 });
+      });
+    });
+    await browser.keys('const saved = 2;');
+    await browser.keys([modifierKey, 's']);
+    await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('const saved = 2;'),
+      { timeout: 15000, timeoutMsg: 'code block was not saved to disk' });
+
+    // Language changes are saved without blurring the field.
+    await $('button=格式').click();
+    const languageInput = await $('[aria-label="代码语言"]');
+    await languageInput.click();
+    await browser.keys([modifierKey, 'a']);
+    await browser.keys('python');
+    expect(await languageInput.getValue()).toBe('python');
+    expect(await browser.execute(() => document.querySelector('[data-testid="markdown-body"]').editor.getAttributes('codeBlock').language)).toBe('python');
+    expect(await browser.execute(() => document.activeElement?.getAttribute('aria-label'))).toBe('代码语言');
+    await browser.keys([modifierKey, 's']);
+    await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('```python\n'),
+      { timeout: 15000, timeoutMsg: 'focused language field was not saved to disk' });
+    await languageInput.click();
+    await browser.keys([modifierKey, 'a']);
+    await browser.keys('unknown-test');
+    expect(await languageInput.getValue()).toBe('unknown-test');
+    await browser.execute(async () => {
+      await window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: 'main' });
+    });
+    await $('[data-testid="discard-modal"]').waitForDisplayed({ timeout: 10000 });
+    await browser.keys('Escape');
+    await $('[data-testid="discard-modal"]').waitForDisplayed({ reverse: true, timeout: 5000 });
+    await browser.keys([modifierKey, 's']);
+    await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('```unknown-test\n'),
+      { timeout: 15000, timeoutMsg: 'language draft was lost after cancelling native close' });
+
+    // Serialize edited pipes, then reopen the file through real Rust IPC.
+    await enterEditAndSetValue(fs.readFileSync(sourcePath, 'utf8') +
+      '\n\n| 名称 | 代码 | 保留列 |\n| :--- | :---: | ---: |\n| 单元格 | `a\\|b` | KEEP |\n\n[重新打开](./source.md)\n');
+    await $('[data-testid="btn-read"]').click();
+    await $('[data-testid="markdown-body"] td').click();
+    await browser.execute(() => {
+      const editor = document.querySelector('[data-testid="markdown-body"]').editor;
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'paragraph' && node.textContent === '单元格') {
+          editor.commands.setTextSelection({ from: pos + 1, to: pos + node.nodeSize - 1 });
+        }
+      });
+    });
+    await browser.keys('A|B');
+    await browser.keys([modifierKey, 's']);
+    await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('A\\|B'),
+      { timeout: 15000, timeoutMsg: 'table cell pipe was not escaped on disk' });
+    const expectedTable = await browser.execute(() => {
+      const editor = document.querySelector('[data-testid="markdown-body"]').editor;
+      window.__e2eEditorBeforeReopen = editor;
+      let result;
+      editor.state.doc.descendants(node => { if (node.type.name === 'table') result = node.toJSON(); });
+      return result;
+    });
+    expect(await clickLinkByHrefFragment('source.md')).toBe(true);
+    await browser.waitUntil(async () => browser.execute(() =>
+      window.__e2eEditorBeforeReopen.isDestroyed &&
+      document.querySelector('[data-testid="markdown-body"]')?.editor !== window.__e2eEditorBeforeReopen),
+      { timeout: 10000, timeoutMsg: 'disk reopen did not replace the editor session' });
+    const reopenedTable = await browser.execute(() => {
+      let result;
+      document.querySelector('[data-testid="markdown-body"]').editor.state.doc.descendants(node => {
+        if (node.type.name === 'table') result = node.toJSON();
+      });
+      return result;
+    });
+    expect(reopenedTable).toEqual(expectedTable);
+    expect(await $('[data-testid="markdown-body"] tbody').getText()).toContain('KEEP');
 
     // 3) Full source edit + save
     let sourceText = fs.readFileSync(sourcePath, 'utf8');
@@ -198,5 +281,22 @@ describe('Vellora desktop E2E (real IPC)', () => {
     await $('[data-testid="external-cancel"]').click();
     await external.waitForDisplayed({ reverse: true, timeout: 5000 });
     expect(await (await $('[data-testid="markdown-body"]')).getText()).toContain('目标文档');
+
+    // 8) Native close request reaches Rust's unsaved guard; cancel preserves the draft.
+    await enterEditAndSetValue(fs.readFileSync(targetPath, 'utf8') + '\n关闭保护草稿');
+    await browser.execute(async () => {
+      await window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: 'main' });
+    });
+    discard = await $('[data-testid="discard-modal"]');
+    await discard.waitForDisplayed({ timeout: 10000 });
+    fs.mkdirSync('artifacts/editor-e2e', { recursive: true });
+    await browser.saveScreenshot('artifacts/editor-e2e/editor-windows-close.png');
+    await browser.keys('Escape');
+    await discard.waitForDisplayed({ reverse: true, timeout: 5000 });
+    expect(await $('[data-testid="source-editor"]').getValue()).toContain('关闭保护草稿');
+    expect(fs.readFileSync(targetPath, 'utf8')).not.toContain('关闭保护草稿');
+    await browser.keys([modifierKey, 's']);
+    await browser.waitUntil(async () => fs.readFileSync(targetPath, 'utf8').includes('关闭保护草稿'),
+      { timeout: 15000, timeoutMsg: 'save after cancelling native close failed' });
   });
 });

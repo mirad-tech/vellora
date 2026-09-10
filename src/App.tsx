@@ -4,8 +4,7 @@ import React, {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent
+  type KeyboardEvent as ReactKeyboardEvent
 } from 'react';
 
 import {
@@ -24,22 +23,13 @@ import {
   setUnsavedChanges
 } from './api/tauri';
 import appIconUrl from '../src-tauri/icons/128x128.png';
+import { renderMarkdownDocument, type MarkdownOutlineEntry } from './markdown/renderMarkdown';
+import { DocumentEditor, type DocumentEditorHandle } from './editor/DocumentEditor';
 import {
-  renderMarkdownDocument,
-  type MarkdownEditableBlockKind
-} from './markdown/renderMarkdown';
-import {
-  applyImageResolutions,
   collectLocalImageResolutionGroups,
   resolveImageGroupsWithLimit,
   type ImageResolutionMap
 } from './markdown/resolveImages';
-import {
-  isEditableBlockRoundTripSafe,
-  rebuildEditableBlockSource,
-  serializeEditableBlock
-} from './markdown/editableMarkdown';
-import { applySearchHighlights } from './markdown/searchHtml';
 import type { MarkdownDocument } from './types';
 
 type SourceSearchMatch = { start: number; end: number };
@@ -94,18 +84,6 @@ type SaveState =
 
 type PendingExternalLink = { url: string } | null;
 
-type QuickEditState = {
-  blockId: string;
-  kind: MarkdownEditableBlockKind;
-  start: number;
-  end: number;
-  originalSource: string;
-  originalHtml: string;
-  originalDraft: string;
-  candidateDraft: string;
-  lineEnding: '\r\n' | '\n';
-};
-
 const IMAGE_RESOLVE_DEBOUNCE_MS = 300;
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 
@@ -122,70 +100,6 @@ function isReadyDirty(state: ViewState, draft: string): boolean {
 function isMarkdownFilePath(path: string): boolean {
   const lower = path.toLowerCase();
   return lower.endsWith('.md') || lower.endsWith('.markdown');
-}
-
-function detectLineEnding(content: string): '\r\n' | '\n' {
-  const firstLineFeed = content.indexOf('\n');
-  return firstLineFeed > 0 && content[firstLineFeed - 1] === '\r' ? '\r\n' : '\n';
-}
-
-function removeQuickEditAttributes(element: HTMLElement | null): void {
-  if (!element) return;
-  element.removeAttribute('contenteditable');
-  element.removeAttribute('data-testid');
-  element.removeAttribute('aria-label');
-  element.removeAttribute('spellcheck');
-  element.classList.remove('quick-edit-active');
-}
-
-function placeCaret(element: HTMLElement, clientX: number, clientY: number): void {
-  const documentWithCaret = document as Document & {
-    caretRangeFromPoint?: (x: number, y: number) => Range | null;
-  };
-  const pointRange =
-    clientX > 0 && clientY > 0 ? documentWithCaret.caretRangeFromPoint?.(clientX, clientY) : null;
-  const selection = window.getSelection();
-  if (!selection) return;
-
-  const range =
-    pointRange && element.contains(pointRange.startContainer)
-      ? pointRange
-      : (() => {
-          const endRange = document.createRange();
-          endRange.selectNodeContents(element);
-          endRange.collapse(false);
-          return endRange;
-        })();
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
-function insertPlainTextAtCaret(element: HTMLElement, value: string): void {
-  const selection = window.getSelection();
-  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-  if (!selection || !range || !element.contains(range.commonAncestorContainer)) return;
-
-  range.deleteContents();
-  const fragment = document.createDocumentFragment();
-  let lastNode: Node | null = null;
-  value.replace(/\r\n|\r/g, '\n').split('\n').forEach((line, index) => {
-    if (index > 0) {
-      const breakNode = document.createElement('br');
-      fragment.append(breakNode);
-      lastNode = breakNode;
-    }
-    if (line.length > 0) {
-      const textNode = document.createTextNode(line);
-      fragment.append(textNode);
-      lastNode = textNode;
-    }
-  });
-  if (!lastNode) return;
-  range.insertNode(fragment);
-  range.setStartAfter(lastNode);
-  range.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(range);
 }
 
 function normalizeSearchQuery(query: string): string {
@@ -330,12 +244,18 @@ export default function App() {
   >(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [documentOpenPending, setDocumentOpenPending] = useState(false);
-  const [quickEdit, setQuickEdit] = useState<QuickEditState | null>(null);
+  const [documentSession, setDocumentSession] = useState(0);
+  const [documentOutline, setDocumentOutline] = useState<MarkdownOutlineEntry[]>([]);
+  const [searchResult, setDocumentSearchResult] = useState({ count: 0, activeIndex: -1 });
+  const documentEditorRef = useRef<DocumentEditorHandle>(null);
+  const compositionRef = useRef(false);
+  const compositionWaiters = useRef<Array<() => void>>([]);
+  const savingRef = useRef(false);
+  const [editorFailure, setEditorFailure] = useState(false);
+  const editorFailureRef = useRef(false);
 
   const readerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLElement | null>(null);
-  const quickEditRef = useRef<HTMLElement | null>(null);
-  const quickEditStateRef = useRef<QuickEditState | null>(quickEdit);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const sourceEditInProgressRef = useRef(false);
@@ -347,22 +267,24 @@ export default function App() {
   const discardDialogRef = useRef(discardDialog);
   const initialLoadStarted = useRef(false);
 
-  const effectiveDraftContent = quickEdit?.candidateDraft ?? draftContent;
+  const effectiveDraftContent = draftContent;
   viewStateRef.current = viewState;
   draftRef.current = effectiveDraftContent;
   discardDialogRef.current = discardDialog;
-  quickEditStateRef.current = quickEdit;
 
-  const hasUnsaved = isReadyDirty(viewState, effectiveDraftContent);
+  const hasUnsaved = editorFailure || isReadyDirty(viewState, effectiveDraftContent);
 
   /** Sync dirty flag immediately (do not wait for useEffect) to avoid close races. */
   const syncUnsaved = useCallback((dirty: boolean) => {
-    void setUnsavedChanges(dirty);
+    void setUnsavedChanges(dirty || editorFailureRef.current);
   }, []);
 
   const updateDraft = useCallback(
     (value: string) => {
       if (documentOpenPendingRef.current) return;
+      if (editorFailureRef.current) setStatusMessage('');
+      editorFailureRef.current = false;
+      setEditorFailure(false);
       setDraftContent(value);
       draftRef.current = value;
       const dirty = isReadyDirty(viewStateRef.current, value);
@@ -372,24 +294,27 @@ export default function App() {
     [syncUnsaved]
   );
 
-  const commitQuickEdit = useCallback(() => {
-    const current = quickEditStateRef.current;
-    if (!current) return;
-    removeQuickEditAttributes(quickEditRef.current);
-    quickEditRef.current = null;
-    draftRef.current = current.candidateDraft;
-    setDraftContent(current.candidateDraft);
-    quickEditStateRef.current = null;
-    setQuickEdit(null);
-  }, []);
+  const handleEditorError = useCallback((message: string) => {
+    editorFailureRef.current = true;
+    setEditorFailure(true);
+    setStatusMessage(message);
+    syncUnsaved(true);
+  }, [syncUnsaved]);
+
+  const flushDocument = useCallback(() => {
+    if (editorMode !== 'read') return true;
+    const value = documentEditorRef.current?.flush();
+    if (value === null) return false;
+    if (value !== undefined && (value !== draftRef.current || editorFailureRef.current)) updateDraft(value);
+    return true;
+  }, [editorMode, updateDraft]);
 
   const beginDocumentRequest = useCallback(() => {
     const requestId = ++documentRequestId.current;
-    commitQuickEdit();
     documentOpenPendingRef.current = true;
     setDocumentOpenPending(true);
     return requestId;
-  }, [commitQuickEdit]);
+  }, []);
 
   const finishDocumentRequest = useCallback((requestId: number) => {
     if (requestId !== documentRequestId.current) return;
@@ -405,7 +330,7 @@ export default function App() {
   const rendered = useMemo(() => renderMarkdownDocument(draftContent), [draftContent]);
 
   const baseHtml = rendered.status === 'ready' ? rendered.html : '';
-  const outline = rendered.status === 'ready' ? rendered.outline : [];
+  const outline = editorMode === 'read' ? documentOutline : rendered.status === 'ready' ? rendered.outline : [];
 
   const updateActiveHeading = useCallback(() => {
     if (editorMode !== 'read' || outline.length === 0) return;
@@ -439,22 +364,6 @@ export default function App() {
     updateActiveHeading();
   }, [outlineOpen, updateActiveHeading]);
 
-  const htmlWithImages = useMemo(
-    () => applyImageResolutions(baseHtml, imageMap),
-    [baseHtml, imageMap]
-  );
-
-  const searchResult = useMemo(
-    () =>
-      editorMode === 'read'
-        ? applySearchHighlights(htmlWithImages, searchOpen ? searchQuery : '', searchActiveIndex)
-        : {
-            html: htmlWithImages,
-            count: 0,
-            activeIndex: -1
-          },
-    [editorMode, htmlWithImages, searchOpen, searchQuery, searchActiveIndex]
-  );
   const sourceSearchResult = useMemo(
     () =>
       findSourceSearchMatches(
@@ -498,7 +407,6 @@ export default function App() {
     }
     return content;
   }, [draftContent, sourceSearchResult]);
-  const readerHtml = useMemo(() => ({ __html: searchResult.html }), [searchResult.html]);
   const activeSearchCount = editorMode === 'edit' ? sourceSearchResult.count : searchResult.count;
   const activeSearchIndex = editorMode === 'edit' ? sourceSearchResult.activeIndex : searchResult.activeIndex;
   const searchExpanded = searchQuery.trim().length > 0;
@@ -544,7 +452,7 @@ export default function App() {
       });
     }, IMAGE_RESOLVE_DEBOUNCE_MS);
 
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); imageRequestId.current += 1; };
   }, [baseHtml, rendered.status, viewState]);
 
   useEffect(() => {
@@ -568,7 +476,7 @@ export default function App() {
     if (active && typeof active.scrollIntoView === 'function') {
       active.scrollIntoView({ block: 'center', behavior: getPreferredScrollBehavior() });
     }
-  }, [editorMode, searchOpen, sourceSearchResult.activeIndex, sourceSearchResult.count, sourceSearchResult.matches, searchResult.activeIndex, searchResult.count, searchResult.html]);
+  }, [editorMode, searchOpen, sourceSearchResult.activeIndex, sourceSearchResult.count, sourceSearchResult.matches, searchResult.activeIndex, searchResult.count]);
 
   const applyDocument = useCallback(
     (document: MarkdownDocument) => {
@@ -577,8 +485,10 @@ export default function App() {
       draftRef.current = document.content;
       viewStateRef.current = { status: 'ready', document };
       setEditorMode('read');
-      quickEditStateRef.current = null;
-      setQuickEdit(null);
+      setDocumentSession(value => value + 1);
+      editorFailureRef.current = false;
+      setEditorFailure(false);
+      imageRequestId.current += 1;
       setSaveState({ status: 'idle' });
       setStatusMessage(document.name);
       setSearchQuery('');
@@ -591,11 +501,22 @@ export default function App() {
 
   const confirmIfDirty = useCallback(
     (reason: 'open' | 'close' | 'switch', proceed: () => void) => {
-      if (!isReadyDirty(viewStateRef.current, draftRef.current)) {
-        proceed();
-        return;
-      }
-      setDiscardDialog({ reason, proceed });
+      const check = () => {
+        if (documentEditorRef.current?.editor?.isEditable) {
+          const value = documentEditorRef.current.flush();
+          if (value !== null && value !== draftRef.current) {
+            draftRef.current = value;
+            setDraftContent(value);
+          }
+        }
+        if (!editorFailureRef.current && !isReadyDirty(viewStateRef.current, draftRef.current)) {
+          proceed();
+          return;
+        }
+        setDiscardDialog({ reason, proceed });
+      };
+      if (compositionRef.current) compositionWaiters.current.push(check);
+      else check();
     },
     []
   );
@@ -611,10 +532,9 @@ export default function App() {
   const discardCloseDraft = useCallback(() => {
     const current = viewStateRef.current;
     if (current.status !== 'ready') return;
-    removeQuickEditAttributes(quickEditRef.current);
-    quickEditRef.current = null;
-    quickEditStateRef.current = null;
-    setQuickEdit(null);
+    setDocumentSession(value => value + 1);
+    editorFailureRef.current = false;
+    setEditorFailure(false);
     setDraftContent(current.document.content);
     draftRef.current = current.document.content;
     setEditorMode('read');
@@ -722,24 +642,34 @@ export default function App() {
   ]);
 
   const handleSave = useCallback(async () => {
-    if (viewState.status !== 'ready' || documentOpenPendingRef.current) return false;
-    const contentToSave = draftRef.current;
-    commitQuickEdit();
-    setSaveState({ status: 'saving' });
-    const result = await saveMarkdownFile(viewState.document.path, contentToSave);
-    if (result.ok) {
-      setViewState({ status: 'ready', document: result.document });
-      setDraftContent(result.document.content);
-      draftRef.current = result.document.content;
-      viewStateRef.current = { status: 'ready', document: result.document };
-      syncUnsaved(false);
-      setSaveState({ status: 'saved' });
-      window.setTimeout(() => setSaveState({ status: 'idle' }), 1500);
-      return true;
-    }
-    setSaveState({ status: 'error', message: result.message });
-    return false;
-  }, [commitQuickEdit, syncUnsaved, viewState]);
+    if (savingRef.current || documentOpenPendingRef.current) return false;
+    savingRef.current = true;
+    const requestId = documentRequestId.current;
+    try {
+      if (compositionRef.current) await new Promise<void>(resolve => compositionWaiters.current.push(resolve));
+      if (requestId !== documentRequestId.current || documentOpenPendingRef.current || !flushDocument()) return false;
+      const current = viewStateRef.current;
+      if (current.status !== 'ready') return false;
+      const contentToSave = draftRef.current;
+      setSaveState({ status: 'saving' });
+      const result = await saveMarkdownFile(current.document.path, contentToSave);
+      if (requestId !== documentRequestId.current) return false;
+      if (result.ok) {
+        setViewState({ status: 'ready', document: result.document });
+        viewStateRef.current = { status: 'ready', document: result.document };
+        if (draftRef.current === contentToSave) {
+          setDraftContent(result.document.content);
+          draftRef.current = result.document.content;
+        }
+        const dirty = draftRef.current !== result.document.content;
+        syncUnsaved(dirty);
+        setSaveState({ status: dirty ? 'idle' : 'saved' });
+        return !dirty;
+      }
+      setSaveState({ status: 'error', message: result.message });
+      return false;
+    } finally { savingRef.current = false; }
+  }, [flushDocument, syncUnsaved]);
 
   const handleSaveAndClose = useCallback(async () => {
     if (!discardDialog || discardDialog.reason !== 'close') return;
@@ -751,134 +681,14 @@ export default function App() {
     dialog.proceed();
   }, [discardDialog, handleSave]);
 
-  const resolveAnchorHref = (anchor: HTMLAnchorElement): string | null => {
-    const fromData = anchor.getAttribute('data-md-href');
-    if (fromData !== null && fromData.length > 0) return fromData;
-    const href = anchor.getAttribute('href');
-    return href;
-  };
-
-  const beginQuickEdit = useCallback(
-    (target: HTMLElement, clientX: number, clientY: number) => {
-      if (
-        editorMode !== 'read' ||
-        viewState.status !== 'ready' ||
-        documentOpenPendingRef.current ||
-        rendered.status !== 'ready'
-      ) {
-        return;
-      }
-
-      const blockElement = target.closest<HTMLElement>('[data-edit-block-id]');
-      const blockId = blockElement?.dataset.editBlockId;
-      if (!blockElement || !blockId) return;
-      if (quickEditRef.current === blockElement) return;
-      if (quickEditStateRef.current) commitQuickEdit();
-      const block = rendered.editableBlocks.find((entry) => entry.id === blockId);
-      if (!block) return;
-
-      const source = draftRef.current.slice(block.start, block.end);
-      const lineEnding = detectLineEnding(draftRef.current);
-      if (!isEditableBlockRoundTripSafe(block.kind, source, blockElement, lineEnding)) return;
-      const nextQuickEdit: QuickEditState = {
-        blockId,
-        kind: block.kind,
-        start: block.start,
-        end: block.end,
-        originalSource: source,
-        originalHtml: blockElement.innerHTML,
-        originalDraft: draftRef.current,
-        candidateDraft: draftRef.current,
-        lineEnding
-      };
-      quickEditStateRef.current = nextQuickEdit;
-      setQuickEdit(nextQuickEdit);
-      quickEditRef.current = blockElement;
-      blockElement.setAttribute('contenteditable', 'true');
-      blockElement.setAttribute('spellcheck', 'true');
-      blockElement.dataset.testid = 'quick-edit-surface';
-      blockElement.setAttribute('aria-label', '编辑当前 Markdown 内容块');
-      blockElement.classList.add('quick-edit-active');
-      blockElement.focus({ preventScroll: true });
-      placeCaret(blockElement, clientX, clientY);
-    },
-    [commitQuickEdit, editorMode, rendered, viewState.status]
-  );
-
-  const updateQuickEdit = useCallback(
-    (element: HTMLElement) => {
-      const current = quickEditStateRef.current;
-      if (!current || documentOpenPendingRef.current) return;
-      const editedMarkdown = serializeEditableBlock(element);
-      const replacement = rebuildEditableBlockSource(
-        current.kind,
-        current.originalSource,
-        editedMarkdown,
-        current.lineEnding
-      );
-      const nextDraft =
-        current.originalDraft.slice(0, current.start) +
-        replacement +
-        current.originalDraft.slice(current.end);
-      draftRef.current = nextDraft;
-      const dirty = isReadyDirty(viewStateRef.current, nextDraft);
-      syncUnsaved(dirty);
-      setSaveState({ status: 'idle' });
-      const nextQuickEdit: QuickEditState = {
-        ...current,
-        candidateDraft: nextDraft
-      };
-      quickEditStateRef.current = nextQuickEdit;
-      setQuickEdit(nextQuickEdit);
-    },
-    [syncUnsaved]
-  );
-
-  const cancelQuickEdit = useCallback(() => {
-    const current = quickEditStateRef.current;
-    if (!current) return;
-    if (quickEditRef.current) {
-      quickEditRef.current.innerHTML = current.originalHtml;
-    }
-    removeQuickEditAttributes(quickEditRef.current);
-    quickEditRef.current = null;
-    draftRef.current = current.originalDraft;
-    syncUnsaved(isReadyDirty(viewStateRef.current, current.originalDraft));
-    setSaveState({ status: 'idle' });
-    quickEditStateRef.current = null;
-    setQuickEdit(null);
-  }, [syncUnsaved]);
-
   const handleMarkdownNavigation = useCallback(
-    async (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (documentOpenPendingRef.current) return;
-      const target = event.target as HTMLElement | null;
-      const anchor = target?.closest('a');
-      const activeEditor = quickEditRef.current;
-      if (target && activeEditor?.contains(target)) {
-        if (anchor) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        return;
-      }
-      if (!anchor) {
-        if (event.button === 0 && target) beginQuickEdit(target, event.clientX, event.clientY);
-        return;
-      }
-      if (viewState.status !== 'ready') return;
-
-      // Intercept primary and auxiliary (middle) clicks.
-      if (event.button !== 0 && event.button !== 1) return;
-
-      const href = resolveAnchorHref(anchor as HTMLAnchorElement);
-      if (href === null) return;
-
-      event.preventDefault();
-      event.stopPropagation();
+    (href: string) => {
+      if (viewState.status !== 'ready' || documentOpenPendingRef.current) return;
 
       if (href.startsWith('#')) {
-        const id = decodeURIComponent(href.slice(1));
+        let id: string;
+        try { id = decodeURIComponent(href.slice(1)); }
+        catch { setStatusMessage('链接格式无效'); return; }
         if (id) {
           const el = readerRef.current?.querySelector(`#${CSS.escape(id)}`);
           if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
@@ -892,12 +702,14 @@ export default function App() {
       }
 
       // Non-navigable placeholder from renderer
-      if (href === '#' && !anchor.getAttribute('data-md-href')) {
+      if (!href || href === '#') {
         return;
       }
 
       const sourcePath = viewState.document.path;
-      const result = await inspectMarkdownLink(sourcePath, href);
+      const inspectionRequestId = documentRequestId.current;
+      void inspectMarkdownLink(sourcePath, href).then((result) => {
+      if (inspectionRequestId !== documentRequestId.current || viewStateRef.current.status !== 'ready' || viewStateRef.current.document.path !== sourcePath) return;
       if (!result.ok) {
         setStatusMessage(result.message);
         return;
@@ -923,11 +735,11 @@ export default function App() {
           setStatusMessage(opened.message);
         }).finally(() => finishDocumentRequest(requestId));
       });
+      });
     },
     [
       applyOpenResult,
       beginDocumentRequest,
-      beginQuickEdit,
       confirmIfDirty,
       finishDocumentRequest,
       syncUnsaved,
@@ -1057,9 +869,7 @@ export default function App() {
 
   const documentName = viewState.status === 'ready' ? viewState.document.name : 'Vellora';
   const toolbarStatus =
-    quickEdit !== null
-      ? '正在编辑当前内容块'
-      : saveState.status === 'saving'
+    saveState.status === 'saving'
         ? '正在保存'
         : saveState.status === 'saved'
           ? '已保存'
@@ -1082,7 +892,15 @@ export default function App() {
   }, [titleText]);
 
   return (
-    <div className="app-shell" data-testid="app-shell">
+    <div className="app-shell" data-testid="app-shell"
+      onCompositionStartCapture={() => { compositionRef.current = true; syncUnsaved(true); }}
+      onCompositionEndCapture={() => {
+        window.setTimeout(() => {
+          compositionRef.current = false;
+          syncUnsaved(isReadyDirty(viewStateRef.current, draftRef.current));
+          compositionWaiters.current.splice(0).forEach(resolve => resolve());
+        }, 0);
+      }}>
       <header className="toolbar" data-testid="toolbar">
         <div className="toolbar-leading">
           <button
@@ -1113,11 +931,10 @@ export default function App() {
             data-testid="btn-read"
             disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => {
-              commitQuickEdit();
-              setEditorMode('read');
+              if (!compositionRef.current) setEditorMode('read');
             }}
           >
-            预览
+            文档
           </button>
           <button
             type="button"
@@ -1125,8 +942,7 @@ export default function App() {
             data-testid="btn-edit"
             disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => {
-              commitQuickEdit();
-              setEditorMode('edit');
+              if (!compositionRef.current && flushDocument()) setEditorMode('edit');
             }}
           >
             源码
@@ -1273,6 +1089,7 @@ export default function App() {
                     aria-current={activeHeadingId === entry.id ? 'location' : undefined}
                     style={{ paddingLeft: `${(entry.level - 1) * 12 + 8}px` }}
                     onClick={() => {
+                      if (compositionRef.current) return;
                       setActiveHeadingId(entry.id);
                       if (editorMode !== 'read') setEditorMode('read');
                       window.setTimeout(() => {
@@ -1378,63 +1195,15 @@ export default function App() {
             </div>
           ) : null}
 
-          {viewState.status === 'ready' && editorMode === 'read' ? (
-            rendered.status === 'error' ? (
-              <div className="empty-state" data-testid="parse-error">
-                Markdown 解析失败，请切换源码编辑修复。
-              </div>
-            ) : rendered.status === 'empty' ? (
-              <div className="empty-state" data-testid="doc-empty">
-                文件为空
-              </div>
-            ) : (
-              <div className="reader-stage">
-                <div
-                  ref={readerRef}
-                  className="markdown-body"
-                  data-testid="markdown-body"
-                  onClick={handleMarkdownNavigation}
-                  onAuxClick={handleMarkdownNavigation}
-                  onInput={(event) => {
-                    const editor = quickEditRef.current;
-                    if (editor?.contains(event.target as Node)) updateQuickEdit(editor);
-                  }}
-                  onBlur={(event) => {
-                    if (event.target === quickEditRef.current) commitQuickEdit();
-                  }}
-                  onPaste={(event) => {
-                    const editor = quickEditRef.current;
-                    if (!editor?.contains(event.target as Node)) return;
-                    event.preventDefault();
-                    insertPlainTextAtCaret(editor, event.clipboardData.getData('text/plain'));
-                    updateQuickEdit(editor);
-                  }}
-                  onKeyDown={(event) => {
-                    const editor = quickEditRef.current;
-                    if (!editor?.contains(event.target as Node)) return;
-                    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-                    if (event.key === 'Escape') {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      cancelQuickEdit();
-                      return;
-                    }
-                    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      commitQuickEdit();
-                      return;
-                    }
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      insertPlainTextAtCaret(editor, '\n');
-                      updateQuickEdit(editor);
-                    }
-                  }}
-                  dangerouslySetInnerHTML={readerHtml}
-                />
-              </div>
-            )
+          {viewState.status === 'ready' ? (
+            <div className="reader-stage" ref={readerRef} hidden={editorMode !== 'read'}>
+              <DocumentEditor key={documentSession} ref={documentEditorRef}
+                content={draftContent} active={editorMode === 'read'} disabled={documentOpenPending}
+                images={imageMap} query={searchOpen ? searchQuery : ''} searchIndex={searchActiveIndex}
+                onChange={updateDraft} onOutline={setDocumentOutline} onSearch={setDocumentSearchResult}
+                onOpenLink={handleMarkdownNavigation} onError={handleEditorError}
+                onRecover={value => { updateDraft(value); setStatusMessage(''); setEditorMode('edit'); }} />
+            </div>
           ) : null}
         </main>
       </div>

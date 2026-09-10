@@ -712,6 +712,39 @@ textarea:focus-visible {
   position: relative;
 }
 
+.reader-stage[hidden], .document-editor-shell[hidden] { display: none; }
+.document-editor { min-height: 65vh; outline: none; white-space: pre-wrap; overflow-wrap: break-word; }
+.document-editor .ProseMirror-selectednode { outline: 2px solid var(--focus-ring); }
+.document-editor .selectedCell { background: var(--hit); }
+.document-editor td p, .document-editor th p { margin: 0; }
+.document-editor .tableWrapper { overflow-x: auto; }
+.document-editor table { table-layout: fixed; }
+.document-editor td, .document-editor th { min-width: 60px; position: relative; }
+.document-editor .search-hit { background: var(--hit); border-radius: var(--radius-highlight); }
+.document-editor .search-hit[data-active-search='true'] { background: var(--hit-active); }
+.document-image { display: inline-block; max-width: 100%; vertical-align: middle; }
+.document-image img { display: block; }
+.raw-source-preview { cursor: text; }
+.raw-source-shell:not([data-active='true']) .raw-source-content { display: none; }
+.raw-source-shell[data-active='true'] .raw-source-preview { display: none; }
+.raw-source-content { white-space: pre-wrap; }
+.editor-tools {
+  position: fixed; z-index: 30; max-width: min(290px, calc(100vw - 24px));
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius-group); box-shadow: var(--shadow-popover); padding: 5px;
+  font-family: system-ui, sans-serif; font-size: 13px;
+}
+.editor-tool-row { display: flex; gap: 3px; flex-wrap: wrap; }
+.editor-tools button { background: transparent; color: var(--text); border: 0; border-radius: var(--radius-control); padding: 5px 8px; cursor: pointer; font: inherit; }
+.editor-tools button:hover, .editor-tools button[aria-pressed='true'] { background: var(--control-hover); }
+.editor-tools button:disabled { opacity: .45; cursor: default; }
+.editor-tools button:focus-visible, .editor-tools input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.editor-format-menu { display: flex; flex-wrap: wrap; gap: 3px; padding-top: 6px; max-height: min(320px, 45vh); overflow-y: auto; }
+.editor-attribute-form { display: grid; gap: 8px; padding: 8px; }
+.editor-tools label { display: grid; gap: 4px; width: 100%; }
+.editor-tools input { width: 100%; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-content); padding: 5px; font: inherit; }
+.editor-error { padding: 12px 24px; color: var(--danger-text); }
+
 .markdown-body {
   width: 100%;
   max-width: var(--document-max-width);

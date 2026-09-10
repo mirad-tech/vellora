@@ -28,7 +28,12 @@ export type MarkdownRenderResult =
 
 export type ReadyMarkdownRenderResult = Extract<MarkdownRenderResult, { status: 'ready' }>;
 
-export type MarkdownEditableBlockKind = 'heading' | 'paragraph' | 'list-item' | 'blockquote';
+export type MarkdownEditableBlockKind =
+  | 'heading'
+  | 'paragraph'
+  | 'list-item'
+  | 'blockquote'
+  | 'code-fence';
 
 export type MarkdownEditableBlock = {
   id: string;
@@ -175,6 +180,30 @@ function createMarkdownParser(): MarkdownIt {
     return self.renderToken(tokens, index, options);
   };
 
+  const defaultFence =
+    parser.renderer.rules.fence ??
+    ((tokens: Token[], index: number, options, _env, self) => self.renderToken(tokens, index, options));
+
+  parser.renderer.rules.fence = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    const editId = token.attrGet('data-edit-block-id');
+    const editKind = token.attrGet('data-edit-block-kind');
+    const editToken = token.attrGet('data-edit-block-token');
+    if (editId) {
+      token.attrs = (token.attrs ?? []).filter(
+        ([name]) =>
+          name !== 'data-edit-block-id' &&
+          name !== 'data-edit-block-kind' &&
+          name !== 'data-edit-block-token'
+      );
+    }
+    const html = defaultFence(tokens, index, options, env, self);
+    if (!editId || !editKind || !editToken) return html;
+    return html.replace(
+      '<pre>',
+      `<pre data-edit-block-id="${editId}" data-edit-block-kind="${editKind}" data-edit-block-token="${editToken}">`
+    );
+  };
   return parser;
 }
 
@@ -349,6 +378,9 @@ function applyEditableBlocks(
       if (closeIndex > index && isSimpleContainer(tokens, index, closeIndex)) {
         addBlock(token, 'list-item');
       }
+    }
+    if (token.type === 'fence' && token.level === 0) {
+      addBlock(token, 'code-fence');
     }
   }
 

@@ -168,7 +168,7 @@ describe('safe Markdown rendering', () => {
     expect(new Set(ready.editableBlocks.map((block) => block.start)).size).toBe(5);
   });
 
-  test('keeps nested lists, tables, code, and raw HTML read-only', () => {
+  test('retains existing fenced source metadata without exposing complex raw HTML', () => {
     const ready = asReadyResult(renderMarkdownDocument(`- 父项
   - 子项
 
@@ -191,7 +191,7 @@ code
 
     expect(template.content.querySelectorAll('li[data-edit-block-id]')).toHaveLength(0);
     expect(template.content.querySelector('table[data-edit-block-id]')).toBeNull();
-    expect(template.content.querySelector('pre[data-edit-block-id]')).toBeNull();
+    expect(template.content.querySelector('pre[data-edit-block-kind="code-fence"]')).not.toBeNull();
     expect(template.content.querySelector('section[data-edit-block-id]')).toBeNull();
     expect(template.content.querySelector('img')?.closest('[data-edit-block-id]')).toBeNull();
     expect(Array.from(template.content.querySelectorAll('p')).find((paragraph) =>

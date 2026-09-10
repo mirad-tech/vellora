@@ -9,10 +9,12 @@ import fs from 'node:fs';
 import process from 'node:process';
 import { createServer } from 'vite';
 import puppeteer from 'puppeteer-core';
+import { runEditorScenarios } from './editor-scenarios.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '../..');
-const DEV_URL = 'http://127.0.0.1:1420';
+const DEV_PORT = Number(process.env.VELLORA_E2E_PORT || 1420);
+const DEV_URL = `http://127.0.0.1:${DEV_PORT}`;
 
 const sampleDoc = {
   path: 'C:\\e2e\\sample.md',
@@ -612,7 +614,7 @@ async function run() {
     dev = await createServer({
       root,
       logLevel: 'error',
-      server: { host: '127.0.0.1', port: 1420, strictPort: true }
+      server: { host: '127.0.0.1', port: DEV_PORT, strictPort: true }
     });
     await dev.listen();
     await waitForUrl(DEV_URL);
@@ -792,30 +794,19 @@ async function run() {
     );
     await capture('02-preview-mode-hover-1280x800.png');
 
-    // 3 quick edit in read mode + save through the existing draft flow
+    // 3 continuous editing + real keyboard input + existing save flow
     await page.click('[data-testid="markdown-body"] h1');
-    await page.waitForSelector('[data-testid="quick-edit-surface"]');
-    const quickEditVisual = await readVisualMetrics(page, ['[data-testid="quick-edit-surface"]']);
-    assertApprox(
-      quickEditVisual.elements['[data-testid="quick-edit-surface"]'].outlineWidth,
-      0,
-      'quick edit has no gray outline'
-    );
-    await page.$eval('[data-testid="quick-edit-surface"]', (element) => {
-      element.textContent = '阅读模式标题';
-      element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    await page.$eval('[data-testid="markdown-body"]', element => {
+      const editor = element.editor;
+      editor.commands.setTextSelection({ from: 1, to: editor.state.doc.firstChild.nodeSize - 1 });
     });
-    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-    await page.keyboard.down(modifier);
-    await page.keyboard.press('Enter');
-    await page.keyboard.up(modifier);
-    await page.waitForSelector('[data-testid="quick-edit-surface"]', { hidden: true });
-    const quickEdited = await page.$eval('[data-testid="markdown-body"]', (el) => el.textContent || '');
-    assert(quickEdited.includes('阅读模式标题'), 'quick edit reflected in read mode');
+    await page.keyboard.type('阅读模式标题');
+    const quickEdited = await page.$eval('[data-testid="markdown-body"]', el => el.textContent || '');
+    assert(quickEdited.includes('阅读模式标题'), 'document heading input reflected immediately');
     await pressModifierKey(page, 's');
-    await page.waitForFunction(() => {
-      return String(window.__e2eSavedContent || '').includes('阅读模式标题');
-    }, { timeout: 10000 });
+    await page.waitForFunction(() => String(window.__e2eSavedContent || '').includes('阅读模式标题'), { timeout: 10000 });
+
+    await runEditorScenarios(page, pressModifierKey, capture);
 
     // 4 edit mode
     await page.click('[data-testid="btn-edit"]');
@@ -1110,7 +1101,7 @@ async function run() {
     await page.evaluate(() => {
       document.documentElement.style.removeProperty('--motion-expand-duration');
     });
-    await page.waitForSelector('mark.search-hit', { timeout: 5000 });
+    await page.waitForSelector('.search-hit', { timeout: 5000 });
     const populatedSearchVisual = await readVisualMetrics(page, [
       '.search-bar',
       '.search-navigation-row',
@@ -1118,7 +1109,7 @@ async function run() {
       '[data-testid="search-next"]',
       '[data-testid="search-close"]',
       '.search-count',
-      'mark.search-hit'
+      '.search-hit'
     ]);
     assertApprox(populatedSearchVisual.elements['.search-bar'].height, 82, 'populated search shows two rows and inset edge');
     assertApprox(populatedSearchVisual.elements['.search-bar'].borderRadius, 20, 'populated search matches reference radius');
@@ -1158,7 +1149,7 @@ async function run() {
       'search next button radius'
     );
     assertApprox(populatedSearchVisual.elements['[data-testid="search-close"]'].borderRadius, 10, 'search close click radius');
-    assertApprox(populatedSearchVisual.elements['mark.search-hit'].borderRadius, 3, 'preview search hit radius');
+    assertApprox(populatedSearchVisual.elements['.search-hit'].borderRadius, 3, 'preview search hit radius');
     const searchNavigationButtonRadii = await page.$$eval(
       '.search-navigation-actions .search-icon-btn',
       (buttons) =>
@@ -1502,6 +1493,8 @@ async function run() {
 
     // 9 external link
     await page.click('[data-testid="markdown-body"] a');
+    await page.locator('button::-p-text(链接)').click();
+    await page.locator('button::-p-text(打开链接)').click();
     await page.waitForSelector('[data-testid="external-link-modal"]', { timeout: 5000 });
     const externalVisual = await readVisualMetrics(page, [
       '.modal',
