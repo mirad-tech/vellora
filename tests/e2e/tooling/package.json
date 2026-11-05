@@ -1,0 +1,9 @@
+{
+  "name": "vellora-e2e-tooling",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "puppeteer-core": "25.5.0"
+  }
+}
