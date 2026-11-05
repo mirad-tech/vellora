@@ -24,6 +24,8 @@ import {
   setUnsavedChanges
 } from './api/tauri';
 import appIconUrl from '../src-tauri/icons/128x128.png';
+import { AppIcon } from './components/AppIcon';
+import { restoreFocus, useDialogFocus } from './components/useDialogFocus';
 import {
   renderMarkdownDocument,
   type MarkdownEditableBlockKind
@@ -108,6 +110,13 @@ type QuickEditState = {
 
 const IMAGE_RESOLVE_DEBOUNCE_MS = 300;
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+const DOCKED_OUTLINE_QUERY = '(min-width: 1024px)';
+
+function isOutlineDocked(): boolean {
+  return typeof window.matchMedia === 'function'
+    ? window.matchMedia(DOCKED_OUTLINE_QUERY).matches
+    : window.innerWidth >= 1024;
+}
 
 function getPreferredScrollBehavior(): ScrollBehavior {
   return typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_MOTION_QUERY).matches
@@ -319,6 +328,7 @@ export default function App() {
   const [editorMode, setEditorMode] = useState<EditorMode>('read');
   const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineDocked, setOutlineDocked] = useState(isOutlineDocked);
   const [activeHeadingId, setActiveHeadingId] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -337,6 +347,15 @@ export default function App() {
   const quickEditRef = useRef<HTMLElement | null>(null);
   const quickEditStateRef = useRef<QuickEditState | null>(quickEdit);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchButtonRef = useRef<HTMLButtonElement | null>(null);
+  const searchReturnFocusRef = useRef<HTMLElement | null>(null);
+  const searchFocusTimerRef = useRef<number | undefined>(undefined);
+  const confirmationOpenRef = useRef(false);
+  const openButtonRef = useRef<HTMLButtonElement | null>(null);
+  const outlineButtonRef = useRef<HTMLButtonElement | null>(null);
+  const outlinePanelRef = useRef<HTMLElement | null>(null);
+  const externalDialogRef = useRef<HTMLDivElement | null>(null);
+  const discardDialogElementRef = useRef<HTMLDivElement | null>(null);
   const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const sourceEditInProgressRef = useRef(false);
   const imageRequestId = useRef(0);
@@ -352,8 +371,43 @@ export default function App() {
   draftRef.current = effectiveDraftContent;
   discardDialogRef.current = discardDialog;
   quickEditStateRef.current = quickEdit;
+  confirmationOpenRef.current = pendingExternal !== null || discardDialog !== null;
 
   const hasUnsaved = isReadyDirty(viewState, effectiveDraftContent);
+
+  useDialogFocus(pendingExternal !== null, externalDialogRef, openButtonRef);
+  useDialogFocus(discardDialog !== null && pendingExternal === null, discardDialogElementRef, openButtonRef);
+
+  useEffect(() => () => window.clearTimeout(searchFocusTimerRef.current), []);
+
+  useEffect(() => {
+    const media = typeof window.matchMedia === 'function' ? window.matchMedia(DOCKED_OUTLINE_QUERY) : null;
+    const update = () => setOutlineDocked(isOutlineDocked());
+    media?.addEventListener('change', update);
+    window.addEventListener('resize', update);
+    return () => {
+      media?.removeEventListener('change', update);
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+
+  const closeOutline = useCallback((restoreFocus: boolean) => {
+    setOutlineOpen(false);
+    if (restoreFocus) outlineButtonRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    if (!outlineOpen || outlineDocked || pendingExternal || discardDialog) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (outlinePanelRef.current?.contains(target) || outlineButtonRef.current?.contains(target)) return;
+      // Observe the outside click without consuming the target's own action.
+      closeOutline(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [closeOutline, discardDialog, outlineDocked, outlineOpen, pendingExternal]);
 
   /** Sync dirty flag immediately (do not wait for useEffect) to avoid close races. */
   const syncUnsaved = useCallback((dirty: boolean) => {
@@ -381,6 +435,28 @@ export default function App() {
     setDraftContent(current.candidateDraft);
     quickEditStateRef.current = null;
     setQuickEdit(null);
+  }, []);
+
+  const openSearch = useCallback(() => {
+    if (viewStateRef.current.status !== 'ready' || pendingExternal || discardDialog) return;
+    if (!searchOpen) {
+      searchReturnFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : searchButtonRef.current;
+    }
+    commitQuickEdit();
+    setSearchOpen(true);
+    window.clearTimeout(searchFocusTimerRef.current);
+    searchFocusTimerRef.current = window.setTimeout(() => {
+      searchFocusTimerRef.current = undefined;
+      if (!confirmationOpenRef.current) searchInputRef.current?.focus({ preventScroll: true });
+    }, 0);
+  }, [commitQuickEdit, discardDialog, pendingExternal, searchOpen]);
+
+  const closeSearch = useCallback(() => {
+    window.clearTimeout(searchFocusTimerRef.current);
+    setSearchOpen(false);
+    restoreFocus(searchReturnFocusRef.current, sourceEditorRef.current ?? searchButtonRef.current);
   }, []);
 
   const beginDocumentRequest = useCallback(() => {
@@ -1012,21 +1088,26 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape') {
         if (pendingExternal) {
+          event.preventDefault();
           setPendingExternal(null);
           return;
         }
         if (discardDialog) {
+          event.preventDefault();
           cancelDiscardDialog();
           return;
         }
         if (searchOpen) {
-          setSearchOpen(false);
+          event.preventDefault();
+          closeSearch();
           return;
         }
         if (outlineOpen) {
-          setOutlineOpen(false);
+          event.preventDefault();
+          closeOutline(true);
         }
         return;
       }
@@ -1037,18 +1118,17 @@ export default function App() {
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.key.toLowerCase() === 's') {
         event.preventDefault();
-        void handleSave();
+        if (saveState.status !== 'saving') void handleSave();
         return;
       }
       if (mod && event.key.toLowerCase() === 'f') {
         event.preventDefault();
-        setSearchOpen(true);
-        window.setTimeout(() => searchInputRef.current?.focus(), 0);
+        openSearch();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [cancelDiscardDialog, discardDialog, handleSave, outlineOpen, pendingExternal, searchOpen]);
+  }, [cancelDiscardDialog, closeOutline, closeSearch, discardDialog, handleSave, openSearch, outlineOpen, pendingExternal, saveState.status, searchOpen]);
 
   const titleText =
     viewState.status === 'ready'
@@ -1056,26 +1136,20 @@ export default function App() {
       : 'Vellora';
 
   const documentName = viewState.status === 'ready' ? viewState.document.name : 'Vellora';
-  const toolbarStatus =
-    quickEdit !== null
-      ? '正在编辑当前内容块'
-      : saveState.status === 'saving'
-        ? '正在保存'
-        : saveState.status === 'saved'
-          ? '已保存'
-          : saveState.status === 'error'
-            ? saveState.message
-      : viewState.status === 'ready'
-        ? statusMessage && statusMessage !== viewState.document.name
-          ? statusMessage
-          : hasUnsaved
-            ? '有未保存更改'
-            : 'Markdown 文档'
-        : viewState.status === 'error'
-          ? viewState.message
-          : viewState.status === 'loading'
-            ? '正在打开文件'
-            : '未打开文件';
+  const feedbackMessage = saveState.status === 'error'
+    ? saveState.message
+    : viewState.status === 'ready' && statusMessage !== viewState.document.name
+      ? statusMessage
+      : '';
+  let toolbarStatus = '未打开文件';
+  if (saveState.status === 'saving') toolbarStatus = '正在保存';
+  else if (documentOpenPending || viewState.status === 'loading') toolbarStatus = '正在打开文件';
+  else if (saveState.status === 'saved') toolbarStatus = '已保存';
+  else if (saveState.status === 'error') toolbarStatus = '保存失败';
+  else if (quickEdit !== null) toolbarStatus = '正在编辑当前内容块';
+  else if (viewState.status === 'ready') {
+    toolbarStatus = feedbackMessage ? '操作失败' : hasUnsaved ? '有未保存更改' : 'Markdown 文档';
+  } else if (viewState.status === 'error') toolbarStatus = '打开失败';
 
   useEffect(() => {
     document.title = titleText;
@@ -1083,222 +1157,260 @@ export default function App() {
 
   return (
     <div className="app-shell" data-testid="app-shell">
-      <header className="toolbar" data-testid="toolbar">
-        <div className="toolbar-leading">
-          <button
-            type="button"
-            className="button button--toolbar open-action"
-            data-testid="btn-open"
-            disabled={documentOpenPending}
-            onClick={handleChooseFile}
-            title="打开 Markdown 文件"
-          >
-            打开
-          </button>
-          <div className="document-identity">
-            <span className="document-name">{documentName}</span>
-            <span
-              className={hasUnsaved ? 'document-status unsaved' : 'document-status'}
-              data-testid="status-text"
-            >
-              {toolbarStatus}
-            </span>
-          </div>
-        </div>
-
-        <div className="mode-toggle" role="group" aria-label="查看方式">
-          <button
-            type="button"
-            className={editorMode === 'read' ? 'mode-btn active' : 'mode-btn'}
-            data-testid="btn-read"
-            disabled={viewState.status !== 'ready' || documentOpenPending}
-            onClick={() => {
-              commitQuickEdit();
-              setEditorMode('read');
-            }}
-          >
-            预览
-          </button>
-          <button
-            type="button"
-            className={editorMode === 'edit' ? 'mode-btn active' : 'mode-btn'}
-            data-testid="btn-edit"
-            disabled={viewState.status !== 'ready' || documentOpenPending}
-            onClick={() => {
-              commitQuickEdit();
-              setEditorMode('edit');
-            }}
-          >
-            源码
-          </button>
-        </div>
-
-        <div className="toolbar-actions">
-          <button
-            type="button"
-            className={
-              outlineOpen ? 'button button--toolbar active' : 'button button--toolbar'
-            }
-            data-testid="btn-outline"
-            disabled={viewState.status !== 'ready'}
-            onClick={() => setOutlineOpen((v) => !v)}
-          >
-            目录
-          </button>
-        </div>
-      </header>
-
-      {searchOpen && viewState.status === 'ready' ? (
-        <div
-          className="search-bar"
-          data-testid="search-bar"
-          data-expanded={searchExpanded}
-          role="search"
-        >
-          <div className="search-query-row">
-            <svg className="search-icon" viewBox="0 0 20 20" aria-hidden="true">
-              <circle cx="8.5" cy="8.5" r="5.25" />
-              <path d="m12.5 12.5 4 4" />
-            </svg>
-            <input
-              ref={searchInputRef}
-              type="search"
-              className="search-input"
-              data-testid="search-input"
-              placeholder="查找"
-              aria-label="搜索当前文档"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setSearchActiveIndex(0);
-              }}
-              onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  setSearchOpen(false);
-                  return;
-                }
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  if (activeSearchCount <= 0) return;
-                  const delta = e.shiftKey ? -1 : 1;
-                  navigateSearch(delta);
-                }
-              }}
-            />
+      <div className="app-topbar">
+        <header className="toolbar" data-testid="toolbar">
+          <div className="toolbar-leading">
             <button
               type="button"
-              className="search-icon-btn search-close"
-              data-testid="search-close"
-              onClick={() => setSearchOpen(false)}
-              aria-label="关闭查找"
+              className="button button--toolbar open-action"
+              ref={openButtonRef}
+              data-testid="btn-open"
+              disabled={documentOpenPending}
+              onClick={handleChooseFile}
+              aria-label="打开"
+              title="打开 Markdown 文件"
             >
-              <svg
-                className="search-control-icon search-close-icon"
-                viewBox="0 0 16 16"
-                aria-hidden="true"
-                focusable="false"
+              <AppIcon name="folder" />
+              <span className="toolbar-label">打开</span>
+            </button>
+            <div className="document-identity">
+              <span className="document-name" title={documentName}>{documentName}</span>
+              <span
+                className={hasUnsaved ? 'document-status unsaved' : 'document-status'}
+                data-testid="status-text"
+                role="status"
               >
-                <path d="M5.53 4.47a.75.75 0 0 0-1.06 1.06L6.94 8l-2.47 2.47a.75.75 0 0 0 1.06 1.06L8 9.06l2.47 2.47a.75.75 0 0 0 1.06-1.06L9.06 8l2.47-2.47a.75.75 0 0 0-1.06-1.06L8 6.94 5.53 4.47Z" />
-              </svg>
+                {toolbarStatus}
+              </span>
+            </div>
+          </div>
+
+          <div className="mode-toggle" role="group" aria-label="查看方式" data-active-index={editorMode === 'read' ? '0' : '1'}>
+            <span className="mode-indicator" aria-hidden="true" />
+            <button
+              type="button"
+              className={editorMode === 'read' ? 'mode-btn active' : 'mode-btn'}
+              data-testid="btn-read"
+              aria-pressed={editorMode === 'read'}
+              disabled={viewState.status !== 'ready' || documentOpenPending}
+              onClick={() => {
+                commitQuickEdit();
+                setEditorMode('read');
+              }}
+            >
+              文档
+            </button>
+            <button
+              type="button"
+              className={editorMode === 'edit' ? 'mode-btn active' : 'mode-btn'}
+              data-testid="btn-edit"
+              aria-pressed={editorMode === 'edit'}
+              disabled={viewState.status !== 'ready' || documentOpenPending}
+              onClick={() => {
+                commitQuickEdit();
+                setEditorMode('edit');
+              }}
+            >
+              源码
             </button>
           </div>
-          <div className="search-navigation-row" aria-hidden={!searchExpanded}>
-            <div className="search-navigation-actions">
-              <button
-                type="button"
-                className="search-icon-btn"
-                data-testid="search-prev"
-                disabled={activeSearchCount <= 0}
-                onClick={() => {
-                  navigateSearch(-1);
-                }}
-                aria-label="上一个匹配项"
-              >
-                <svg
-                  className="search-control-icon search-arrow-icon"
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path d="M6 6l2-2 2 2M8 4v8" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className="search-icon-btn"
-                data-testid="search-next"
-                disabled={activeSearchCount <= 0}
-                onClick={() => {
-                  navigateSearch(1);
-                }}
-                aria-label="下一个匹配项"
-              >
-                <svg
-                  className="search-control-icon search-arrow-icon"
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path d="m6 10 2 2 2-2M8 12V4" />
-                </svg>
-              </button>
-            </div>
-            <span className="search-count" data-testid="search-count">
-              {activeSearchCount > 0
-                ? `${activeSearchIndex + 1} / ${activeSearchCount}`
-                : '0 / 0'}
-            </span>
+
+          <div className="toolbar-actions">
+            <button
+              type="button"
+              className={`button button--toolbar button--save${hasUnsaved ? ' button--primary' : ''}`}
+              data-testid="btn-save"
+              disabled={viewState.status !== 'ready' || !hasUnsaved || documentOpenPending || saveState.status === 'saving'}
+              onClick={() => void handleSave()}
+              title="保存 (Ctrl/Cmd+S)"
+              aria-label={saveState.status === 'saving' ? '正在保存' : '保存'}
+            >
+              <AppIcon name={saveState.status === 'saving' ? 'loading' : 'save'} className={saveState.status === 'saving' ? 'icon-spin' : ''} />
+              保存
+            </button>
+            <button
+              type="button"
+              ref={searchButtonRef}
+              className={`button button--toolbar toolbar-icon-button${searchOpen ? ' active' : ''}`}
+              data-testid="btn-search"
+              disabled={viewState.status !== 'ready'}
+              onClick={openSearch}
+              aria-label="查找"
+              aria-expanded={searchOpen && viewState.status === 'ready'}
+              aria-controls={searchOpen && viewState.status === 'ready' ? 'document-search' : undefined}
+              title="查找 (Ctrl/Cmd+F)"
+            >
+              <AppIcon name="search" />
+            </button>
+            <button
+              type="button"
+              ref={outlineButtonRef}
+              className={
+                outlineOpen ? 'button button--toolbar button--outline active' : 'button button--toolbar button--outline'
+              }
+              data-testid="btn-outline"
+              aria-label="目录"
+              aria-expanded={outlineOpen && viewState.status === 'ready'}
+              aria-controls={outlineOpen && viewState.status === 'ready' ? 'document-outline' : undefined}
+              title="目录"
+              disabled={viewState.status !== 'ready'}
+              onClick={() => setOutlineOpen((v) => !v)}
+            >
+              <AppIcon name="outline" />
+              <span className="toolbar-label">目录</span>
+            </button>
           </div>
-        </div>
-      ) : null}
+        </header>
+        {feedbackMessage ? (
+          <div className="app-feedback app-feedback--error" data-testid="app-feedback" role="alert">
+            <AppIcon name="alert" />
+            <p>{feedbackMessage}</p>
+          </div>
+        ) : null}
+      </div>
 
       <div className="main-row">
+        {searchOpen && viewState.status === 'ready' ? (
+          <div
+            id="document-search"
+            className="search-bar"
+            data-testid="search-bar"
+            data-expanded={searchExpanded}
+            role="search"
+          >
+            <div className="search-query-row">
+              <AppIcon name="search" className="search-icon" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                className="search-input"
+                data-testid="search-input"
+                placeholder="查找"
+                aria-label="搜索当前文档"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setSearchActiveIndex(0);
+                }}
+                onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
+                  if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeSearch();
+                    return;
+                  }
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (activeSearchCount <= 0) return;
+                    const delta = e.shiftKey ? -1 : 1;
+                    navigateSearch(delta);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="search-icon-btn search-close"
+                data-testid="search-close"
+                onClick={closeSearch}
+                aria-label="关闭查找"
+              >
+                <AppIcon name="close" className="search-control-icon" />
+              </button>
+            </div>
+            <div className="search-navigation-row" aria-hidden={!searchExpanded}>
+              <div className="search-navigation-actions">
+                <button
+                  type="button"
+                  className="search-icon-btn"
+                  data-testid="search-prev"
+                  disabled={activeSearchCount <= 0}
+                  onClick={() => {
+                    navigateSearch(-1);
+                  }}
+                  aria-label="上一个匹配项"
+                >
+                  <AppIcon name="up" className="search-control-icon" />
+                </button>
+                <button
+                  type="button"
+                  className="search-icon-btn"
+                  data-testid="search-next"
+                  disabled={activeSearchCount <= 0}
+                  onClick={() => {
+                    navigateSearch(1);
+                  }}
+                  aria-label="下一个匹配项"
+                >
+                  <AppIcon name="down" className="search-control-icon" />
+                </button>
+              </div>
+              <span className="search-count" data-testid="search-count">
+                {activeSearchCount > 0
+                  ? `${activeSearchIndex + 1} / ${activeSearchCount}`
+                  : '0 / 0'}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
         {outlineOpen && viewState.status === 'ready' ? (
-          <aside className="outline-panel" data-testid="outline-panel">
-            <div className="outline-heading">大纲</div>
-            {outline.length === 0 ? (
-              <div className="outline-empty">无大纲</div>
-            ) : (
-              <nav className="outline-list">
-                {outline.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    className={
-                      activeHeadingId === entry.id ? 'outline-item current' : 'outline-item'
-                    }
-                    data-testid="outline-item"
-                    data-level={entry.level}
-                    aria-current={activeHeadingId === entry.id ? 'location' : undefined}
-                    style={{ paddingLeft: `${(entry.level - 1) * 12 + 8}px` }}
-                    onClick={() => {
-                      setActiveHeadingId(entry.id);
-                      if (editorMode !== 'read') setEditorMode('read');
-                      window.setTimeout(() => {
-                        const reader = readerRef.current;
-                        const heading = reader?.ownerDocument.getElementById(entry.id);
-                        if (reader && heading && reader.contains(heading)) {
-                          heading.scrollIntoView({
-                            behavior: getPreferredScrollBehavior(),
-                            block: 'start'
-                          });
-                        }
-                      }, 0);
-                    }}
-                  >
-                    <span className="outline-item-label">{entry.text}</span>
-                  </button>
-                ))}
-              </nav>
-            )}
-          </aside>
+          <>
+            {!outlineDocked ? <div className="outline-backdrop" data-testid="outline-backdrop" aria-hidden="true" /> : null}
+            <aside ref={outlinePanelRef} id="document-outline" className="outline-panel" data-testid="outline-panel" aria-label="文档目录">
+              <div className="outline-heading">
+                <span>目录</span>
+                <button type="button" className="search-icon-btn outline-close" data-testid="close-outline" onClick={() => closeOutline(true)} aria-label="关闭目录" title="关闭目录">
+                  <AppIcon name="close" />
+                </button>
+              </div>
+              {outline.length === 0 ? (
+                <div className="outline-empty">无大纲</div>
+              ) : (
+                <nav className="outline-list" aria-label="文档标题">
+                  {outline.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      className={
+                        activeHeadingId === entry.id ? 'outline-item current' : 'outline-item'
+                      }
+                      data-testid="outline-item"
+                      data-level={entry.level}
+                      title={entry.text}
+                      aria-current={activeHeadingId === entry.id ? 'location' : undefined}
+                      style={{ paddingLeft: `${(entry.level - 1) * 12 + 8}px` }}
+                      onClick={() => {
+                        commitQuickEdit();
+                        setActiveHeadingId(entry.id);
+                        if (!outlineDocked) closeOutline(false);
+                        if (editorMode !== 'read') setEditorMode('read');
+                        window.setTimeout(() => {
+                          const reader = readerRef.current;
+                          const heading = reader?.ownerDocument.getElementById(entry.id);
+                          if (reader && heading && reader.contains(heading)) {
+                            heading.scrollIntoView({
+                              behavior: getPreferredScrollBehavior(),
+                              block: 'start'
+                            });
+                          }
+                        }, 0);
+                      }}
+                    >
+                      <span className="outline-item-label">{entry.text}</span>
+                    </button>
+                  ))}
+                </nav>
+              )}
+            </aside>
+          </>
         ) : null}
 
         <main
           ref={contentRef}
           className="content"
           data-testid="content"
+          aria-busy={documentOpenPending}
           onScroll={outlineOpen ? updateActiveHeading : undefined}
         >
           {viewState.status === 'empty' ? (
@@ -1327,8 +1439,9 @@ export default function App() {
           ) : null}
 
           {viewState.status === 'loading' ? (
-            <div className="empty-state" data-testid="loading-state">
-              正在打开文件
+            <div className="empty-state" data-testid="loading-state" role="status">
+              <AppIcon name="loading" className="icon-spin" />
+              <p>正在打开文件</p>
             </div>
           ) : null}
 
@@ -1441,15 +1554,16 @@ export default function App() {
 
       {pendingExternal ? (
         <div className="modal-backdrop" data-testid="external-link-modal">
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="ext-title">
+          <div ref={externalDialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="ext-title" aria-describedby="ext-description" tabIndex={-1}>
             <h2 id="ext-title">安全提示</h2>
-            <p>您即将访问外部链接，确认离开此应用程序吗？</p>
+            <p id="ext-description">您即将访问外部链接，确认离开此应用程序吗？</p>
             <p className="modal-url">{pendingExternal.url}</p>
             <div className="modal-actions">
               <button
                 type="button"
                 className="button"
                 data-testid="external-cancel"
+                data-dialog-initial-focus
                 onClick={() => setPendingExternal(null)}
               >
                 取消
@@ -1467,7 +1581,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {discardDialog ? (
+      {discardDialog && !pendingExternal ? (
         <div
           className="modal-backdrop"
           data-testid="discard-modal"
@@ -1477,9 +1591,9 @@ export default function App() {
             }
           }}
         >
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="discard-title">
+          <div ref={discardDialogElementRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="discard-title" aria-describedby="discard-description" tabIndex={-1}>
             <h2 id="discard-title">未保存更改</h2>
-            <p>当前文档有未保存更改。</p>
+            <p id="discard-description">当前文档有未保存更改。</p>
             {discardDialog.reason === 'close' && documentOpenPending ? (
               <p
                 className="modal-feedback"
@@ -1529,6 +1643,7 @@ export default function App() {
                     type="button"
                     className="button"
                     data-testid="discard-cancel"
+                    data-dialog-initial-focus
                     onClick={cancelDiscardDialog}
                   >
                     继续编辑

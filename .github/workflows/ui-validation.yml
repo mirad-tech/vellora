@@ -1,0 +1,76 @@
+name: UI validation
+
+on:
+  push:
+    branches: ['codex/vellora-ui-polish-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows UI and native regression
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      VELLORA_E2E_SCREENSHOT_DIR: artifacts/ui-review/browser
+      VELLORA_DESKTOP_SCREENSHOT_DIR: artifacts/ui-review/desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build:web
+      - name: Check out the visual baseline
+        uses: actions/checkout@v7
+        with:
+          ref: 7f0bd506d1aa81d463d6f6cdd54980240a18522a
+          path: .ui-review-baseline
+      - name: Restore baseline dependencies
+        run: npm ci --prefix .ui-review-baseline
+      - name: Capture the baseline
+        env:
+          VELLORA_UI_REVIEW_ROOT: .ui-review-baseline
+          VELLORA_UI_REVIEW_LABEL: before
+        run: node tools/verification/capture-ui-review.mjs
+      - name: Capture the updated UI
+        env:
+          VELLORA_UI_REVIEW_LABEL: after
+        run: node tools/verification/capture-ui-review.mjs
+      - name: Upload the visual comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vellora-ui-comparison-windows
+          path: |
+            artifacts/ui-review/before
+            artifacts/ui-review/after
+          if-no-files-found: warn
+          retention-days: 14
+      - run: npm run test:e2e:ci
+      - run: npm run test:rust
+      - name: Install native test drivers
+        run: |
+          cargo install tauri-driver --locked
+          npm run tools:msedgedriver
+      # Builds a test executable only. No installer, release, or signing step.
+      - run: npm run test:e2e:desktop
+      - name: Upload rendering evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vellora-ui-review-windows
+          path: artifacts/ui-review
+          if-no-files-found: warn
+          retention-days: 14

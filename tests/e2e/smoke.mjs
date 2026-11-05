@@ -174,8 +174,17 @@ function assertApprox(actual, expected, msg, tolerance = 0.05) {
   assert(Math.abs(actual - expected) <= tolerance, `${msg}: expected ${expected}, got ${actual}`);
 }
 
-function assertIntegerGeometry(metric, label) {
+function assertIntegerControlSize(metric, label) {
   for (const key of ['x', 'y', 'width', 'height']) {
+    assert(Number.isFinite(metric[key]), `${label} ${key} is finite`);
+  }
+  // A one-pixel container border can center controls at half-pixel coordinates.
+  // Their dimensions stay integral while their shared edges are checked below.
+  for (const key of ['x', 'y']) {
+    assertApprox(metric[key], Math.round(metric[key]), `${label} ${key} stays within a half pixel`, 0.5);
+  }
+  for (const key of ['width', 'height']) {
+    assert(metric[key] > 0, `${label} ${key} is positive`);
     assertApprox(metric[key], Math.round(metric[key]), `${label} ${key} is pixel-aligned`);
   }
 }
@@ -194,15 +203,46 @@ function relativeLuminance(color) {
   return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
 }
 
-function contrastRatio(foreground, background) {
-  const foregroundLuminance = relativeLuminance(foreground);
-  const backgroundLuminance = relativeLuminance(background);
+function compositeColor(color, backdrop) {
+  const parse = (value) => value.trim().startsWith('#')
+    ? [0, 2, 4].map((offset) => Number.parseInt(value.trim().slice(offset + 1, offset + 3), 16))
+    : (value.match(/[\d.]+/g) || []).map(Number);
+  const channels = parse(color);
+  const base = parse(backdrop);
+  assert(channels.length >= 3 && base.length >= 3, 'contrast colors have RGB channels');
+  const alpha = channels[3] ?? 1;
+  return `rgb(${channels.slice(0, 3).map((channel, index) =>
+    channel * alpha + base[index] * (1 - alpha)
+  ).join(', ')})`;
+}
+
+function contrastRatio(foreground, background, canvas = '#ffffff') {
+  const resolvedBackground = compositeColor(background, canvas);
+  const foregroundLuminance = relativeLuminance(compositeColor(foreground, resolvedBackground));
+  const backgroundLuminance = relativeLuminance(resolvedBackground);
   const lighter = Math.max(foregroundLuminance, backgroundLuminance);
   const darker = Math.min(foregroundLuminance, backgroundLuminance);
   return (lighter + 0.05) / (darker + 0.05);
 }
 
 async function readVisualMetrics(page, selectors, variables = []) {
+  // Entrance motion belongs to the UI, but measurements describe its settled state.
+  await page.evaluate(async (requestedSelectors) => {
+    const pending = new Set();
+    for (const selector of requestedSelectors) {
+      let element = document.querySelector(selector);
+      while (element instanceof HTMLElement) {
+        for (const animation of element.getAnimations()) {
+          if (animation.effect?.getComputedTiming().iterations === Infinity) continue;
+          if (animation.playState === 'running' || animation.pending) {
+            pending.add(animation);
+          }
+        }
+        element = element.parentElement;
+      }
+    }
+    await Promise.all(Array.from(pending, (animation) => animation.finished.catch(() => undefined)));
+  }, selectors);
   return page.evaluate(
     ({ requestedSelectors, requestedVariables }) => {
       const elements = {};
@@ -328,7 +368,8 @@ async function assertHoverVisual(
   selector,
   label,
   backgroundVariable = '--control-hover',
-  expectedRadius = 10
+  expectedRadius = 8,
+  expectBackgroundChange = true
 ) {
   const readState = () =>
     page.$eval(selector, (element) => {
@@ -362,7 +403,7 @@ async function assertHoverVisual(
   const before = await readState();
   const expectedBackground = await page.evaluate((variableName) => {
     const probe = document.createElement('span');
-    probe.style.backgroundColor = `var(${variableName})`;
+    probe.style.backgroundColor = variableName.startsWith('--') ? `var(${variableName})` : variableName;
     document.body.append(probe);
     const resolved = getComputedStyle(probe).backgroundColor;
     probe.remove();
@@ -393,8 +434,10 @@ async function assertHoverVisual(
   }
   assertApprox(after.borderRadius, expectedRadius, `${label} hover radius`);
   assert(
-    after.backgroundColor !== before.backgroundColor,
-    `${label} hover background visibly changes from ${before.backgroundColor}`
+    expectBackgroundChange
+      ? after.backgroundColor !== before.backgroundColor
+      : after.backgroundColor === before.backgroundColor,
+    `${label} hover ${expectBackgroundChange ? 'changes' : 'preserves'} its background`
   );
   assert(
     after.backgroundColor === expectedBackground,
@@ -403,7 +446,7 @@ async function assertHoverVisual(
   return after;
 }
 
-async function assertInsetHoverVisual(page, selector, label, expectedRadius = 10) {
+async function assertInsetHoverVisual(page, selector, label, expectedRadius = 8) {
   const readState = () =>
     page.$eval(selector, (element) => {
       const rect = element.getBoundingClientRect();
@@ -477,8 +520,8 @@ async function assertInsetHoverVisual(page, selector, label, expectedRadius = 10
   for (const key of ['x', 'y', 'width', 'height']) {
     assertApprox(after[key], before[key], `${label} hover keeps ${key}`);
   }
-  assertApprox(after.width, 44, `${label} keeps its click width`);
-  assertApprox(after.height, 44, `${label} keeps its click height`);
+  assertApprox(after.width, 40, `${label} keeps its click width`);
+  assertApprox(after.height, 40, `${label} keeps its click height`);
   assertApprox(after.borderRadius, expectedRadius, `${label} click surface radius`);
   assertApprox(after.insetWidth, 28, `${label} hover surface width`);
   assertApprox(after.insetHeight, 28, `${label} hover surface height`);
@@ -500,7 +543,7 @@ async function assertInsetHoverVisual(page, selector, label, expectedRadius = 10
   return after;
 }
 
-async function assertDisabledHoverStable(page, selector, label, expectedRadius = 10) {
+async function assertDisabledHoverStable(page, selector, label, expectedRadius = 8) {
   const readState = () =>
     page.$eval(selector, (element) => {
       const rect = element.getBoundingClientRect();
@@ -532,7 +575,7 @@ async function assertDisabledHoverStable(page, selector, label, expectedRadius =
   );
 }
 
-async function assertPressedGeometry(page, selector, label, expectedRadius = 10) {
+async function assertPressedGeometry(page, selector, label, expectedRadius = 8) {
   const readState = () =>
     page.$eval(selector, (element) => {
       const rect = element.getBoundingClientRect();
@@ -560,16 +603,34 @@ async function assertPressedGeometry(page, selector, label, expectedRadius = 10)
 
 async function readToolbarLayout(page) {
   return page.evaluate(() => {
-    const rect = (selector) => {
-      const element = document.querySelector(selector);
+    const rectFor = (element) => {
       if (!(element instanceof HTMLElement)) return null;
       const bounds = element.getBoundingClientRect();
-      return { left: bounds.left, right: bounds.right };
+      return {
+        left: bounds.left, right: bounds.right,
+        top: bounds.top, bottom: bounds.bottom,
+        width: bounds.width, height: bounds.height
+      };
     };
+    const children = (selector) => Array.from(document.querySelector(selector)?.children ?? [])
+      .map(rectFor).filter((bounds) => bounds && bounds.width > 0 && bounds.height > 0);
+    const union = (rects) => rects.length > 0 ? {
+      left: Math.min(...rects.map((bounds) => bounds.left)),
+      right: Math.max(...rects.map((bounds) => bounds.right)),
+      top: Math.min(...rects.map((bounds) => bounds.top)),
+      bottom: Math.max(...rects.map((bounds) => bounds.bottom))
+    } : null;
+    const leadingChildren = children('.toolbar-leading');
+    const actionChildren = children('.toolbar-actions');
+    const leadingElement = document.querySelector('.toolbar-leading');
     return {
-      leading: rect('.toolbar-leading'),
-      toggle: rect('.mode-toggle'),
-      actions: rect('.toolbar-actions'),
+      // display:contents has no box; both rows are represented by their real children.
+      leading: leadingElement instanceof HTMLElement && getComputedStyle(leadingElement).display === 'contents'
+        ? union(leadingChildren) : rectFor(leadingElement),
+      leadingChildren,
+      toggle: rectFor(document.querySelector('.mode-toggle')),
+      actions: union(actionChildren),
+      toolbar: rectFor(document.querySelector('.toolbar')),
       overflowX: document.documentElement.scrollWidth - window.innerWidth
     };
   });
@@ -657,7 +718,8 @@ async function run() {
         '.empty-app-icon'
       ],
       [
-        '--faint',
+        '--muted',
+        '--bg',
         '--surface',
         '--radius-highlight',
         '--radius-content',
@@ -665,6 +727,7 @@ async function run() {
         '--radius-group',
         '--radius-surface',
         '--radius-floating',
+        '--radius-modal',
         '--radius-pill'
       ]
     );
@@ -673,20 +736,21 @@ async function run() {
     assert(emptyVisual.overflowX <= 0, 'desktop empty state has no horizontal overflow');
     assert(emptyVisual.variables['--radius-highlight'] === '3px', 'highlight radius token is 3px');
     assert(emptyVisual.variables['--radius-content'] === '6px', 'content radius token is 6px');
-    assert(emptyVisual.variables['--radius-control'] === '10px', 'control radius token is 10px');
+    assert(emptyVisual.variables['--radius-control'] === '8px', 'control radius token is 8px');
     assert(emptyVisual.variables['--radius-group'] === '12px', 'group radius token is 12px');
     assert(emptyVisual.variables['--radius-surface'] === '', 'overlapping surface radius token is removed');
-    assert(emptyVisual.variables['--radius-floating'] === '20px', 'floating radius token is 20px');
+    assert(emptyVisual.variables['--radius-floating'] === '14px', 'floating radius token is 14px');
+    assert(emptyVisual.variables['--radius-modal'] === '16px', 'modal radius token is 16px');
     assert(emptyVisual.variables['--radius-pill'] === '999px', 'pill radius token is 999px');
-    assertApprox(emptyVisual.elements['.toolbar'].height, 48, 'toolbar height');
+    assertApprox(emptyVisual.elements['.toolbar'].height, 52, 'toolbar height');
     assertApprox(emptyVisual.elements['.button--toolbar'].height, 32, 'toolbar button height');
-    assertApprox(emptyVisual.elements['.button--toolbar'].borderRadius, 10, 'toolbar button radius');
+    assertApprox(emptyVisual.elements['.button--toolbar'].borderRadius, 8, 'toolbar button radius');
     assertApprox(emptyVisual.elements['.mode-toggle'].height, 32, 'mode toggle height');
-    assertApprox(emptyVisual.elements['.mode-toggle'].borderRadius, 12, 'mode toggle radius');
-    assertApprox(emptyVisual.elements['.mode-btn'].height, 28, 'mode button height');
-    assertApprox(emptyVisual.elements['.mode-btn'].borderRadius, 10, 'mode button radius');
+    assertApprox(emptyVisual.elements['.mode-toggle'].borderRadius, 8, 'mode toggle radius');
+    assertApprox(emptyVisual.elements['.mode-btn'].height, 30, 'mode button height');
+    assertApprox(emptyVisual.elements['.mode-btn'].borderRadius, 7, 'mode button radius');
     assertApprox(emptyVisual.elements['.button--primary'].height, 32, 'primary button height');
-    assertApprox(emptyVisual.elements['.button--primary'].borderRadius, 10, 'primary button radius');
+    assertApprox(emptyVisual.elements['.button--primary'].borderRadius, 8, 'primary button radius');
     assertApprox(emptyVisual.elements['.empty-app-icon'].width, 56, 'empty app icon width');
     assertApprox(emptyVisual.elements['.empty-app-icon'].height, 56, 'empty app icon height');
     assertApprox(emptyVisual.elements['.empty-app-icon'].borderRadius, 12, 'empty app icon radius');
@@ -694,16 +758,16 @@ async function run() {
       element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0
     );
     assert(emptyIconLoaded, 'empty state uses a loaded application icon');
-    assertIntegerGeometry(emptyVisual.elements['.button--toolbar'], 'toolbar button');
-    assertIntegerGeometry(emptyVisual.elements['.mode-toggle'], 'mode toggle');
-    assertIntegerGeometry(emptyVisual.elements['.mode-btn'], 'mode button');
+    assertIntegerControlSize(emptyVisual.elements['.button--toolbar'], 'toolbar button');
+    assertIntegerControlSize(emptyVisual.elements['.mode-toggle'], 'mode toggle');
+    assertIntegerControlSize(emptyVisual.elements['.mode-btn'], 'mode button');
     assert(
-      contrastRatio(emptyVisual.variables['--faint'], emptyVisual.variables['--surface']) >= 4.5,
+      contrastRatio(emptyVisual.variables['--muted'], emptyVisual.variables['--bg']) >= 4.5,
       'small status text contrast is at least 4.5:1'
     );
     await assertHoverVisual(page, '[data-testid="btn-open"]', 'toolbar button');
     await assertHoverVisual(page, '.button--primary', 'primary button', '--primary-hover');
-    await assertDisabledHoverStable(page, '[data-testid="btn-read"]', 'disabled mode button');
+    await assertDisabledHoverStable(page, '[data-testid="btn-read"]', 'disabled mode button', 7);
     await assertDisabledHoverStable(page, '[data-testid="btn-outline"]', 'disabled outline button');
     const focusBefore = await readVisualMetrics(page, ['[data-testid="btn-open"]']);
     await page.keyboard.press('Tab');
@@ -714,7 +778,7 @@ async function run() {
     const focusVisual = await readVisualMetrics(page, ['[data-testid="btn-open"]']);
     assertApprox(focusVisual.elements['[data-testid="btn-open"]'].outlineWidth, 2, 'button focus ring');
     assertApprox(focusVisual.elements['[data-testid="btn-open"]'].outlineOffset, 2, 'button focus offset');
-    assertApprox(focusVisual.elements['[data-testid="btn-open"]'].borderRadius, 10, 'focused button radius');
+    assertApprox(focusVisual.elements['[data-testid="btn-open"]'].borderRadius, 8, 'focused button radius');
     for (const key of ['x', 'y', 'width', 'height']) {
       assertApprox(
         focusVisual.elements['[data-testid="btn-open"]'][key],
@@ -734,6 +798,7 @@ async function run() {
     const previewVisual = await readVisualMetrics(page, [
       '.markdown-body',
       '.mode-toggle',
+      '.mode-indicator',
       '[data-testid="btn-read"]',
       '[data-testid="btn-edit"]',
       '.markdown-body p code',
@@ -743,17 +808,17 @@ async function run() {
       '[data-testid="missing-image"]'
     ]);
     assertApprox(previewVisual.elements['.markdown-body'].width, 800, 'preview document width');
-    assertApprox(previewVisual.elements['.markdown-body'].paddingLeft, 30, 'preview horizontal padding');
-    assertApprox(previewVisual.elements['.markdown-body'].paddingTop, 44, 'preview top padding');
-    assertApprox(previewVisual.elements['.mode-toggle'].borderRadius, 12, 'preview mode group radius');
-    assertApprox(previewVisual.elements['[data-testid="btn-read"]'].borderRadius, 10, 'active mode radius');
-    assertApprox(previewVisual.elements['[data-testid="btn-edit"]'].borderRadius, 10, 'inactive mode radius');
+    assertApprox(previewVisual.elements['.markdown-body'].paddingLeft, 32, 'preview horizontal padding');
+    assertApprox(previewVisual.elements['.markdown-body'].paddingTop, 32, 'preview top padding');
+    assertApprox(previewVisual.elements['.mode-toggle'].borderRadius, 8, 'preview mode group radius');
+    assertApprox(previewVisual.elements['[data-testid="btn-read"]'].borderRadius, 7, 'active mode radius');
+    assertApprox(previewVisual.elements['[data-testid="btn-edit"]'].borderRadius, 7, 'inactive mode radius');
     assert(
-      previewVisual.elements['[data-testid="btn-read"]'].backgroundColor !==
+      previewVisual.elements['.mode-indicator'].backgroundColor !==
         previewVisual.elements['.mode-toggle'].backgroundColor,
-      'active mode surface differs from the group surface'
+      'independent selected mode surface differs from the group surface'
     );
-    assertApprox(previewVisual.elements['.markdown-body p code'].borderRadius, 6, 'inline code radius');
+    assertApprox(previewVisual.elements['.markdown-body p code'].borderRadius, 4, 'inline code radius');
     assertApprox(previewVisual.elements['.markdown-body pre'].borderRadius, 12, 'code block radius');
     assertApprox(previewVisual.elements['.markdown-body pre code'].borderRadius, 0, 'code block inner layer stays flat');
     assertApprox(previewVisual.elements['.markdown-body img'].borderRadius, 6, 'Markdown image radius');
@@ -761,7 +826,8 @@ async function run() {
     assert(
       contrastRatio(
         previewVisual.elements['[data-testid="btn-edit"]'].color,
-        previewVisual.elements['.mode-toggle'].backgroundColor
+        previewVisual.elements['.mode-toggle'].backgroundColor,
+        emptyVisual.variables['--bg']
       ) >= 4.5,
       'inactive mode button text contrast is at least 4.5:1'
     );
@@ -769,22 +835,26 @@ async function run() {
       page,
       '[data-testid="btn-read"]',
       'active mode button',
-      '--surface-raised'
+      'transparent',
+      7,
+      false
     );
     await capture('02a-preview-active-mode-hover-1280x800.png');
     const modeHoverVisual = await assertHoverVisual(
       page,
       '[data-testid="btn-edit"]',
       'mode button',
-      '--control-active'
+      '--control-hover',
+      7
     );
     assert(
-      modeHoverVisual.backgroundColor !== previewVisual.elements['.mode-toggle'].backgroundColor,
-      'mode button hover is visibly deeper than the toggle surface'
+      modeHoverVisual.backgroundColor !== 'rgba(0, 0, 0, 0)',
+      'inactive mode hover adds a visible layer over the track'
     );
     assert(
-      activeModeHoverVisual.backgroundColor !== previewVisual.elements['.mode-toggle'].backgroundColor,
-      'active mode hover stays visibly separated from the toggle surface'
+      activeModeHoverVisual.backgroundColor === 'rgba(0, 0, 0, 0)' &&
+        previewVisual.elements['.mode-indicator'].backgroundColor === 'rgb(255, 255, 255)',
+      'active mode hover preserves the independent white slider'
     );
     assert(
       activeModeHoverVisual.backgroundColor !== modeHoverVisual.backgroundColor,
@@ -827,8 +897,8 @@ async function run() {
       '[data-testid="btn-edit"]'
     ]);
     assertApprox(sourceVisual.elements['.source-editor'].width, 800, 'source document width');
-    assertApprox(sourceVisual.elements['.source-editor'].paddingLeft, 30, 'source horizontal padding');
-    assertApprox(sourceVisual.elements['.source-editor'].paddingTop, 44, 'source top padding');
+    assertApprox(sourceVisual.elements['.source-editor'].paddingLeft, 32, 'source horizontal padding');
+    assertApprox(sourceVisual.elements['.source-editor'].paddingTop, 32, 'source top padding');
     assertApprox(
       sourceVisual.elements['.source-editor'].x,
       previewVisual.elements['.markdown-body'].x,
@@ -843,8 +913,8 @@ async function run() {
         );
       }
     }
-    assertApprox(sourceVisual.elements['[data-testid="btn-read"]'].borderRadius, 10, 'inactive read mode radius');
-    assertApprox(sourceVisual.elements['[data-testid="btn-edit"]'].borderRadius, 10, 'active source mode radius');
+    assertApprox(sourceVisual.elements['[data-testid="btn-read"]'].borderRadius, 7, 'inactive read mode radius');
+    assertApprox(sourceVisual.elements['[data-testid="btn-edit"]'].borderRadius, 7, 'active source mode radius');
     await capture('03-source-1280x800.png');
     await setTextareaValue(
       page,
@@ -893,14 +963,15 @@ async function run() {
       '[data-testid="discard-cancel"]',
       '[data-testid="discard-confirm"]'
     ]);
-    assertApprox(discardVisual.elements['.modal'].borderRadius, 20, 'discard modal uses floating surface radius');
-    assertIntegerGeometry(discardVisual.elements['.modal'], 'discard modal');
-    assertIntegerGeometry(discardVisual.elements['.modal-actions'], 'discard modal actions');
+    assertApprox(discardVisual.elements['.modal'].borderRadius, 16, 'discard modal uses confirmation radius');
+    assertApprox(discardVisual.elements['.modal'].width, 440, 'discard modal width');
+    assertApprox(discardVisual.elements['.modal'].paddingLeft, 24, 'discard modal padding');
+    assertIntegerControlSize(discardVisual.elements['.modal-actions'], 'discard modal actions');
     assertApprox(discardVisual.elements['[data-testid="discard-cancel"]'].height, 32, 'modal secondary button height');
-    assertApprox(discardVisual.elements['[data-testid="discard-cancel"]'].borderRadius, 10, 'modal secondary button radius');
+    assertApprox(discardVisual.elements['[data-testid="discard-cancel"]'].borderRadius, 8, 'modal secondary button radius');
     assertApprox(discardVisual.elements['[data-testid="discard-confirm"]'].height, 32, 'danger button height');
-    assertApprox(discardVisual.elements['[data-testid="discard-confirm"]'].borderRadius, 10, 'danger button radius');
-    assertIntegerGeometry(discardVisual.elements['[data-testid="discard-confirm"]'], 'danger button');
+    assertApprox(discardVisual.elements['[data-testid="discard-confirm"]'].borderRadius, 8, 'danger button radius');
+    assertIntegerControlSize(discardVisual.elements['[data-testid="discard-confirm"]'], 'danger button');
     assert(
       contrastRatio(
         discardVisual.elements['[data-testid="discard-confirm"]'].color,
@@ -940,13 +1011,13 @@ async function run() {
       '[data-testid="search-close"]',
       '.search-navigation-actions .search-icon-btn'
     ]);
-    assertApprox(searchVisual.elements['.search-bar'].width, 340, 'empty search matches reference width');
-    assertApprox(searchVisual.elements['.search-bar'].height, 46, 'empty search includes its inset edge');
-    assertApprox(searchVisual.elements['.search-bar'].borderRadius, 20, 'empty search matches reference radius');
+    assertApprox(searchVisual.elements['.search-bar'].width, 360, 'empty search matches reference width');
+    assertApprox(searchVisual.elements['.search-bar'].height, 42, 'empty search includes its single border');
+    assertApprox(searchVisual.elements['.search-bar'].borderRadius, 14, 'empty search matches reference radius');
     assertApprox(searchVisual.elements['.search-input'].borderRadius, 0, 'search input stays flat inside its clipped parent');
-    assertApprox(searchVisual.elements['[data-testid="search-close"]'].borderRadius, 10, 'search close click surface radius');
-    assertApprox(searchVisual.elements['.search-bar'].paddingTop, 1, 'search uses a one-pixel inset edge');
-    assertApprox(searchVisual.elements['.search-bar'].outlineWidth, 0, 'search has no focus outline');
+    assertApprox(searchVisual.elements['[data-testid="search-close"]'].borderRadius, 8, 'search close click surface radius');
+    assertApprox(searchVisual.elements['.search-bar'].paddingTop, 0, 'search has no additional inset padding');
+    assertApprox(searchVisual.elements['.search-bar'].outlineWidth, 2, 'search provides a visible focus outline');
     const searchClipState = await page.$eval('[data-testid="search-bar"]', (element) => ({
       overflow: getComputedStyle(element).overflow,
       inputRadius: getComputedStyle(element.querySelector('.search-input')).borderRadius
@@ -975,8 +1046,8 @@ async function run() {
       'search navigation animates max-height'
     );
     assert(
-      emptySearchState.transitionDuration.split(',').map((value) => value.trim()).includes('0.36s'),
-      'search navigation uses the 360ms expand transition'
+      emptySearchState.transitionDuration.split(',').map((value) => value.trim()).includes('0.2s'),
+      'search navigation uses the 200ms expand transition'
     );
     const searchTransitionProperties = emptySearchState.transitionProperty
       .split(',')
@@ -987,12 +1058,12 @@ async function run() {
     const opacityTransitionIndex = searchTransitionProperties.indexOf('opacity');
     assert(opacityTransitionIndex >= 0, 'search navigation animates opacity');
     assert(
-      searchTransitionDurations[opacityTransitionIndex] === '0.36s',
+      searchTransitionDurations[opacityTransitionIndex] === '0.2s',
       'search navigation content fades through the full expand duration'
     );
     assert(
-      emptySearchState.transitionTimingFunction.includes('ease-in-out'),
-      'search navigation uses a gradual ease-in-out curve'
+      emptySearchState.transitionTimingFunction.includes('cubic-bezier(0.165, 0.84, 0.44, 1)'),
+      'search navigation uses the reference out curve'
     );
     const searchFrame = await page.$eval('[data-testid="search-bar"]', (element) => {
       const style = getComputedStyle(element);
@@ -1004,9 +1075,9 @@ async function run() {
       };
     });
     for (const width of Object.values(searchFrame)) {
-      assertApprox(width, 0, 'search has no outer border');
+      assertApprox(width, 1, 'search has one outer border');
     }
-    assertApprox(searchVisual.elements['.search-query-row'].height, 44, 'search query row height');
+    assertApprox(searchVisual.elements['.search-query-row'].height, 40, 'search query row height');
     assertApprox(
       searchVisual.elements['.search-navigation-row'].height,
       0,
@@ -1029,7 +1100,7 @@ async function run() {
       probe.remove();
       return resolved;
     });
-    assertApprox(closeDivider.top, 14, 'search close divider is vertically centered');
+    assertApprox(closeDivider.top, 12, 'search close divider is vertically centered');
     assertApprox(closeDivider.width, 1, 'search close divider width');
     assertApprox(closeDivider.height, 16, 'search close divider is short');
     assert(
@@ -1049,9 +1120,10 @@ async function run() {
     assertApprox(closeIconAlignment.iconVerticalOffset, 0, 'search close icon is vertically centered');
     assertApprox(closeIconAlignment.pathHorizontalOffset, 0, 'search close path is horizontally centered');
     assertApprox(closeIconAlignment.pathVerticalOffset, 0, 'search close path is vertically centered');
-    assert(closeIconAlignment.stroke === 'none', 'search close icon has no intersecting strokes');
-    assert(closeIconAlignment.fill === closeIconAlignment.buttonColor, 'search close icon follows button color');
-    assert(closeIconAlignment.closedPath, 'search close icon uses one closed silhouette');
+    assert(closeIconAlignment.stroke === closeIconAlignment.buttonColor, 'search close icon follows button color');
+    assert(closeIconAlignment.fill === 'none', 'search close icon uses the shared outline style');
+    assertApprox(closeIconAlignment.strokeWidth, 1.5, 'search close icon stroke width');
+    assert(!closeIconAlignment.closedPath, 'search close icon uses the shared crossing line path');
     const closeCenterCoverage = await readSvgCenterCoverage(page, '[data-testid="search-close"]');
     assert(
       closeCenterCoverage.minimumCenterAlpha >= 160,
@@ -1084,11 +1156,11 @@ async function run() {
       };
     });
     assert(
-      expandingSearchState.searchHeight > 46 && expandingSearchState.searchHeight < 82,
+      expandingSearchState.searchHeight > 42 && expandingSearchState.searchHeight < 74,
       `search expands through intermediate height: got ${expandingSearchState.searchHeight}`
     );
     assert(
-      expandingSearchState.navigationHeight > 0 && expandingSearchState.navigationHeight < 36,
+      expandingSearchState.navigationHeight > 0 && expandingSearchState.navigationHeight < 32,
       `search navigation reveals progressively: got ${expandingSearchState.navigationHeight}`
     );
     assert(expandingSearchState.runningAnimations > 0, 'search navigation has a running expand transition');
@@ -1103,8 +1175,8 @@ async function run() {
       return Boolean(
         search &&
         navigation &&
-        Math.abs(search.getBoundingClientRect().height - 82) <= 0.05 &&
-        Math.abs(navigation.getBoundingClientRect().height - 36) <= 0.05
+        Math.abs(search.getBoundingClientRect().height - 74) <= 0.05 &&
+        Math.abs(navigation.getBoundingClientRect().height - 32) <= 0.05
       );
     }, { timeout: 5000 });
     await page.evaluate(() => {
@@ -1120,11 +1192,11 @@ async function run() {
       '.search-count',
       'mark.search-hit'
     ]);
-    assertApprox(populatedSearchVisual.elements['.search-bar'].height, 82, 'populated search shows two rows and inset edge');
-    assertApprox(populatedSearchVisual.elements['.search-bar'].borderRadius, 20, 'populated search matches reference radius');
+    assertApprox(populatedSearchVisual.elements['.search-bar'].height, 74, 'populated search shows two rows and one border');
+    assertApprox(populatedSearchVisual.elements['.search-bar'].borderRadius, 14, 'populated search matches reference radius');
     assertApprox(
       populatedSearchVisual.elements['.search-navigation-row'].height,
-      36,
+      32,
       'search navigation row height'
     );
     assertApprox(
@@ -1149,15 +1221,15 @@ async function run() {
     );
     assertApprox(
       populatedSearchVisual.elements['[data-testid="search-prev"]'].borderRadius,
-      10,
+      8,
       'search previous button radius'
     );
     assertApprox(
       populatedSearchVisual.elements['[data-testid="search-next"]'].borderRadius,
-      10,
+      8,
       'search next button radius'
     );
-    assertApprox(populatedSearchVisual.elements['[data-testid="search-close"]'].borderRadius, 10, 'search close click radius');
+    assertApprox(populatedSearchVisual.elements['[data-testid="search-close"]'].borderRadius, 8, 'search close click radius');
     assertApprox(populatedSearchVisual.elements['mark.search-hit'].borderRadius, 3, 'preview search hit radius');
     const searchNavigationButtonRadii = await page.$$eval(
       '.search-navigation-actions .search-icon-btn',
@@ -1168,19 +1240,19 @@ async function run() {
     );
     assert(searchNavigationButtonRadii.length === 2, 'search exposes both navigation buttons');
     searchNavigationButtonRadii.forEach((radius, index) => {
-      assertApprox(radius, 10, `search navigation button ${index + 1} uses control radius`);
+      assertApprox(radius, 8, `search navigation button ${index + 1} uses control radius`);
     });
-    assertIntegerGeometry(
+    assertIntegerControlSize(
       populatedSearchVisual.elements['[data-testid="search-prev"]'],
       'search previous button'
     );
-    assertIntegerGeometry(populatedSearchVisual.elements['[data-testid="search-next"]'], 'search next button');
+    assertIntegerControlSize(populatedSearchVisual.elements['[data-testid="search-next"]'], 'search next button');
     const searchCountCenterOffset =
       populatedSearchVisual.elements['.search-count'].y +
       populatedSearchVisual.elements['.search-count'].height / 2 -
       (populatedSearchVisual.elements['.search-navigation-row'].y +
         populatedSearchVisual.elements['.search-navigation-row'].height / 2);
-    assertApprox(searchCountCenterOffset, -1, 'search result count is optically raised');
+    assertApprox(searchCountCenterOffset, 0, 'search result count is vertically centered');
     for (const [selector, ariaLabel] of [
       ['[data-testid="search-prev"]', '上一个匹配项'],
       ['[data-testid="search-next"]', '下一个匹配项']
@@ -1427,10 +1499,10 @@ async function run() {
       '.outline-item.current'
     ]);
     assertApprox(outlineVisual.elements['.outline-heading'].height, 32, 'outline heading height');
-    assertIntegerGeometry(outlineVisual.elements['.outline-heading'], 'outline heading');
+    assertIntegerControlSize(outlineVisual.elements['.outline-heading'], 'outline heading');
     assertApprox(outlineVisual.elements['.outline-item'].height, 32, 'outline item height');
-    assertApprox(outlineVisual.elements['.outline-item'].borderRadius, 10, 'outline item radius');
-    assertApprox(outlineVisual.elements['.outline-item.current'].borderRadius, 10, 'current outline item radius');
+    assertApprox(outlineVisual.elements['.outline-item'].borderRadius, 8, 'outline item radius');
+    assertApprox(outlineVisual.elements['.outline-item.current'].borderRadius, 8, 'current outline item radius');
     assert(
       outlineVisual.elements['.outline-item.current'].backgroundColor !== 'rgba(0, 0, 0, 0)',
       'current outline item has a visible active background'
@@ -1442,7 +1514,7 @@ async function run() {
       })
     );
     outlineItemGeometry.forEach((geometry, index) => {
-      assertIntegerGeometry(geometry, `outline item ${index + 1}`);
+      assertIntegerControlSize(geometry, `outline item ${index + 1}`);
     });
     await page.mouse.move(0, 0);
     await new Promise((resolve) => setTimeout(resolve, 180));
@@ -1459,7 +1531,7 @@ async function run() {
     }
     assertApprox(
       currentOutlineAfterHover.elements['.outline-item.current'].borderRadius,
-      10,
+      8,
       'current outline hover radius'
     );
     assert(
@@ -1510,9 +1582,10 @@ async function run() {
       '[data-testid="external-cancel"]',
       '[data-testid="external-confirm"]'
     ]);
-    assertApprox(externalVisual.elements['.modal'].borderRadius, 20, 'external modal uses floating surface radius');
-    assertIntegerGeometry(externalVisual.elements['.modal'], 'external modal');
-    assertIntegerGeometry(externalVisual.elements['.modal-actions'], 'external modal actions');
+    assertApprox(externalVisual.elements['.modal'].borderRadius, 16, 'external modal uses confirmation radius');
+    assertApprox(externalVisual.elements['.modal'].width, 440, 'external modal width');
+    assertApprox(externalVisual.elements['.modal'].paddingLeft, 24, 'external modal padding');
+    assertIntegerControlSize(externalVisual.elements['.modal-actions'], 'external modal actions');
     const externalActions = externalVisual.elements['.modal-actions'];
     const externalCancel = externalVisual.elements['[data-testid="external-cancel"]'];
     const externalConfirm = externalVisual.elements['[data-testid="external-confirm"]'];
@@ -1534,11 +1607,11 @@ async function run() {
       'external buttons stay inside the action row'
     );
     assertApprox(externalConfirm.right, externalActions.right, 'external confirm aligns to the action row end');
-    assertApprox(externalVisual.elements['.modal-url'].borderRadius, 10, 'modal URL surface radius');
+    assertApprox(externalVisual.elements['.modal-url'].borderRadius, 8, 'modal URL surface radius');
     assertApprox(externalCancel.height, 32, 'external cancel height');
-    assertApprox(externalCancel.borderRadius, 10, 'external cancel radius');
+    assertApprox(externalCancel.borderRadius, 8, 'external cancel radius');
     assertApprox(externalConfirm.height, 32, 'external primary height');
-    assertApprox(externalConfirm.borderRadius, 10, 'external primary radius');
+    assertApprox(externalConfirm.borderRadius, 8, 'external primary radius');
     await assertHoverVisual(page, '[data-testid="external-cancel"]', 'external modal secondary button');
     await assertHoverVisual(
       page,
@@ -1598,7 +1671,7 @@ async function run() {
     assert(failedCloseState.feedbackText === '无法保存测试文档。', 'save failure appears in close dialog');
     assert(failedCloseState.feedbackRole === 'alert', 'save failure is announced as an alert');
     assert(failedCloseState.feedbackVisible, 'save failure remains visible at the minimum window width');
-    assert(!failedCloseState.toolbarStatusVisible, 'narrow layout hides the toolbar status');
+    assert(failedCloseState.toolbarStatusVisible, 'narrow layout preserves status in the second toolbar row');
     assert(failedCloseState.closeCalls.at(-1) === false, 'failed save does not confirm native close');
 
     await page.evaluate(() => {
@@ -1615,7 +1688,15 @@ async function run() {
 
     for (const viewport of [
       { width: 1280, height: 800 },
+      { width: 1025, height: 900 },
+      { width: 1024, height: 900 },
+      { width: 1023, height: 900 },
+      { width: 820, height: 900 },
+      { width: 761, height: 900 },
+      { width: 760, height: 900 },
+      { width: 759, height: 900 },
       { width: 720, height: 800 },
+      { width: 640, height: 900 },
       { width: 390, height: 844 },
       { width: 320, height: 800 }
     ]) {
@@ -1640,10 +1721,16 @@ async function run() {
       assert(layout.overflowX <= 0, `${viewport.width}px viewport has no horizontal overflow`);
       assert(layout.leading.left >= 0, `${viewport.width}px leading controls stay in viewport`);
       assert(layout.actions.right <= viewport.width, `${viewport.width}px actions stay in viewport`);
-      assert(
-        layout.leading.right <= layout.toggle.left,
-        `${viewport.width}px leading controls do not overlap mode toggle`
-      );
+      assert(layout.leading.right <= viewport.width, `${viewport.width}px file information stays in viewport`);
+      for (const leading of layout.leadingChildren) {
+        const sharesModeRow = leading.top < layout.toggle.bottom && leading.bottom > layout.toggle.top;
+        if (sharesModeRow) {
+          assert(leading.right <= layout.toggle.left, `${viewport.width}px leading controls do not overlap mode toggle`);
+        } else {
+          assert(leading.top >= layout.toggle.bottom, `${viewport.width}px file information occupies its own row`);
+        }
+      }
+      assertApprox(layout.toolbar.height, viewport.width < 760 ? 80 : 52, `${viewport.width}px toolbar height`);
       assert(
         layout.toggle.right <= layout.actions.left,
         `${viewport.width}px mode toggle does not overlap toolbar actions`
@@ -1661,8 +1748,20 @@ async function run() {
     assert(mediumPreview.overflowX <= 0, '720px document has no horizontal overflow');
     assert(mediumPreview.elements['.content'].right <= 720, '720px content stays inside viewport');
     assert(mediumPreview.elements['.mode-toggle'].right <= 720, '720px mode group stays inside viewport');
-    assertApprox(mediumPreview.elements['.mode-toggle'].borderRadius, 12, '720px mode group radius');
+    assertApprox(mediumPreview.elements['.mode-toggle'].borderRadius, 8, '720px mode group radius');
     await capture('10-preview-720x800.png');
+
+    // Resizing an open outline changes its layout without resetting its state.
+    await page.click('[data-testid="btn-outline"]');
+    for (const width of [1023, 1024, 1025, 820]) {
+      await page.setViewport({ width, height: 900, deviceScaleFactor: 1 });
+      const outlineLayout = await readVisualMetrics(page, ['.outline-panel', '.content']);
+      const docked = width >= 1024;
+      assertApprox(outlineLayout.elements['.outline-panel'].width, docked ? 232 : 248, `${width}px outline width`);
+      assert(outlineLayout.elements['.outline-panel'].position === (docked ? 'static' : 'absolute'), `${width}px outline layout`);
+      assertApprox(outlineLayout.elements['.content'].width, docked ? width - 232 : width, `${width}px reading space`);
+      assert(await page.$eval('[data-testid="btn-outline"]', (button) => button.getAttribute('aria-expanded')) === 'true', 'resizing preserves the open outline');
+    }
 
     await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
     await page.goto(DEV_URL, { waitUntil: 'networkidle0' });
@@ -1674,8 +1773,8 @@ async function run() {
     assert(narrowOutline.overflowX <= 0, '390px outline has no horizontal overflow');
     assert(narrowOutline.elements['.outline-panel'].position === 'absolute', '390px outline is an overlay');
     assertApprox(narrowOutline.elements['.outline-panel'].x, 8, '390px outline left inset');
-    assertApprox(narrowOutline.elements['.outline-panel'].width, 264, '390px outline width');
-    assertApprox(narrowOutline.elements['.outline-panel'].borderRadius, 20, '390px outline uses floating surface radius');
+    assertApprox(narrowOutline.elements['.outline-panel'].width, 248, '390px outline width');
+    assertApprox(narrowOutline.elements['.outline-panel'].borderRadius, 12, '390px outline uses panel radius');
     assert(
       narrowOutline.elements['.outline-panel'].right <= 390,
       '390px outline floating surface stays inside viewport'
@@ -1687,10 +1786,10 @@ async function run() {
     await page.waitForSelector('[data-testid="search-bar"]');
     const narrowSearch = await readVisualMetrics(page, ['.search-bar']);
     assert(narrowSearch.overflowX <= 0, '390px search has no horizontal overflow');
-    assertApprox(narrowSearch.elements['.search-bar'].x, 38, '390px search keeps its right alignment');
-    assertApprox(narrowSearch.elements['.search-bar'].width, 340, '390px search keeps reference width');
-    assertApprox(narrowSearch.elements['.search-bar'].height, 46, '390px empty search includes its inset edge');
-    assertApprox(narrowSearch.elements['.search-bar'].borderRadius, 20, '390px empty search matches reference radius');
+    assertApprox(narrowSearch.elements['.search-bar'].x, 18, '390px search keeps its right alignment');
+    assertApprox(narrowSearch.elements['.search-bar'].width, 360, '390px search keeps reference width');
+    assertApprox(narrowSearch.elements['.search-bar'].height, 42, '390px empty search includes its single border');
+    assertApprox(narrowSearch.elements['.search-bar'].borderRadius, 14, '390px empty search matches reference radius');
     assert(narrowSearch.elements['.search-bar'].right <= 390, '390px search stays inside viewport');
     await capture('12-search-390x844.png');
 

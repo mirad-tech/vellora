@@ -3,10 +3,18 @@
  * App is launched with VELLORA_E2E_SOURCE as CLI arg (set by run-desktop.mjs).
  */
 import fs from 'node:fs';
+import path from 'node:path';
 
 const sourcePath = process.env.VELLORA_E2E_SOURCE;
 const targetPath = process.env.VELLORA_E2E_TARGET;
 const modifierKey = process.env.VELLORA_E2E_MODIFIER || 'Control';
+
+async function capture(name) {
+  const directory = process.env.VELLORA_DESKTOP_SCREENSHOT_DIR;
+  if (!directory) return;
+  fs.mkdirSync(directory, { recursive: true });
+  await browser.saveScreenshot(path.join(directory, name));
+}
 
 async function clickLinkByHrefFragment(fragment) {
   const anchors = await $$('[data-testid="markdown-body"] a');
@@ -88,13 +96,15 @@ describe('Vellora desktop E2E (real IPC)', () => {
       throw new Error(`${message}; startup=${JSON.stringify(startup)}`);
     }
     expect(await body.getText()).toContain('源文档');
+    await capture('01-document.png');
 
     // 2) Quick edit in read mode + save source on disk
     await $('[data-testid="markdown-body"] h1').click();
     const quickEditor = await $('[data-testid="quick-edit-surface"]');
     await quickEditor.waitForDisplayed({ timeout: 10000 });
     await setContentEditableText('[data-testid="quick-edit-surface"]', '源文档（阅读模式修改）');
-    await browser.keys([modifierKey, 's']);
+    // The visible save entry must include the still-active quick-edit candidate.
+    await $('[data-testid="btn-save"]').click();
     await browser.waitUntil(
       async () => fs.readFileSync(sourcePath, 'utf8').includes('阅读模式修改'),
       { timeout: 15000, timeoutMsg: 'quick edit was not saved to disk' }
@@ -103,6 +113,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     // 3) Full source edit + save
     let sourceText = fs.readFileSync(sourcePath, 'utf8');
     await enterEditAndSetValue(sourceText.replace('正文搜索词 alpha', '正文搜索词 alpha 已保存'));
+    await capture('02-source-dirty.png');
     await browser.keys([modifierKey, 's']);
     await browser.waitUntil(async () => fs.readFileSync(sourcePath, 'utf8').includes('已保存'), {
       timeout: 15000,
@@ -117,6 +128,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     expect(await clickLinkByHrefFragment('target.md')).toBe(true);
     let discard = await $('[data-testid="discard-modal"]');
     await discard.waitForDisplayed({ timeout: 10000 });
+    await capture('03-unsaved-confirmation.png');
     await $('[data-testid="discard-cancel"]').click();
     await discard.waitForDisplayed({ reverse: true, timeout: 5000 });
 
@@ -141,7 +153,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     // Should remain on source with draft
     await browser.waitUntil(
       async () => {
-        const status = await $('[data-testid="status-text"]').getText();
+        const status = await $('[data-testid="app-feedback"]').getText();
         return status.includes('不存在') || status.includes('失败') || status.includes('找不到');
       },
       { timeout: 15000, timeoutMsg: 'expected open failure status message' }
@@ -178,7 +190,7 @@ describe('Vellora desktop E2E (real IPC)', () => {
     );
 
     // 6) Search + outline on target
-    await browser.keys([modifierKey, 'f']);
+    await $('[data-testid="btn-search"]').click();
     const input = await $('[data-testid="search-input"]');
     await input.waitForDisplayed();
     await input.setValue('链接跳转');
@@ -190,11 +202,15 @@ describe('Vellora desktop E2E (real IPC)', () => {
     await $('[data-testid="btn-outline"]').click();
     await $('[data-testid="outline-panel"]').waitForDisplayed();
     expect((await $$('[data-testid="outline-item"]')).length).toBeGreaterThanOrEqual(1);
+    await capture('04-search-and-outline.png');
+    await $('[data-testid="btn-outline"]').click();
+    await $('[data-testid="search-close"]').click();
 
     // 7) External link confirm + cancel
     expect(await clickLinkByHrefFragment('example.com')).toBe(true);
     const external = await $('[data-testid="external-link-modal"]');
     await external.waitForDisplayed({ timeout: 10000 });
+    await capture('05-external-confirmation.png');
     await $('[data-testid="external-cancel"]').click();
     await external.waitForDisplayed({ reverse: true, timeout: 5000 });
     expect(await (await $('[data-testid="markdown-body"]')).getText()).toContain('目标文档');
