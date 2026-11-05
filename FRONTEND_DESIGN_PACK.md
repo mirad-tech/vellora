@@ -61,11 +61,11 @@
 ### 当前记录
 
 - 原始基线：`npm ci`、版本一致性、类型检查、94 项单元测试、Web 构建通过。
-- 源码 `47bb5eaed30dbac43c801a20d7188d581a01cad6` 的 [Windows 验证 42091389244](https://github.com/mirad-tech/vellora/actions/runs/42091389244)：锁文件依赖恢复、版本检查、类型检查、Web 构建、6 个测试文件中的 **98 项单元测试**、**36 项 Rust 测试**及浏览器 E2E **10 个行为场景**全部通过。
+- 最终可执行代码 `ec67cf6d6134b2f3957b39cb6c8ec921dcc29340` 的 [Windows 验证 42094282845](https://github.com/mirad-tech/vellora/actions/runs/42094282845) **全部成功**：锁文件依赖恢复、版本检查、类型检查、Web 构建、6 个测试文件中的 **98 项单元测试**、**36 项 Rust 测试**、浏览器 E2E **10 个行为场景**及 **1 项真实 Tauri/IPC 综合回归**均通过。后续提交仅补充本记录与截图，功能代码未再变更。
 - 新增单元回归覆盖保存按钮候选内容与禁用状态、查找入口、输入法 Escape、窄目录关闭和焦点、确认框 Tab 约束及取消后的编辑器恢复。浏览器回归另检查控件几何、可见焦点、对比度、减少动态效果及 `759/760/761px`、`1023/1024/1025px` 等布局断点。
 - 已产生同场景前后各 9 张真实 Chrome 截图并复核；当前 9 个场景均无页面级横向溢出或脚本错误。表格的最小列宽与目录选中项 hover 修正在本轮截图和回归中通过。主要图片见[实际渲染对照](docs/ui-review/README.md)。
-- Windows 原生可执行文件编译成功，但该次桌面 E2E 在创建 WebView2 会话时出现 `DevToolsActivePort file doesn't exist`，尚未进入产品断言；**不能据此标记原生窗口及 IPC 验收通过**。
-- 针对与 [runner-images #14738](https://github.com/actions/runner-images/issues/14738) 一致的启动问题，本工作流改用 `windows-2022`。同时依据 [Microsoft WebView2 WebDriver 文档](https://learn.microsoft.com/microsoft-edge/webview2/how-to/webdriver)，驱动选择与校验使用实际 WebView2 Runtime，而非独立更新的完整 Edge 浏览器；不降低应用运行时版本、不关闭沙箱、不放宽签名校验。该调整的远端复验结果待记录。
+- Windows 原生可执行文件已成功编译并运行。真实 IPC 综合回归覆盖 CLI 打开、正文直接编辑后点击保存、源码快捷键保存、未保存跳转取消、失败跳转后的草稿与保存恢复、成功跳转、查找、目录和外链取消；实际读写本次测试的临时 Markdown 文件。5 张原生 WebView 截图已逐一复核，无控件重叠或浮层裁切，见[实际渲染对照](docs/ui-review/README.md)。原生截图内容区为 **820×749**，不含系统标题栏，不能冒充 820×900 截图。
+- 较早的 [Windows 2025 运行 42091389244](https://github.com/mirad-tech/vellora/actions/runs/42091389244) 曾在创建 WebView2 会话时出现 `DevToolsActivePort file doesn't exist`。针对与 [runner-images #14738](https://github.com/actions/runner-images/issues/14738) 一致的启动问题，本工作流改用 `windows-2022`；依据 [Microsoft WebView2 WebDriver 文档](https://learn.microsoft.com/microsoft-edge/webview2/how-to/webdriver)，驱动改为匹配实际 WebView2 Runtime，并优先使用项目本地驱动。最终成功环境为 Windows 2022 镜像 `20261101.353.1`、WebView2 与驱动均为 `131.0.2903.86`，下载及启动时 Microsoft 签名均为 `Valid`。该调整只影响测试工具与 CI，未增加或更改产品的运行时分发、沙箱或签名策略。
 - 本地 Linux 环境缺少 `cargo`，官方 Chromium 下载也不可用；本地未产生窗口验收证据，以上截图与 Rust 结果均来自所链接的 Windows 工作流。
 
 ### 同场景截图
@@ -99,3 +99,10 @@ npm run test:e2e:desktop
 ```
 
 人工复核仍待完成 Windows 125%/150% 显示缩放、真实中文输入法选词及原生最小高度 400px。布局断点已通过浏览器自动化，不能替代上述系统级检查。尚未执行或被环境阻塞的项目均保留为待验收。
+
+### 证据索引
+
+- [全部门禁与原生日志](https://github.com/mirad-tech/vellora/actions/runs/42094282845)：对应可执行代码 `ec67cf6d6134b2f3957b39cb6c8ec921dcc29340`。
+- [仓库内的前后对照及 5 张原生截图](docs/ui-review/README.md)：图片按实际来源提交与尺寸标注。
+- [完整验证产物](https://github.com/mirad-tech/vellora/actions/runs/42094282845/artifacts/13447721680)：共 38 个文件，包含 18 张前后对照、两份度量、13 张浏览器回归截图及 5 张原生截图；GitHub Actions 保留 14 天。
+- 完整产物 ZIP 的 SHA-256：`a00f36a652ffb473c388f9350793b53d71380d8f9221515936c9408f9d1459d8`。
