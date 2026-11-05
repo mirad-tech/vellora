@@ -20,6 +20,7 @@ export type MarkdownOpenResult =
   | { ok: false; code: MarkdownOpenErrorCode | string; message: string };
 
 export type MarkdownSaveErrorCode =
+  | 'FILE_CHANGED'
   | 'INVALID_ARGUMENT'
   | 'UNSUPPORTED_FILE_TYPE'
   | 'NOT_FOUND'
@@ -28,7 +29,7 @@ export type MarkdownSaveErrorCode =
 
 export type MarkdownSaveResult =
   | { ok: true; document: MarkdownDocument }
-  | { ok: false; code: MarkdownSaveErrorCode | string; message: string };
+  | { ok: false; code: MarkdownSaveErrorCode | string; message: string; conflictToken?: string };
 
 export type MarkdownImageErrorCode =
   | 'INVALID_ARGUMENT'

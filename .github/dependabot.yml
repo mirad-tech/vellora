@@ -7,11 +7,42 @@ updates:
       day: monday
       time: '06:00'
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 8
     groups:
-      npm-minor-and-patch:
+      tauri-js:
+        patterns:
+          - '@tauri-apps/*'
+        update-types:
+          - minor
+          - patch
+      frontend-runtime:
+        dependency-type: production
         patterns:
           - '*'
+        exclude-patterns:
+          - '@tauri-apps/*'
+        update-types:
+          - minor
+          - patch
+      frontend-build:
+        patterns:
+          - '@vitejs/*'
+          - 'vite'
+          - 'typescript'
+        update-types:
+          - minor
+          - patch
+      frontend-test:
+        patterns:
+          - '@testing-library/*'
+          - 'jsdom'
+          - 'vitest'
+        update-types:
+          - minor
+          - patch
+      type-definitions:
+        patterns:
+          - '@types/*'
         update-types:
           - minor
           - patch
@@ -23,11 +54,30 @@ updates:
       day: monday
       time: '06:15'
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 6
     groups:
-      cargo-minor-and-patch:
+      tauri-rust:
+        patterns:
+          - 'tauri'
+          - 'tauri-*'
+        update-types:
+          - minor
+          - patch
+      serde:
+        patterns:
+          - 'serde'
+          - 'serde_json'
+        update-types:
+          - minor
+          - patch
+      rust-other:
         patterns:
           - '*'
+        exclude-patterns:
+          - 'tauri'
+          - 'tauri-*'
+          - 'serde'
+          - 'serde_json'
         update-types:
           - minor
           - patch
@@ -39,8 +89,13 @@ updates:
       day: monday
       time: '06:30'
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 3
     groups:
-      actions:
+      ci-actions:
         patterns:
-          - '*'
+          - 'github/*'
+          - 'actions/*'
+          - 'dtolnay/rust-toolchain'
+        update-types:
+          - minor
+          - patch

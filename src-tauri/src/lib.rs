@@ -3,6 +3,7 @@ mod image_access;
 mod launch_args;
 mod link_access;
 mod path_policy;
+mod reliable_save;
 mod types;
 
 use std::path::PathBuf;
@@ -35,6 +36,10 @@ struct LaunchState {
 }
 
 pub struct AppState {
+  /// Serializes disk reads/session replacement with saves, including the final
+  /// fingerprint check and atomic replacement. Never held by close callbacks.
+  document_operation: Mutex<()>,
+  save_baseline: Mutex<Option<reliable_save::SaveBaseline>>,
   /// Pending launch/open request and the frontend readiness handshake.
   launch_state: Mutex<LaunchState>,
   /// Session: only the currently opened document may be saved / used as link base.
@@ -48,6 +53,8 @@ pub struct AppState {
 impl Default for AppState {
   fn default() -> Self {
     Self {
+      document_operation: Mutex::new(()),
+      save_baseline: Mutex::new(None),
       launch_state: Mutex::new(LaunchState::default()),
       current_document: Mutex::new(None),
       has_unsaved_changes: Mutex::new(false),
@@ -60,8 +67,9 @@ fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
   mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn set_current_document(state: &AppState, path: &str) {
-  *lock_mutex(&state.current_document) = Some(PathBuf::from(path));
+fn set_current_document(state: &AppState, document: &types::MarkdownDocument) {
+  *lock_mutex(&state.current_document) = Some(PathBuf::from(&document.path));
+  *lock_mutex(&state.save_baseline) = Some(reliable_save::SaveBaseline::new(&document.content));
 }
 
 fn clear_close_flags(state: &AppState) {
@@ -106,7 +114,7 @@ fn markdown_path_from_urls(urls: &[url::Url]) -> Option<String> {
 
 fn remember_opened(state: &AppState, result: &CommandResult<DocumentPayload>) {
   if let CommandResult::Ok { data, .. } = result {
-    set_current_document(state, &data.document.path);
+    set_current_document(state, &data.document);
     *lock_mutex(&state.has_unsaved_changes) = false;
     clear_close_flags_if_idle(state);
   }
@@ -162,6 +170,7 @@ fn open_link_session(
   document_path: &str,
   href: &str,
 ) -> CommandResult<DocumentPayload> {
+  let _operation = lock_mutex(&state.document_operation);
   let session = match require_session_document(state, document_path) {
     Ok(p) => p,
     Err(e) => return map_empty_err(e),
@@ -172,7 +181,7 @@ fn open_link_session(
       data: LinkInspectData::Markdown { document, .. },
       ..
     } => {
-      set_current_document(state, &document.path);
+      set_current_document(state, &document);
       *lock_mutex(&state.has_unsaved_changes) = false;
       clear_close_flags_if_idle(state);
       CommandResult::success(DocumentPayload { document })
@@ -190,6 +199,7 @@ fn open_link_session(
 
 #[tauri::command]
 fn choose_markdown_file(state: State<'_, AppState>) -> CommandResult<DocumentPayload> {
+  let _operation = lock_mutex(&state.document_operation);
   let result = file_access::choose_markdown_file();
   remember_opened(&state, &result);
   result
@@ -197,6 +207,7 @@ fn choose_markdown_file(state: State<'_, AppState>) -> CommandResult<DocumentPay
 
 #[tauri::command]
 fn open_markdown_file(path: String, state: State<'_, AppState>) -> CommandResult<DocumentPayload> {
+  let _operation = lock_mutex(&state.document_operation);
   let result = file_access::read_markdown_file(&path);
   remember_opened(&state, &result);
   result
@@ -206,19 +217,31 @@ fn open_markdown_file(path: String, state: State<'_, AppState>) -> CommandResult
 fn save_markdown_file(
   path: String,
   content: String,
+  conflict_token: Option<String>,
   state: State<'_, AppState>,
 ) -> CommandResult<DocumentPayload> {
-  let session = match require_session_document(&state, &path) {
+  save_document_session(&state, &path, &content, conflict_token.as_deref())
+}
+
+fn save_document_session(
+  state: &AppState,
+  path: &str,
+  content: &str,
+  conflict_token: Option<&str>,
+) -> CommandResult<DocumentPayload> {
+  let _operation = lock_mutex(&state.document_operation);
+  let session = match require_session_document(state, path) {
     Ok(p) => p,
     Err(e) => return map_empty_err(e),
   };
 
-  let result = file_access::save_markdown_file(session.to_string_lossy().as_ref(), &content);
-  if let CommandResult::Ok { data, .. } = &result {
-    set_current_document(&state, &data.document.path);
-    *lock_mutex(&state.has_unsaved_changes) = false;
-  }
-  result
+  let mut baseline = lock_mutex(&state.save_baseline);
+  let Some(baseline) = baseline.as_mut() else {
+    return CommandResult::failure("NO_DOCUMENT", "当前没有已打开的文档。");
+  };
+  // The renderer owns dirty state: input received while saving must not lose
+  // native close protection when an older revision finishes writing.
+  baseline.save(session.to_string_lossy().as_ref(), content, conflict_token)
 }
 
 #[tauri::command]
@@ -259,6 +282,7 @@ fn open_external_url(url: String) -> CommandResult<EmptyPayload> {
 
 #[tauri::command]
 fn get_initial_document(state: State<'_, AppState>) -> CommandResult<DocumentPayload> {
+  let _operation = lock_mutex(&state.document_operation);
   let path = take_initial_path_and_mark_ready(&state);
 
   match path {
@@ -422,13 +446,6 @@ pub fn run() {
   builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
     handle_second_instance(app, args);
   }));
-
-  #[cfg(feature = "macos-e2e")]
-  {
-    builder = builder
-      .plugin(tauri_plugin_wdio::init())
-      .plugin(tauri_plugin_wdio_webdriver::init());
-  }
 
   let app = builder
     .manage(AppState::default())
@@ -679,6 +696,93 @@ mod session_link_tests {
     );
     assert!(queue_open_path(&state, "warm.md".into()));
     assert!(take_initial_path_and_mark_ready(&state).is_none());
+  }
+
+  #[test]
+  fn successful_save_keeps_newer_dirty_state_and_pending_close_intent() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = AppState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "original");
+    *lock_mutex(&state.has_unsaved_changes) = true;
+    begin_close_request(&state, CloseAction::CloseWindow);
+    let result = save_document_session(&state, &session, "saved revision", None);
+    assert!(matches!(result, CommandResult::Ok { .. }), "{result:?}");
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+    assert!(lock_mutex(&state.close_state).prompt_pending);
+    let result = save_document_session(&state, &session, "next revision", None);
+    assert!(matches!(result, CommandResult::Ok { .. }), "{result:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "next revision");
+  }
+
+  #[test]
+  fn save_conflict_preserves_session_dirty_and_close_intent() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = AppState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "original");
+    *lock_mutex(&state.has_unsaved_changes) = true;
+    begin_close_request(&state, CloseAction::CloseWindow);
+    fs::write(&path, "external").unwrap();
+    let result = save_document_session(&state, &session, "draft", None);
+    assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "FILE_CHANGED"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+    assert!(lock_mutex(&state.close_state).prompt_pending);
+    assert_eq!(require_session_document(&state, &session).unwrap(), PathBuf::from(session));
+  }
+
+  #[test]
+  fn link_switch_invalidates_old_conflict_token() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("source.md");
+    let target = dir.path().join("target.md");
+    let state = AppState::default();
+    let source = open_session(&state, path.to_str().unwrap(), "original");
+    fs::write(&path, "external").unwrap();
+    fs::write(&target, "target").unwrap();
+    let token = match save_document_session(&state, &source, "draft", None) {
+      CommandResult::Err { conflict_token: Some(token), .. } => token,
+      other => panic!("{other:?}"),
+    };
+    let destination = match open_link_session(&state, &source, "target.md") {
+      CommandResult::Ok { data, .. } => data.document.path,
+      other => panic!("{other:?}"),
+    };
+    let old_path = save_document_session(&state, &source, "stale", Some(&token));
+    assert!(matches!(old_path, CommandResult::Err { ref code, .. } if code == "SESSION_MISMATCH"));
+    let new_path = save_document_session(&state, &destination, "stale", Some(&token));
+    assert!(matches!(new_path, CommandResult::Err { ref code, .. } if code == "FILE_CHANGED"));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "target");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+  }
+
+  #[test]
+  fn queued_save_revalidates_session_after_a_document_switch() {
+    use std::sync::{mpsc, Arc};
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("source.md");
+    let target = dir.path().join("target.md");
+    let state = Arc::new(AppState::default());
+    let source = open_session(&state, path.to_str().unwrap(), "original");
+    let operation = lock_mutex(&state.document_operation);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker_state = Arc::clone(&state);
+    let worker = std::thread::spawn(move || {
+      started_tx.send(()).unwrap();
+      let result = save_document_session(&worker_state, &source, "stale", None);
+      done_tx.send(result).unwrap();
+    });
+    started_rx.recv().unwrap();
+    assert!(done_rx.try_recv().is_err());
+    open_session(&state, target.to_str().unwrap(), "target");
+    drop(operation);
+    let result = done_rx.recv().unwrap();
+    worker.join().unwrap();
+    assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "SESSION_MISMATCH"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "target");
   }
 
   #[test]

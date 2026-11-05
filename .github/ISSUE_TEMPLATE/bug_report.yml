@@ -1,5 +1,5 @@
-name: Bug 报告
-description: 报告可复现的 Vellora 功能或安装问题
+name: Bug 报告 / Bug report
+description: 报告可复现的 Vellora 功能或安装问题 / Report a reproducible Vellora issue
 title: '[Bug] '
 labels:
   - bug
@@ -7,21 +7,22 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈。提交前请确认问题可复现，且不包含私密文档内容。
+        感谢反馈。请确认问题可复现，且不包含私密文档内容。
+        Thanks for the report. Confirm it is reproducible and remove private document content.
 
   - type: input
     id: version
     attributes:
-      label: Vellora 版本
-      description: 可从安装包名称、GitHub Release 或源码中的 `package.json` 确认。
-      placeholder: 例如 x.y.z 或提交 SHA
+      label: Vellora 版本 / Version
+      description: 从安装包名称、GitHub Release 或源码 `package.json` 确认 / Check the installer name, GitHub Release, or source `package.json`.
+      placeholder: 例如 / e.g. x.y.z 或 / or commit SHA
     validations:
       required: true
 
   - type: dropdown
     id: platform
     attributes:
-      label: 平台与架构
+      label: 平台与架构 / Platform and architecture
       options:
         - Windows x64
         - macOS Apple Silicon
@@ -32,16 +33,16 @@ body:
   - type: input
     id: os_version
     attributes:
-      label: 操作系统版本
-      placeholder: 例如 Windows 11 24H2 或 macOS 15.6
+      label: 操作系统版本 / OS version
+      placeholder: 例如 / e.g. Windows 11 24H2 或 / or macOS 15.6
     validations:
       required: true
 
   - type: textarea
     id: reproduction
     attributes:
-      label: 复现步骤
-      description: 请提供最小、稳定的操作步骤；如需样本，请先移除隐私信息。
+      label: 复现步骤 / Steps to reproduce
+      description: 请提供最小、稳定的步骤；样本须移除隐私信息 / Provide minimal, reliable steps; redact private information from samples.
       placeholder: |
         1. 打开……
         2. 点击……
@@ -52,39 +53,39 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: 预期结果
+      label: 预期结果 / Expected result
     validations:
       required: true
 
   - type: textarea
     id: actual
     attributes:
-      label: 实际结果
-      description: 可附错误信息、日志或截图，但不要上传含敏感内容的 Markdown 文档。
+      label: 实际结果 / Actual result
+      description: 可附错误、日志或截图；不要上传含敏感内容的 Markdown 文档 / Attach errors, logs, or screenshots only after removing sensitive document content.
     validations:
       required: true
 
   - type: dropdown
     id: entry
     attributes:
-      label: 问题入口
+      label: 问题入口 / Area
       options:
-        - 打开或文件关联
-        - 阅读与渲染
-        - 编辑与保存
-        - 图片或链接
-        - 查找或目录
-        - 安装、升级或卸载
-        - 其他
+        - 打开或文件关联 / Opening or file association
+        - 阅读与渲染 / Reading or rendering
+        - 编辑与保存 / Editing or saving
+        - 图片或链接 / Images or links
+        - 查找或目录 / Search or table of contents
+        - 安装、升级或卸载 / Install, update, or uninstall
+        - 其他 / Other
     validations:
       required: true
 
   - type: checkboxes
     id: checks
     attributes:
-      label: 提交确认
+      label: 提交确认 / Confirmation
       options:
-        - label: 我已搜索现有 Issue，未发现同一问题。
+        - label: 我已搜索现有 Issue，未发现同一问题 / I searched existing Issues and found no duplicate.
           required: true
-        - label: 这不是安全漏洞；安全问题将按 SECURITY.md 私下报告。
+        - label: 这不是安全漏洞；安全问题将按 SECURITY.md 私下报告 / This is not a security vulnerability; security issues will be reported privately under SECURITY.md.
           required: true

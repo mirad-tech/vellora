@@ -1,268 +1,197 @@
-/**
- * Windows desktop E2E launcher (external drivers only).
- *
- * - Never kills Vellora by process name or path bulk.
- * - Process listing is fail-closed (query errors abort the run).
- * - Cleanup only stops WDIO / tauri-driver PIDs this script spawned,
- *   plus Vellora instances that carry this run's unique session token.
- *
- * Prerequisites on PATH:
- *   - tauri-driver  (cargo install tauri-driver --locked)
- *   - msedgedriver.exe matching Edge major version
- */
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { checkMsedgedriver, readWebView2Runtime } from '../../tools/webdriver/webview2-runtime.mjs';
+import { runDesktopSmoke } from './smoke.desktop.mjs';
+import { openWebDriverSession, waitFor, webdriverRequest } from './webdriver.mjs';
 
-import {
-  DesktopE2EError,
-  assertNoPreexistingVellora,
-  createCleanupController,
-  isValidSessionToken
-} from './desktop-processes.mjs';
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '../..');
-const appBinary = path.resolve(root, 'src-tauri', 'target', 'release', 'vellora.exe');
-
-function fail(msg) {
-  throw new DesktopE2EError(`[e2e:desktop] ${msg}`);
+if (process.platform !== 'win32' || process.arch !== 'x64') {
+  throw new Error('Native E2E requires Windows x64.');
 }
 
-function which(cmd) {
+const root = fs.realpathSync(fileURLToPath(new URL('../../', import.meta.url)));
+const target = path.join(root, 'src-tauri', 'target', 'desktop-e2e');
+const application = path.join(target, 'release', 'vellora.exe');
+const identifier = 'com.vellora.e2e.run-' + crypto.createHash('sha256').update(root.toLowerCase()).digest('hex').slice(0, 12);
+const profilePrefix = 'vellora-desktop-e2e-';
+const temporary = fs.realpathSync(os.tmpdir());
+
+function findExecutable(name, override, fallback) {
+  if (override) return fs.realpathSync(override);
+  if (fallback && fs.existsSync(fallback)) return fs.realpathSync(fallback);
   try {
-    const executable = process.platform === 'win32' ? 'where.exe' : 'which';
-    const out = execFileSync(executable, [cmd], { encoding: 'utf8' });
-    return out
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean)[0];
+    const file = execFileSync('where.exe', [name], { encoding: 'utf8', windowsHide: true, timeout: 5_000 })
+      .split(/\r?\n/).map(line => line.trim()).find(Boolean);
+    if (file) return fs.realpathSync(file);
   } catch {
-    return null;
+    // Preflight below explains how to provide the required executable.
+  }
+  throw new Error(name + ' was not found. Prepare the native test drivers before running E2E.');
+}
+
+function buildExecutable() {
+  fs.mkdirSync(target, { recursive: true });
+  if (path.relative(root, fs.realpathSync(target)) !== path.join('src-tauri', 'target', 'desktop-e2e')) {
+    throw new Error('The native test target must resolve inside this checkout.');
+  }
+  const npmCli = process.env.npm_execpath;
+  if (!npmCli || !fs.existsSync(npmCli)) throw new Error('Run native E2E with npm run test:e2e:desktop.');
+  console.log('[desktop E2E] Building embedded assets and an isolated test executable (' + identifier + ')');
+  execFileSync(process.execPath, [npmCli, 'run', 'build:web'], { cwd: root, stdio: 'inherit', windowsHide: true });
+  execFileSync('cargo', ['build', '--locked', '--manifest-path', 'src-tauri/Cargo.toml',
+    '--target-dir', target, '--release', '--features', 'custom-protocol'], {
+    cwd: root, stdio: 'inherit', windowsHide: true,
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ identifier }) }
+  });
+  if (!fs.statSync(application).isFile()) throw new Error('Missing native test executable at ' + application);
+}
+
+function listedTestProcesses() {
+  const ps = '$ErrorActionPreference = "Stop"\n$ProgressPreference = "SilentlyContinue"\n' +
+    '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n' +
+    "$items = @(Get-CimInstance Win32_Process -Filter \"Name = 'vellora.exe'\" | " +
+    'Select-Object ProcessId, ExecutablePath, CommandLine)\n' +
+    'ConvertTo-Json -InputObject $items -Compress';
+  const rows = JSON.parse(execFileSync('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')
+  ], { encoding: 'utf8', windowsHide: true, timeout: 10_000 }));
+  if (!Array.isArray(rows)) throw new Error('Could not verify native test process ownership.');
+  return rows.filter(row => typeof row.ExecutablePath === 'string' &&
+    path.normalize(row.ExecutablePath).toLowerCase() === application.toLowerCase());
+}
+
+function refuseExistingTestApplication() {
+  if (listedTestProcesses().length) {
+    throw new Error('An executable from this isolated test target is already running.');
   }
 }
 
-function edgeVersion() {
-  const candidates = [
-    path.join(process.env['ProgramFiles(x86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    path.join(process.env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
-  ];
-  const edge = candidates.find((p) => fs.existsSync(p));
-  if (!edge) fail('Microsoft Edge not found (required for WebView2 desktop E2E).');
+async function freePorts() {
+  const listeners = [net.createServer(), net.createServer()];
   try {
-    const escapedEdge = edge.replace(/'/g, "''");
-    const script = `(Get-Item -LiteralPath '${escapedEdge}').VersionInfo.ProductVersion`;
-    return execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
-      encoding: 'utf8'
-    }).trim();
-  } catch {
-    fail(`Could not read Edge version from ${edge}`);
+    await Promise.all(listeners.map(server => new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    })));
+    return listeners.map(server => server.address().port);
+  } finally {
+    await Promise.all(listeners.filter(server => server.listening)
+      .map(server => new Promise(resolve => server.close(resolve))));
   }
 }
 
-function major(version) {
-  const m = String(version).match(/^(\d+)/);
-  return m ? m[1] : null;
-}
-
-function msedgedriverVersion(driverPath) {
-  try {
-    const out = execFileSync(driverPath, ['--version'], { encoding: 'utf8' });
-    const m = out.match(/(\d+\.\d+\.\d+\.\d+|\d+\.\d+\.\d+)/);
-    return m ? m[1] : out.trim();
-  } catch {
-    fail(`Could not run msedgedriver --version at ${driverPath}`);
-  }
-}
-
-function resolveMsedgedriver() {
-  const candidates = [
-    process.env.MSEDGEDRIVER_PATH,
-    which('msedgedriver'),
-    which('msedgedriver.exe'),
-    // Project-local install from: npm run tools:msedgedriver
-    path.join(root, 'artifacts', 'webdriver', 'msedgedriver.exe')
-  ].filter(Boolean);
-  for (const p of candidates) {
-    if (p && fs.existsSync(p)) return path.resolve(p);
-  }
-  return null;
-}
-
-function ensureDrivers() {
-  const tauriDriver = which('tauri-driver') || which('tauri-driver.exe');
-  if (!tauriDriver) {
-    fail(
-      'tauri-driver not found on PATH. Install with: cargo install tauri-driver --locked\n' +
-        'See https://v2.tauri.app/develop/tests/webdriver/'
-    );
-  }
-
-  const msedgedriver = resolveMsedgedriver();
-  if (!msedgedriver) {
-    fail(
-      'msedgedriver.exe not found. Install a build matching your Edge major version:\n' +
-        '  npm run tools:msedgedriver\n' +
-        'or download from https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/\n' +
-        'and set MSEDGEDRIVER_PATH / PATH, or place it at artifacts/webdriver/msedgedriver.exe'
-    );
-  }
-
-  const edgeV = edgeVersion();
-  const driverV = msedgedriverVersion(msedgedriver);
-  const edgeMajor = major(edgeV);
-  const driverMajor = major(driverV);
-  if (!edgeMajor || !driverMajor || edgeMajor !== driverMajor) {
-    fail(
-      `Edge major version (${edgeV}) does not match msedgedriver (${driverV}). ` +
-        'Install a matching driver; refusing to fall back to mocks.'
-    );
-  }
-
-  console.log(`[e2e:desktop] tauri-driver: ${tauriDriver}`);
-  console.log(`[e2e:desktop] msedgedriver: ${msedgedriver} (${driverV})`);
-  console.log(`[e2e:desktop] Edge: ${edgeV}`);
-  return { tauriDriver, msedgedriver };
-}
-
-function writeFixtures() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vellora-desktop-e2e-'));
-  const source = path.join(dir, 'source.md');
-  const target = path.join(dir, 'target.md');
-  fs.writeFileSync(
-    source,
-    '# 源文档\n\n正文搜索词 alpha\n\n## 小节\n\n[本地目标](./target.md)\n\n[外链](https://example.com/path)\n',
-    'utf8'
-  );
-  fs.writeFileSync(
-    target,
-    '# 目标文档\n\n来自链接跳转。\n\n[外链](https://example.com/path)\n',
-    'utf8'
-  );
-  return { dir, source, target };
-}
-
-function runSync(cmd, args) {
-  const r = spawnSync(cmd, args, {
-    cwd: root,
-    stdio: 'inherit',
-    env: process.env
+function ownsListeningPort(port, pid) {
+  const table = execFileSync('netstat.exe', ['-ano', '-p', 'tcp'], {
+    encoding: 'utf8', windowsHide: true, timeout: 5_000
   });
-  if (r.status !== 0) {
-    fail(`${cmd} ${args.join(' ')} exited ${r.status}`);
-  }
+  return table.split(/\r?\n/).some(line => {
+    const [protocol, local, remote, , owner] = line.trim().split(/\s+/);
+    return protocol === 'TCP' && local === '127.0.0.1:' + port && remote === '0.0.0.0:0' && owner === String(pid);
+  });
 }
 
-async function main() {
-  if (process.platform !== 'win32') {
-    fail('Desktop E2E is Windows-only.');
-  }
+async function runNative() {
+  const tauriDriver = findExecutable('tauri-driver.exe', process.env.TAURI_DRIVER_PATH);
+  const msedgedriver = findExecutable('msedgedriver.exe', process.env.MSEDGEDRIVER_PATH,
+    path.join(root, 'artifacts', 'webdriver', 'msedgedriver.exe'));
+  const runtime = readWebView2Runtime();
+  const driverInfo = checkMsedgedriver(msedgedriver, runtime.version);
+  console.log('[desktop E2E] WebView2 ' + runtime.version + ', msedgedriver ' + driverInfo.version +
+    ', Authenticode ' + driverInfo.status + ': ' + driverInfo.subject);
 
-  const session = crypto.randomUUID();
-  if (!isValidSessionToken(session)) {
-    fail(`Generated session token is invalid: ${session}`);
-  }
-  console.log(`[e2e:desktop] session: ${session}`);
-
-  let fixtures = null;
-  let driverProc = null;
-  let wdioProc = null;
-
-  const controller = createCleanupController();
-  const cleanupState = () => ({
-    wdioPid: wdioProc?.pid ?? null,
-    driverPid: driverProc?.pid ?? null,
-    appBinary,
-    session,
-    fixtureDir: fixtures?.dir ?? null
-  });
-
-  const cleanup = () => controller.cleanup(cleanupState());
-
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(130);
-  });
-  process.on('SIGTERM', () => {
-    cleanup();
-    process.exit(143);
-  });
+  refuseExistingTestApplication();
+  buildExecutable();
+  refuseExistingTestApplication();
+  const [port, nativePort] = await freePorts();
+  const baseUrl = 'http://127.0.0.1:' + port;
+  const scratch = fs.mkdtempSync(path.join(temporary, profilePrefix));
+  const token = '--vellora-e2e-session=' + crypto.randomUUID();
+  const source = path.join(scratch, 'source.md');
+  const linked = path.join(scratch, 'target.md');
+  const screenshotDirectory = process.env.VELLORA_DESKTOP_SCREENSHOT_DIR;
+  let driver;
+  let driverExit;
+  let driverDone;
+  let browser;
+  let failure;
+  const cleanupErrors = [];
+  const stopDriver = () => { if (driver?.pid && !driverExit) driver.kill(); };
+  process.once('SIGINT', stopDriver);
+  process.once('SIGTERM', stopDriver);
 
   try {
-    // Before drivers/build: fail closed if any Vellora is running or query fails.
-    assertNoPreexistingVellora();
-
-    const { tauriDriver, msedgedriver } = ensureDrivers();
-
-    fixtures = writeFixtures();
-    const driverPort = Number(process.env.TAURI_DRIVER_PORT || 4444);
-
-    console.log('[e2e:desktop] building web + release binary (custom-protocol)…');
-    const npmCli = process.env.npm_execpath;
-    if (!npmCli || !fs.existsSync(npmCli)) {
-      fail('npm CLI path is unavailable. Run desktop E2E through npm run test:e2e:desktop.');
-    }
-    runSync(process.execPath, [npmCli, 'run', 'build:web']);
-    // Must enable custom-protocol; otherwise Tauri stays in dev mode and loads
-    // http://localhost:1420 instead of the embedded frontendDist assets.
-    runSync('cargo', [
-      'build',
-      '--manifest-path',
-      'src-tauri/Cargo.toml',
-      '--release',
-      '--features',
-      'custom-protocol'
-    ]);
-
-    if (!fs.existsSync(appBinary)) {
-      fail(`Release binary missing: ${appBinary}`);
-    }
-
-    // Re-check before launching (user may have opened app during build).
-    assertNoPreexistingVellora();
-
-    console.log(`[e2e:desktop] starting tauri-driver on :${driverPort}`);
-    driverProc = spawn(
-      tauriDriver,
-      ['--port', String(driverPort), '--native-driver', msedgedriver],
-      {
-        cwd: root,
-        stdio: 'inherit',
-        env: process.env
-      }
-    );
-
-    await new Promise((r) => setTimeout(r, 1500));
-
-    const wdioCli = path.join(root, 'node_modules', '@wdio', 'cli', 'bin', 'wdio.js');
-    const status = await new Promise((resolve) => {
-      wdioProc = spawn(process.execPath, [wdioCli, 'run', 'tests/e2e/config/wdio.desktop.conf.js'], {
-        cwd: root,
-        stdio: 'inherit',
-        env: {
-          ...process.env,
-          VELLORA_E2E_SOURCE: fixtures.source,
-          VELLORA_E2E_TARGET: fixtures.target,
-          VELLORA_E2E_SESSION: session,
-          TAURI_DRIVER_PORT: String(driverPort)
-        }
-      });
-      wdioProc.on('exit', (code) => resolve(code ?? 1));
-      wdioProc.on('error', () => resolve(1));
+    fs.writeFileSync(source, [
+      '# 源文档', '', '正文搜索词 alpha', '', '[本地目标](./target.md)', '',
+      '[外链](https://example.com/path)', ''
+    ].join('\r\n'), 'utf8');
+    fs.writeFileSync(linked, [
+      '# 目标文档', '', '来自链接跳转。', '', '[外链](https://example.com/path)', ''
+    ].join('\r\n'), 'utf8');
+    const env = { ...process.env, WEBVIEW2_USER_DATA_FOLDER: path.join(scratch, 'webview-profile') };
+    // Match the registered Runtime instead of inheriting a fixed distribution override.
+    delete env.WEBVIEW2_BROWSER_EXECUTABLE_FOLDER;
+    driver = spawn(tauriDriver, [
+      '--port', String(port), '--native-port', String(nativePort), '--native-driver', msedgedriver
+    ], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, env });
+    driverDone = new Promise(resolve => {
+      driver.once('error', error => { driverExit = error.message; resolve(); });
+      driver.once('exit', (code, signal) => { driverExit = String(code ?? signal); resolve(); });
     });
 
-    const { cleanupFailed } = cleanup();
-    if (cleanupFailed) {
-      process.exit(1);
+    await waitFor('the isolated WebDriver listener', async () => {
+      if (driverExit) throw new Error('tauri-driver exited before readiness: ' + driverExit);
+      if (!ownsListeningPort(port, driver.pid)) return false;
+      try { return (await webdriverRequest(baseUrl + '/status', 'GET', undefined, 1_000)).ready; }
+      catch { return false; }
+    });
+    browser = await openWebDriverSession(baseUrl, application, [source, token]);
+    const viewport = await runDesktopSmoke(browser, { source, target: linked, screenshotDirectory });
+    if (screenshotDirectory) {
+      fs.writeFileSync(path.join(screenshotDirectory, 'metrics.json'), JSON.stringify({
+        renderer: 'Native Tauri WebView2', viewport, runtime: runtime.version, driver: driverInfo.version,
+        version: browser.capabilities?.browserVersion, authenticode: driverInfo.status, identifier
+      }, null, 2) + '\n');
     }
-    process.exit(status ?? 1);
-  } catch (err) {
-    console.error(err instanceof DesktopE2EError ? err.message : err);
-    cleanup();
-    process.exit(1);
+  } catch (error) {
+    failure = error;
+  } finally {
+    try { await browser?.close(); } catch (error) { cleanupErrors.push(error); }
+    try {
+      // tauri-driver 2.0.6 owns a Windows kill-on-close Job Object for its children.
+      stopDriver();
+      if (driverDone) {
+        const ended = await Promise.race([driverDone.then(() => true), delay(5_000, false, { ref: false })]);
+        if (!ended) throw new Error('The owned WebDriver process did not exit.');
+      }
+      const running = listedTestProcesses();
+      if (running.length) {
+        const pids = running.map(row => String(row.ProcessId) + (row.CommandLine?.includes(token) ? ' (this session)' : ' (unverified)'));
+        throw new Error('Processes from the isolated test target remain. PIDs ' + pids.join(', '));
+      }
+      const resolved = fs.realpathSync(scratch);
+      if (path.dirname(resolved) !== temporary || !path.basename(resolved).startsWith(profilePrefix)) {
+        throw new Error('Refusing to clean a path outside the test fixture directory.');
+      }
+      fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    } catch (error) {
+      cleanupErrors.push(error);
+      console.error('[desktop E2E] Test fixture directory retained: ' + scratch);
+    }
+    process.removeListener('SIGINT', stopDriver);
+    process.removeListener('SIGTERM', stopDriver);
   }
+  if (failure || cleanupErrors.length) throw new AggregateError([...(failure ? [failure] : []), ...cleanupErrors], 'Native E2E failed.');
+  console.log('[desktop E2E] Owned session and fixture cleanup passed');
 }
 
-main();
+if (process.argv.includes('--build-only')) {
+  refuseExistingTestApplication();
+  buildExecutable();
+} else {
+  await runNative();
+}

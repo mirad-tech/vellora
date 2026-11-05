@@ -1,4 +1,6 @@
-# Vellora 社区行为准则
+# Vellora 社区行为准则 / Code of Conduct
+
+English original: [Contributor Covenant 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct.html)
 
 ## 我们的承诺
 

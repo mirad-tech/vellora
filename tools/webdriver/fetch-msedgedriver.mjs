@@ -1,206 +1,69 @@
-/**
- * Download msedgedriver matching the installed Microsoft Edge major/full version.
- * Writes to artifacts/webdriver/msedgedriver.exe (gitignored).
- *
- * Usage: npm run tools:msedgedriver
- */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkMsedgedriver, readWebView2Runtime } from './webview2-runtime.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '../..');
-const outDir = path.join(root, 'artifacts', 'webdriver');
-const zipPath = path.join(outDir, 'edgedriver_win64.zip');
-const driverPath = path.join(outDir, 'msedgedriver.exe');
-const driverNotesPath = path.join(outDir, 'Driver_Notes');
-
-function removePath(target) {
-  fs.rmSync(target, { recursive: true, force: true });
+if (process.platform !== 'win32' || process.arch !== 'x64') {
+  throw new Error('The WebView2 test driver downloader requires Windows x64.');
 }
 
-function cleanupDownloadArtifacts({ removeDriver = false } = {}) {
-  removePath(zipPath);
-  removePath(driverNotesPath);
-  if (removeDriver) {
-    removePath(driverPath);
-  }
+const root = fs.realpathSync(fileURLToPath(new URL('../..', import.meta.url)));
+const driverDirectory = path.join(root, 'artifacts', 'webdriver');
+fs.mkdirSync(driverDirectory, { recursive: true });
+const realDirectory = fs.realpathSync(driverDirectory);
+const relative = path.relative(root, realDirectory);
+if (relative !== path.join('artifacts', 'webdriver')) {
+  throw new Error('The WebDriver cache must resolve inside this checkout.');
+}
+const driverPath = path.join(realDirectory, 'msedgedriver.exe');
+const runtime = readWebView2Runtime();
+console.log('[webdriver] Registered WebView2 Runtime: ' + runtime.version);
+
+function verifyDriver(executable) {
+  const result = checkMsedgedriver(executable, runtime.version);
+  console.log('[webdriver] ' + result.version + ', Authenticode ' + result.status + ': ' + result.subject);
 }
 
-function verifyMicrosoftSignature(target) {
-  const escapedTarget = target.replace(/'/g, "''");
-  const ps = `
-$ErrorActionPreference = 'Stop'
-Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-$signature = Get-AuthenticodeSignature -LiteralPath '${escapedTarget}'
-$result = [PSCustomObject]@{
-  Status = [string]$signature.Status
-  Subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
-}
-$result | ConvertTo-Json -Compress
-`;
-
-  let output = null;
-  let lastError = null;
-  for (const shell of ['pwsh.exe', 'powershell.exe']) {
-    try {
-      output = execFileSync(
-        shell,
-        ['-NoProfile', '-NonInteractive', '-Command', ps],
-        { encoding: 'utf8', windowsHide: true }
-      );
-      break;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  if (output == null) {
-    throw new Error(
-      `Failed to verify msedgedriver Authenticode signature: ${lastError?.message || lastError}`
-    );
-  }
-
-  let result;
-  try {
-    result = JSON.parse(output.trim());
-  } catch (err) {
-    throw new Error(`Invalid Authenticode verification output: ${err?.message || err}`);
-  }
-
-  const status = typeof result?.Status === 'string' ? result.Status : '';
-  const subject = typeof result?.Subject === 'string' ? result.Subject : '';
-  if (status !== 'Valid' || !subject.includes('Microsoft Corporation')) {
-    throw new Error(
-      `Rejected msedgedriver signature (status=${status || 'missing'}, subject=${subject || 'missing'})`
-    );
-  }
-
-  return { status, subject };
-}
-
-function edgeProductVersion() {
-  const candidates = [
-    path.join(process.env['ProgramFiles(x86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    path.join(process.env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
-  ];
-  const edge = candidates.find((p) => fs.existsSync(p));
-  if (!edge) {
-    throw new Error('Microsoft Edge not found (required to pick msedgedriver version).');
-  }
-  const ps = `(Get-Item '${edge.replace(/'/g, "''")}').VersionInfo.ProductVersion`;
-  const out = execFileSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', ps],
-    { encoding: 'utf8', windowsHide: true }
-  );
-  return out.trim();
-}
-
-function download(url, dest) {
-  // Prefer curl.exe (handles this CDN more reliably than some PowerShell TLS stacks).
-  const curl = spawnSync(
-    'curl.exe',
-    ['-L', '--http1.1', '--retry', '5', '--retry-delay', '2', '-o', dest, url],
-    { stdio: 'inherit', windowsHide: true }
-  );
-  if (curl.status === 0 && fs.existsSync(dest) && fs.statSync(dest).size > 100_000) {
-    return;
-  }
-  removePath(dest);
-  // Fallback: PowerShell Invoke-WebRequest
-  const ps = `
-$ErrorActionPreference = 'Stop'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Invoke-WebRequest -Uri '${url.replace(/'/g, "''")}' -OutFile '${dest.replace(/'/g, "''")}' -UseBasicParsing
-`;
-  const r = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', ps],
-    { stdio: 'inherit', windowsHide: true }
-  );
-  if (r.status !== 0 || !fs.existsSync(dest) || fs.statSync(dest).size <= 100_000) {
-    throw new Error(`Failed to download msedgedriver from ${url}`);
-  }
-}
-
-function extractZip(zip, destDir) {
-  const ps = `
-$ErrorActionPreference = 'Stop'
-Expand-Archive -Path '${zip.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}' -Force
-`;
-  const r = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', ps],
-    { stdio: 'inherit', windowsHide: true }
-  );
-  if (r.status !== 0 || !fs.existsSync(driverPath)) {
-    throw new Error('Failed to extract msedgedriver.exe from zip');
-  }
-}
-
-function main() {
-  if (process.platform !== 'win32') {
-    throw new Error('msedgedriver fetch is Windows-only.');
-  }
-
-  fs.mkdirSync(outDir, { recursive: true });
-  const version = edgeProductVersion();
-  console.log(`[tools] Edge version: ${version}`);
-
+function provision() {
   if (fs.existsSync(driverPath)) {
     try {
-      const signature = verifyMicrosoftSignature(driverPath);
-      const v = execFileSync(driverPath, ['--version'], { encoding: 'utf8' });
-      const majorEdge = version.split('.')[0];
-      const majorDriver = (v.match(/(\d+)\./) || [])[1];
-      if (majorDriver === majorEdge) {
-        cleanupDownloadArtifacts();
-        console.log(`[tools] Authenticode: ${signature.status} (${signature.subject})`);
-        console.log(`[tools] Already have matching driver: ${v.trim()}`);
-        console.log(`[tools] Path: ${driverPath}`);
-        return;
-      }
-      console.log(`[tools] Existing driver major ${majorDriver || 'unknown'} does not match Edge ${majorEdge}.`);
-    } catch (err) {
-      console.warn(`[tools] Existing driver rejected: ${err?.message || err}`);
+      verifyDriver(fs.realpathSync(driverPath));
+      console.log('[webdriver] Reusing ' + driverPath);
+      return;
+    } catch (error) {
+      console.warn('[webdriver] Project cache cannot be reused: ' + error.message);
     }
-    cleanupDownloadArtifacts({ removeDriver: true });
   }
 
-  const url = `https://msedgedriver.microsoft.com/${version}/edgedriver_win64.zip`;
-  cleanupDownloadArtifacts();
+  const staging = fs.mkdtempSync(path.join(realDirectory, 'download-'));
   try {
-    console.log(`[tools] Downloading ${url}`);
-    download(url, zipPath);
-    console.log(`[tools] Extracting to ${outDir}`);
-    extractZip(zipPath, outDir);
+    const archive = path.join(staging, 'edgedriver_win64.zip');
+    const download = 'https://msedgedriver.microsoft.com/' + runtime.version + '/edgedriver_win64.zip';
+    execFileSync('curl.exe', [
+      '--fail', '--silent', '--show-error', '--location', '--proto', '=https', '--proto-redir', '=https',
+      '--connect-timeout', '10', '--max-time', '90', '--retry', '2',
+      '--output', archive, download
+    ], { stdio: 'inherit', windowsHide: true, timeout: 200_000 });
 
-    // Never execute a downloaded driver before its Authenticode signature is trusted.
-    const signature = verifyMicrosoftSignature(driverPath);
-    const verOut = execFileSync(driverPath, ['--version'], { encoding: 'utf8' }).trim();
-    const majorEdge = version.split('.')[0];
-    const majorDriver = (verOut.match(/(\d+)\./) || [])[1];
-    if (majorDriver !== majorEdge) {
-      throw new Error(
-        `Downloaded driver major ${majorDriver || 'unknown'} does not match Edge ${majorEdge}`
-      );
+    const quote = value => "'" + value.replaceAll("'", "''") + "'";
+    const extract = '$ErrorActionPreference = "Stop"\n$ProgressPreference = "SilentlyContinue"\nExpand-Archive -LiteralPath ' +
+      quote(archive) + ' -DestinationPath ' + quote(staging);
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(extract, 'utf16le').toString('base64')
+    ], { stdio: 'inherit', windowsHide: true, timeout: 30_000 });
+
+    const candidate = path.join(staging, 'msedgedriver.exe');
+    verifyDriver(candidate);
+    fs.renameSync(candidate, driverPath);
+    console.log('[webdriver] Installed test driver at ' + driverPath);
+  } finally {
+    const resolved = fs.realpathSync(staging);
+    if (path.dirname(resolved) !== realDirectory || !path.basename(resolved).startsWith('download-')) {
+      throw new Error('Refusing to clean a directory outside the WebDriver staging cache.');
     }
-
-    cleanupDownloadArtifacts();
-    console.log(`[tools] Authenticode: ${signature.status} (${signature.subject})`);
-    console.log(`[tools] Installed: ${verOut}`);
-    console.log(`[tools] Path: ${driverPath}`);
-    console.log('[tools] Desktop E2E will pick this up automatically (or set MSEDGEDRIVER_PATH).');
-  } catch (err) {
-    cleanupDownloadArtifacts({ removeDriver: true });
-    throw err;
+    fs.rmSync(resolved, { recursive: true, force: true });
   }
 }
 
-try {
-  main();
-} catch (err) {
-  console.error(`[tools] ${err?.message || err}`);
-  process.exit(1);
-}
+provision();

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { MarkdownDocument } from './types';
+import type { Editor } from '@tiptap/core';
 
 const sampleDoc: MarkdownDocument = {
   path: 'C:\\docs\\sample.md',
@@ -73,6 +74,20 @@ async function pressMetaKey(key: string): Promise<void> {
   });
 }
 
+
+function documentEditor(): Editor {
+  return (screen.getByTestId('markdown-body') as HTMLElement & { editor: Editor }).editor;
+}
+
+async function openSelectedLink(): Promise<void> {
+  const editor = documentEditor();
+  let position = 1;
+  editor.state.doc.descendants((node, pos) => { if (node.marks.some(mark => mark.type.name === 'link')) position = pos; });
+  act(() => editor.commands.setTextSelection(position));
+  fireEvent.focus(screen.getByTestId('markdown-body'));
+  fireEvent.keyDown(screen.getByTestId('markdown-body'), { key: 'Enter', altKey: true });
+}
+
 describe('App', () => {
   /** Captured from onCloseRequested so tests can invoke close protection. */
   let closeRequestedHandler: (() => void) | null = null;
@@ -135,6 +150,86 @@ describe('App', () => {
     closeRequestedHandler = null;
     openFilePathHandler = null;
     cleanup();
+  });
+
+  test('keeps the draft on conflict and scopes overwrite to the confirmed disk revision', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    act(() => documentEditor().commands.insertContent('本地修改'));
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'FILE_CHANGED', message: '磁盘内容已修改', conflictToken: 'revision-one' });
+    await pressCtrlKey('s');
+    await screen.findByRole('dialog', { name: '文件已被外部修改' });
+    fireEvent.click(screen.getByRole('button', { name: '继续编辑' }));
+    expect(documentEditor().state.doc.textContent).toContain('本地修改');
+    expect(documentEditor().can().undo()).toBe(true);
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'FILE_CHANGED', message: '磁盘内容已修改', conflictToken: 'revision-two' });
+    await pressCtrlKey('s');
+    fireEvent.click(await screen.findByRole('button', { name: '覆盖外部版本' }));
+    expect(saveMarkdownFile).toHaveBeenCalledTimes(2);
+    saveMarkdownFile.mockImplementationOnce(async (_path, content) => ({ ok: true, document: { ...sampleDoc, content } }));
+    fireEvent.click(screen.getByRole('button', { name: '确认覆盖' }));
+    await waitFor(() => expect(saveMarkdownFile).toHaveBeenLastCalledWith(sampleDoc.path, expect.stringContaining('本地修改'), 'revision-two'));
+    expect(documentEditor().can().undo()).toBe(true);
+  });
+
+  test('shows an overwrite failure in the conflict dialog and retries the confirmed revision', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    act(() => documentEditor().commands.insertContent('本地修改'));
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'FILE_CHANGED', message: '磁盘内容已修改', conflictToken: 'revision-one' });
+    await pressCtrlKey('s');
+
+    const dialog = within(await screen.findByRole('dialog', { name: '文件已被外部修改' }));
+    fireEvent.click(dialog.getByRole('button', { name: '覆盖外部版本' }));
+    const confirm = dialog.getByRole('button', { name: '确认覆盖' });
+    const message = '保存失败，无法自动恢复原文件。草稿已保留。备份路径：C:\\docs\\.vellora-save-backup-example.md。';
+    let failOverwrite!: () => void;
+    saveMarkdownFile.mockImplementationOnce(() => new Promise(resolve => {
+      failOverwrite = () => resolve({ ok: false, code: 'SAVE_FAILED', message });
+    }));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(confirm).toHaveProperty('disabled', true));
+    fireEvent.click(confirm);
+    expect(saveMarkdownFile).toHaveBeenCalledTimes(2);
+    await act(async () => failOverwrite());
+
+    expect((await dialog.findByRole('alert')).textContent).toBe(message);
+    expect(documentEditor().state.doc.textContent).toContain('本地修改');
+    expect(confirm).toHaveProperty('disabled', false);
+    expect(dialog.getByRole('button', { name: '继续编辑' })).toHaveProperty('disabled', false);
+
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'FILE_CHANGED', message: '磁盘再次修改', conflictToken: 'revision-two' });
+    fireEvent.click(confirm);
+    const chooseAgain = await dialog.findByRole('button', { name: '覆盖外部版本' });
+    expect(saveMarkdownFile).toHaveBeenNthCalledWith(2, sampleDoc.path, expect.stringContaining('本地修改'), 'revision-one');
+    expect(saveMarkdownFile).toHaveBeenNthCalledWith(3, sampleDoc.path, expect.stringContaining('本地修改'), 'revision-one');
+    expect(dialog.queryByRole('alert')).toBeNull();
+    expect(dialog.queryByRole('button', { name: '确认覆盖' })).toBeNull();
+
+    fireEvent.click(chooseAgain);
+    saveMarkdownFile.mockImplementationOnce(async (_path, content) => ({ ok: true, document: { ...sampleDoc, content } }));
+    fireEvent.click(dialog.getByRole('button', { name: '确认覆盖' }));
+    await waitFor(() => expect(screen.queryByTestId('conflict-modal')).toBeNull());
+    expect(saveMarkdownFile).toHaveBeenNthCalledWith(4, sampleDoc.path, expect.stringContaining('本地修改'), 'revision-two');
+  });
+
+  test('failed conflict reload preserves the latest draft and history', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    act(() => documentEditor().commands.insertContent('保留草稿'));
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'FILE_CHANGED', message: '磁盘内容已修改', conflictToken: 'disk-one' });
+    await pressCtrlKey('s');
+    fireEvent.click(await screen.findByRole('button', { name: '重新加载' }));
+    expect(openMarkdownFile).not.toHaveBeenCalled();
+    openMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'READ_FAILED', message: '读取失败' });
+    fireEvent.click(screen.getByRole('button', { name: '放弃草稿并重新加载' }));
+    await waitFor(() => expect(openMarkdownFile).toHaveBeenCalledWith(sampleDoc.path));
+    expect(documentEditor().state.doc.textContent).toContain('保留草稿');
+    expect(documentEditor().can().undo()).toBe(true);
+    expect(setUnsavedChanges).toHaveBeenLastCalledWith(true);
   });
 
   test('registers native event listeners before requesting the initial document', async () => {
@@ -200,6 +295,32 @@ describe('App', () => {
     expect(screen.getByTestId('markdown-body').textContent).not.toContain('正文搜索词');
   });
 
+  test.each(['NOT_FOUND', 'READ_FAILED'])('shows initial %s failures and can open another document', async code => {
+    getInitialDocument.mockResolvedValueOnce({ ok: false, code, message: '无法读取初始文档' });
+    render(<App />);
+    expect((await screen.findByTestId('error-state')).textContent).toContain('无法读取初始文档');
+    fireEvent.click(screen.getByRole('button', { name: '重新选择' }));
+    expect(await screen.findByTestId('markdown-body')).toBeTruthy();
+  });
+
+  test('reports a rejected initial open without an unhandled rejection', async () => {
+    getInitialDocument.mockRejectedValueOnce(new Error('初始读取失败'));
+    render(<App />);
+    expect((await screen.findByTestId('error-state')).textContent).toContain('初始读取失败');
+  });
+
+  test('a late initial failure cannot replace a newer opened document', async () => {
+    let rejectInitial!: (error: Error) => void;
+    getInitialDocument.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectInitial = reject; }));
+    render(<App />);
+    await waitFor(() => expect(getInitialDocument).toHaveBeenCalledTimes(1));
+    await act(async () => openFilePathHandler!(sampleDoc.path));
+    await screen.findByTestId('markdown-body');
+    await act(async () => rejectInitial(new Error('过期的初始错误')));
+    expect(screen.queryByTestId('error-state')).toBeNull();
+    expect(screen.getByTestId('markdown-body').textContent).toContain('标题');
+  });
+
   test('shows empty state and opens a file', async () => {
     render(<App />);
     expect(screen.getByTestId('empty-state')).toBeTruthy();
@@ -217,26 +338,6 @@ describe('App', () => {
     });
     expect(screen.getByText('标题')).toBeTruthy();
     expect(chooseMarkdownFile).toHaveBeenCalled();
-  });
-
-  test('switches between read and edit modes', async () => {
-    render(<App />);
-    fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    expect(screen.getByTestId('btn-read').textContent).toBe('预览');
-    expect(screen.getByTestId('btn-edit').textContent).toBe('源码');
-    expect(screen.getByTestId('status-text').textContent).toBe('Markdown 文档');
-
-    fireEvent.click(screen.getByTestId('btn-edit'));
-    const editor = screen.getByTestId('source-editor') as HTMLTextAreaElement;
-    expect(editor.value).toContain('# 标题');
-
-    fireEvent.change(editor, { target: { value: '# 新标题' } });
-    fireEvent.click(screen.getByTestId('btn-read'));
-    await waitFor(() => {
-      expect(screen.getByTestId('markdown-body').textContent).toContain('新标题');
-    });
   });
 
   test('tracks dirty state and saves with shortcut', async () => {
@@ -262,6 +363,140 @@ describe('App', () => {
     });
   });
 
+  test('toolbar save and search reuse the active document and prevent duplicate saves', async () => {
+    let finishSave!: (value: unknown) => void;
+    const content = '# 标题\n\n工具栏保存\n';
+    saveMarkdownFile.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+    render(<App />);
+    const save = screen.getByTestId('btn-save') as HTMLButtonElement;
+    const search = screen.getByTestId('btn-search') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(search.disabled).toBe(true);
+    expect((screen.getByTestId('btn-outline') as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    expect(save.disabled).toBe(true);
+    expect(search.disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: content } });
+    expect(save.disabled).toBe(false);
+    expect(screen.getByTestId('btn-edit').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('btn-read').getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(search);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('search-input')));
+    fireEvent.change(screen.getByTestId('search-input'), { target: { value: '工具栏' } });
+    await waitFor(() => expect(screen.getByTestId('search-count').textContent).toBe('1 / 1'));
+    fireEvent.click(screen.getByTestId('search-close'));
+    expect(screen.queryByTestId('search-bar')).toBeNull();
+
+    fireEvent.click(save);
+    expect(save.disabled).toBe(true);
+    fireEvent.click(save);
+    expect(saveMarkdownFile).toHaveBeenCalledTimes(1);
+    expect(saveMarkdownFile).toHaveBeenCalledWith(sampleDoc.path, content);
+    await act(async () => finishSave({ ok: true, document: { ...sampleDoc, content } }));
+    await waitFor(() => expect(setUnsavedChanges).toHaveBeenLastCalledWith(false));
+    expect(screen.getByTestId('status-text').textContent).not.toContain('正在保存');
+    expect(save.disabled).toBe(true);
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe(content);
+  });
+
+  test('toolbar actions stay disabled until a pending open finishes', async () => {
+    let finishOpen!: (value: unknown) => void;
+    chooseMarkdownFile.mockImplementationOnce(() => new Promise(resolve => { finishOpen = resolve; }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    for (const id of ['btn-open', 'btn-save', 'btn-search', 'btn-outline']) {
+      expect((screen.getByTestId(id) as HTMLButtonElement).disabled).toBe(true);
+    }
+    await act(async () => finishOpen({ ok: true, document: sampleDoc }));
+    await screen.findByTestId('markdown-body');
+    expect((screen.getByTestId('btn-search') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('btn-outline') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test.each([true, false])('outline dismissal respects floating layout (%s) and restores Escape focus', async floating => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: floating })));
+    try {
+      render(<App />);
+      fireEvent.click(screen.getByTestId('btn-open'));
+      await screen.findByTestId('markdown-body');
+      const toggle = screen.getByTestId('btn-outline');
+      fireEvent.click(toggle);
+      fireEvent.pointerDown(screen.getByTestId('outline-panel'));
+      expect(screen.getByTestId('outline-panel')).toBeTruthy();
+      fireEvent.pointerDown(toggle);
+      expect(screen.getByTestId('outline-panel')).toBeTruthy();
+      fireEvent.pointerDown(screen.getByTestId('content'));
+      expect(Boolean(screen.queryByTestId('outline-panel'))).toBe(!floating);
+
+      if (floating) fireEvent.click(toggle);
+      screen.getByTestId('outline-item').focus();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('outline-panel')).toBeNull();
+      expect(document.activeElement).toBe(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByTestId('outline-item'));
+      expect(Boolean(screen.queryByTestId('outline-panel'))).toBe(!floating);
+      expect(screen.getByTestId('markdown-body').textContent).toContain('正文搜索词');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test.each(['\n', '\r\n'])('source edits preserve the saved line ending (%j) and become clean when reverted', async lineEnding => {
+    const content = '\ufeff# 标题🧭' + lineEnding + lineEnding + '正文内容' + lineEnding;
+    const doc = { ...sampleDoc, content };
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: doc });
+    saveMarkdownFile.mockImplementationOnce(async (_path: string, value: string) => ({ ok: true, document: { ...doc, content: value } }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    const source = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+    const normalized = content.replace(/\r\n/g, '\n');
+    expect(source.value).toBe(normalized);
+    fireEvent.change(source, { target: { value: normalized + '修改' } });
+    expect((screen.getByTestId('btn-save') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.change(source, { target: { value: normalized } });
+    expect((screen.getByTestId('btn-save') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('status-text').textContent).toBe('Markdown 文档');
+    fireEvent.click(screen.getByTestId('btn-read'));
+    expect((screen.getByTestId('btn-save') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: normalized + '修改' } });
+    fireEvent.click(screen.getByTestId('btn-save'));
+    await waitFor(() => expect(saveMarkdownFile).toHaveBeenCalledWith(doc.path, content + '修改'));
+  });
+
+  test('CRLF source search and mode restoration use the textarea selection coordinates', async () => {
+    const content = '\ufeff# 标题🧭\r\n\r\n第一处目标词\r\n\r\n第二处目标词\r\n';
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, content } });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.click(screen.getByTestId('btn-search'));
+    fireEvent.change(screen.getByTestId('search-input'), { target: { value: '目标词' } });
+    await waitFor(() => expect(screen.getByTestId('search-count').textContent).toBe('1 / 2'));
+    fireEvent.click(screen.getByTestId('search-next'));
+    fireEvent.click(screen.getByTestId('search-close'));
+    const source = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+    const start = source.value.lastIndexOf('目标词');
+    expect(source.selectionStart).toBe(start);
+    expect(source.value.slice(source.selectionStart, source.selectionEnd)).toBe('目标词');
+    fireEvent.click(screen.getByTestId('btn-read'));
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    const restored = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+    expect(restored.selectionStart).toBe(start);
+    expect(restored.selectionEnd).toBe(start + '目标词'.length);
+    expect((screen.getByTestId('btn-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
   test('save failure shows error status', async () => {
     saveMarkdownFile.mockResolvedValueOnce({
       ok: false,
@@ -282,6 +517,35 @@ describe('App', () => {
     });
   });
 
+  test('a failed open replaces the previous saved status without losing the document', async () => {
+    saveMarkdownFile.mockImplementationOnce(async (_path: string, content: string) => ({ ok: true, document: { ...sampleDoc, content } }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    const body = await screen.findByTestId('markdown-body');
+    act(() => documentEditor().commands.insertContent('保存后打开'));
+    await pressCtrlKey('s');
+    await waitFor(() => expect(screen.getByTestId('status-text').textContent).toBe('已保存'));
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'OPEN_FAILED', message: '无法读取目标文件' });
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect((screen.getByTestId('btn-open') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByTestId('status-text').textContent).toBe('无法读取目标文件');
+    expect(body.textContent).toContain('保存后打开');
+  });
+
+  test('native drop ignores unsupported paths and opens the first Markdown file', async () => {
+    let dropPaths: ((paths: string[]) => void) | undefined;
+    onDragDropPaths.mockImplementationOnce(handler => {
+      dropPaths = handler;
+      return Promise.resolve(() => undefined);
+    });
+    render(<App />);
+    await waitFor(() => expect(dropPaths).toBeDefined());
+    await act(async () => dropPaths!(['C:/docs/notes.txt', 'C:/docs/invalid.md\n',
+      'C:/docs/README.MARKDOWN', 'C:/docs/other.md']));
+    expect(openMarkdownFile).toHaveBeenCalledExactlyOnceWith('C:/docs/README.MARKDOWN');
+    expect(await screen.findByTestId('markdown-body')).toBeTruthy();
+  });
+
   test('prompts discard when opening another file while dirty', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
@@ -298,31 +562,6 @@ describe('App', () => {
 
     fireEvent.click(screen.getByTestId('discard-cancel'));
     expect(screen.queryByTestId('discard-modal')).toBeNull();
-  });
-
-  test('document search finds matches', async () => {
-    render(<App />);
-    fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    await pressCtrlKey('f');
-    const input = screen.getByTestId('search-input');
-    const searchBar = screen.getByTestId('search-bar');
-    const navigationRow = searchBar.querySelector('.search-navigation-row');
-    expect(searchBar.getAttribute('data-expanded')).toBe('false');
-    expect(navigationRow?.getAttribute('aria-hidden')).toBe('true');
-
-    fireEvent.change(input, { target: { value: '搜索词' } });
-    expect(searchBar.getAttribute('data-expanded')).toBe('true');
-    expect(navigationRow?.getAttribute('aria-hidden')).toBe('false');
-
-    await waitFor(() => {
-      expect(screen.getByTestId('search-count').textContent).toMatch(/1\s*\/\s*1/);
-    });
-    expect(screen.getByTestId('markdown-body').querySelector('mark.search-hit')).toBeTruthy();
-
-    fireEvent.keyDown(input, { key: 'Escape' });
-    expect(screen.queryByTestId('search-bar')).toBeNull();
   });
 
   test('source editor search finds matches and moves selection in source mode', async () => {
@@ -507,7 +746,7 @@ describe('App', () => {
 
     const link = screen.getByTestId('markdown-body').querySelector('a');
     expect(link).toBeTruthy();
-    fireEvent.click(link!);
+    await openSelectedLink();
 
     await waitFor(() => expect(screen.getByTestId('external-link-modal')).toBeTruthy());
     fireEvent.click(screen.getByTestId('external-confirm'));
@@ -517,15 +756,63 @@ describe('App', () => {
     });
   });
 
-  test('outline panel lists headings', async () => {
+  test.each(['http://example.com', 'https://example.com'])('raw HTML links require inspection and confirmation: %s', async href => {
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: {
+      ...sampleDoc, content: '<a href="' + href + '"><strong>外链</strong></a>',
+    } });
+    inspectMarkdownLink.mockResolvedValueOnce({ ok: true, action: 'external', url: href + '/' });
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    const body = await screen.findByTestId('markdown-body');
+    act(() => documentEditor().view.setProps({ handleScrollToSelection: () => true }));
+    fireEvent.click(body.querySelector('.raw-source-preview a strong')!, { ctrlKey: true });
+    await screen.findByTestId('external-link-modal');
+    expect(inspectMarkdownLink).toHaveBeenCalledExactlyOnceWith(sampleDoc.path, href);
+    expect(openExternalUrl).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('external-confirm'));
+    await waitFor(() => expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith(href + '/'));
+  });
 
-    fireEvent.click(screen.getByTestId('btn-outline'));
-    expect(screen.getByTestId('outline-panel')).toBeTruthy();
-    expect(screen.getByTestId('outline-item').textContent).toBe('标题');
-    expect(screen.getByTestId('outline-item').getAttribute('aria-current')).toBe('location');
+  test.each([
+    ['raw HTML with Enter', '<a href="https://example.com">外链</a>', false],
+    ['reference-style Markdown with Alt+Enter', '[外链][target]\n\n[target]: https://example.com', true],
+  ])('opens a %s preview link only after confirmation', async (_scenario, source, altKey) => {
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: {
+      ...sampleDoc, content: '# 标题\n\n' + source,
+    } });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    const body = await screen.findByTestId('markdown-body');
+    const link = body.querySelector<HTMLAnchorElement>('.raw-source-preview a')!;
+    act(() => documentEditor().view.setProps({ handleScrollToSelection: () => true }));
+    act(() => link.focus());
+    expect(document.activeElement).toBe(link);
+
+    fireEvent.keyDown(link, { key: 'Enter', altKey, isComposing: true });
+    expect(inspectMarkdownLink).not.toHaveBeenCalled();
+
+    expect(fireEvent.keyDown(link, { key: 'Enter', altKey })).toBe(false);
+    await screen.findByTestId('external-link-modal');
+    expect(inspectMarkdownLink).toHaveBeenCalledExactlyOnceWith(sampleDoc.path, 'https://example.com');
+    expect(openExternalUrl).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('external-confirm'));
+    await waitFor(() => expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith('https://example.com/'));
+  });
+
+  test('raw HTML relative links retain the checked local path flow', async () => {
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: {
+      ...sampleDoc, content: '<a href="../outside.md">下一页</a>',
+    } });
+    inspectMarkdownLink.mockResolvedValueOnce({ ok: false, code: 'PATH_OUTSIDE_DOCUMENT', message: '链接超出当前文档目录。' });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    const body = await screen.findByTestId('markdown-body');
+    act(() => documentEditor().view.setProps({ handleScrollToSelection: () => true }));
+    fireEvent.click(body.querySelector('.raw-source-preview a')!, { ctrlKey: true });
+    await waitFor(() => expect(inspectMarkdownLink).toHaveBeenCalledExactlyOnceWith(sampleDoc.path, '../outside.md'));
+    await screen.findByText('链接超出当前文档目录。');
+    expect(openMarkdownLink).not.toHaveBeenCalled();
+    expect(openExternalUrl).not.toHaveBeenCalled();
   });
 
   test('opening outline selects the heading at the current scroll position', async () => {
@@ -553,21 +840,6 @@ describe('App', () => {
       const items = screen.getAllByTestId('outline-item');
       expect(items[0].getAttribute('aria-current')).toBeNull();
       expect(items[1].getAttribute('aria-current')).toBe('location');
-    });
-  });
-
-  test('Ctrl+S triggers save', async () => {
-    render(<App />);
-    fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId('btn-edit'));
-    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: 'saved via key' } });
-
-    await pressCtrlKey('s');
-
-    await waitFor(() => {
-      expect(saveMarkdownFile).toHaveBeenCalled();
     });
   });
 
@@ -619,7 +891,7 @@ describe('App', () => {
 
     const link = screen.getByTestId('markdown-body').querySelector('a');
     expect(link).toBeTruthy();
-    fireEvent.click(link!);
+    await openSelectedLink();
 
     await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
     fireEvent.click(screen.getByTestId('discard-cancel'));
@@ -670,7 +942,7 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-read'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('a')!);
+    await openSelectedLink();
     await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
     setUnsavedChanges.mockClear();
     fireEvent.click(screen.getByTestId('discard-confirm'));
@@ -980,6 +1252,7 @@ describe('App', () => {
     await waitFor(() => expect(chooseMarkdownFile).toHaveBeenCalledTimes(2));
 
     expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(screen.getByTestId('status-text').textContent).toBe('正在打开文件');
 
     await act(async () => {
       resolveOpen({
@@ -1127,7 +1400,7 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('a')!);
+    await openSelectedLink();
     expect(screen.queryByTestId('discard-modal')).toBeNull();
 
     await waitFor(() => {
@@ -1182,7 +1455,7 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('btn-read'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('a')!);
+    await openSelectedLink();
     await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
     fireEvent.click(screen.getByTestId('discard-confirm'));
 
@@ -1194,242 +1467,521 @@ describe('App', () => {
     });
   });
 
-  test('quick edit supports headings, paragraphs, list items, and blockquotes by source range', async () => {
-    const document: MarkdownDocument = {
-      ...sampleDoc,
-      content: '# 标题\r\n\r\n相同内容\r\n\r\n相同内容\r\n\r\n- 列表项\r\n\r\n> 引用内容\r\n'
-    };
-    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
-
+  test.each(['python', '', 'unknown metadata'])('edits code directly with language %j and no format controls', async language => {
+    saveMarkdownFile.mockImplementationOnce(async (path: string, content: string) => ({ ok: true, document: { ...sampleDoc, path, content } }));
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, content: '```' + language + '\ncode\n```' } });
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    const body = screen.getByTestId('markdown-body');
-    for (const kind of ['heading', 'paragraph', 'list-item', 'blockquote']) {
-      const block = body.querySelector<HTMLElement>(`[data-edit-block-kind="${kind}"]`);
-      expect(block).toBeTruthy();
-      fireEvent.click(block!);
-      const quickEditor = screen.getByTestId('quick-edit-surface');
-      expect(quickEditor).toBe(block);
-      expect(quickEditor.getAttribute('contenteditable')).toBe('true');
-      fireEvent.keyDown(quickEditor, {
-        key: 'Enter',
-        ctrlKey: true
-      });
-      expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
-    }
-
-    const duplicateParagraphs = body.querySelectorAll<HTMLElement>(
-      '[data-edit-block-kind="paragraph"]'
-    );
-    const editedPreviewNode = duplicateParagraphs[1];
-    fireEvent.click(editedPreviewNode);
-    const quickEditor = screen.getByTestId('quick-edit-surface');
-    quickEditor.textContent = '只修改第二处';
-    fireEvent.input(quickEditor);
-    expect(
-      body.querySelectorAll<HTMLElement>('[data-edit-block-kind="paragraph"]')[1]
-    ).toBe(editedPreviewNode);
-    expect(body.textContent).toContain('只修改第二处');
-    fireEvent.blur(quickEditor);
-
-    await pressCtrlKey('s');
-    await waitFor(() => {
-      expect(saveMarkdownFile).toHaveBeenCalledWith(
-        sampleDoc.path,
-        '# 标题\r\n\r\n相同内容\r\n\r\n只修改第二处\r\n\r\n- 列表项\r\n\r\n> 引用内容\r\n'
-      );
+    const body = await screen.findByTestId('markdown-body');
+    act(() => {
+      // jsdom has no text geometry.
+      documentEditor().view.setProps({ handleScrollToSelection: () => true });
+      documentEditor().view.focus();
+      documentEditor().commands.setTextSelection({ from: 1, to: 5 });
+      documentEditor().commands.insertContent('edited code');
     });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    expect(screen.queryByRole('button', { name: '格式' })).toBeNull();
+    expect(screen.queryByLabelText('代码语言')).toBeNull();
+    expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(true);
+    expect(document.activeElement).toBe(body);
+    fireEvent.keyDown(body, { key: 'Escape' });
+    await pressCtrlKey('s');
+    expect(saveMarkdownFile.mock.calls.at(-1)?.[1]).toBe('```' + language + '\nedited code\n```');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    expect(screen.getByTestId('source-editor')).toHaveProperty('value', '```' + language + '\nedited code\n```');
+    fireEvent.click(screen.getByTestId('btn-read'));
+    act(() => documentEditor().commands.undo());
+    expect(documentEditor().state.doc.firstChild!.attrs.language).toBe(language || null);
+    expect(body.textContent).toBe('code');
   });
 
-  test('quick edit preserves CRLF inside a multiline block', async () => {
-    const document: MarkdownDocument = {
-      ...sampleDoc,
-      content: '# 标题\r\n\r\n第一行\r\n第二行\r\n'
-    };
-    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
+  test('direct code edits defer IME save and immediately protect native close', async () => {
+    saveMarkdownFile.mockImplementationOnce(async (path: string, content: string) => ({ ok: true, document: { ...sampleDoc, path, content } }));
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, content: '```js\ncode\n```' } });
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
-    const quickEditor = screen.getByTestId('quick-edit-surface');
-    expect(quickEditor.textContent).toBe('第一行\n第二行');
-    quickEditor.textContent = '第一行已修改\n第二行';
-    fireEvent.input(quickEditor);
-    fireEvent.blur(quickEditor);
+    const body = await screen.findByTestId('markdown-body');
+    act(() => documentEditor().view.focus());
+    fireEvent.compositionStart(body);
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('中', 1, 5)));
     await pressCtrlKey('s');
-
-    await waitFor(() => {
-      expect(saveMarkdownFile).toHaveBeenCalledWith(
-        sampleDoc.path,
-        '# 标题\r\n\r\n第一行已修改\r\n第二行\r\n'
-      );
-    });
+    expect(saveMarkdownFile).not.toHaveBeenCalled();
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('文', 2)));
+    fireEvent.compositionEnd(body);
+    await waitFor(() => expect(saveMarkdownFile).toHaveBeenCalled());
+    expect(saveMarkdownFile.mock.calls.at(-1)?.[1]).toContain('```js\n中文\n');
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('新', 1)));
+    await act(async () => closeRequestedHandler?.());
+    expect(screen.getByTestId('discard-modal')).toBeTruthy();
+    expect(documentEditor().state.doc.textContent).toBe('新中文');
   });
 
-  test('quick edit stays disabled when rendered content cannot round-trip to the original Markdown', async () => {
-    const document: MarkdownDocument = {
-      ...sampleDoc,
-      content: '# 标题\n\n保留 \\*星号\\*  \n下一行\n'
-    };
-    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
+  test('all common blocks edit continuously and use the existing save flow', async () => {
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc,
+      content: '# 标题\r\n\r\n- 父项\r\n  - 子项\r\n\r\n| A | B |\r\n| --- | --- |\r\n| 一 | 二 |\r\n\r\n```js\r\nconst x = 1;\r\n```' } });
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    const editor = documentEditor();
+    expect(editor.isEditable).toBe(true);
+    let codePos = 0;
+    editor.state.doc.descendants((node, pos) => { if (node.type.name === 'codeBlock') codePos = pos + 1; });
+    act(() => editor.view.dispatch(editor.state.tr.insertText('// 修改\n', codePos)));
+    await pressCtrlKey('s');
+    const saved = saveMarkdownFile.mock.calls.at(-1)?.[1] as string;
+    expect(saved).toContain('// 修改\r\nconst x = 1;');
+    expect(saved).toContain('子项');
+    expect(saved).toContain('一');
+    expect(saved.replace(/\r\n/g, '')).not.toContain('\n');
+  });
 
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
-
-    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
+  test('mode switches preserve original bytes and undo history until source changes', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    await act(async () => Promise.resolve());
+    const editor = documentEditor();
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    expect(screen.getByTestId('source-editor')).toHaveProperty('value', sampleDoc.content);
+    fireEvent.click(screen.getByTestId('btn-read'));
+    expect(documentEditor()).toBe(editor);
     expect(setUnsavedChanges).not.toHaveBeenCalledWith(true);
+    act(() => editor.view.dispatch(editor.state.tr.insertText('新', 1)));
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.click(screen.getByTestId('btn-read'));
+    act(() => editor.commands.undo());
+    await waitFor(() => expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(false));
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: '# 源码改动' } });
+    fireEvent.click(screen.getByTestId('btn-read'));
+    expect(documentEditor().state.doc.textContent).toBe('源码改动');
+    expect(documentEditor().can().undo()).toBe(false);
   });
 
-  test('IME composition Enter and Escape do not commit or cancel quick edit', async () => {
+  test('Escape keeps edits and document undo restores the clean baseline', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
-    const quickEditor = screen.getByTestId('quick-edit-surface');
-    quickEditor.textContent = '拼音输入';
-    fireEvent.input(quickEditor);
-
-    fireEvent.keyDown(quickEditor, { key: 'Enter', isComposing: true, keyCode: 229 });
-    expect(screen.getByTestId('quick-edit-surface')).toBe(quickEditor);
-    expect(quickEditor.querySelector('br')).toBeNull();
-
-    fireEvent.keyDown(quickEditor, { key: 'Escape', isComposing: true, keyCode: 229 });
-    expect(screen.getByTestId('quick-edit-surface')).toBe(quickEditor);
-
-    fireEvent.keyDown(quickEditor, { key: 'Escape' });
-    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
+    await act(async () => Promise.resolve());
+    const editor = documentEditor();
+    act(() => editor.view.dispatch(editor.state.tr.insertText('新', 1)));
+    fireEvent.keyDown(screen.getByTestId('markdown-body'), { key: 'Escape' });
+    expect(editor.state.doc.textContent).toContain('新标题');
+    expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(true);
+    act(() => editor.commands.undo());
+    expect(editor.state.doc.textContent).not.toContain('新标题');
+    await waitFor(() => expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(false));
   });
 
-  test('Escape cancels quick edit and restores the previous dirty state', async () => {
+  test('save waits for IME completion and writes the final composition text', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
-    const quickEditor = screen.getByTestId('quick-edit-surface');
-    quickEditor.textContent = '临时标题';
-    fireEvent.input(quickEditor);
-    await waitFor(() => expect(setUnsavedChanges).toHaveBeenCalledWith(true));
-
-    fireEvent.keyDown(quickEditor, { key: 'Escape' });
-    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
-    await waitFor(() => {
-      expect(screen.getByTestId('markdown-body').textContent).toContain('标题');
-      const calls = setUnsavedChanges.mock.calls.map((call) => call[0]);
-      expect(calls[calls.length - 1]).toBe(false);
-    });
+    const body = screen.getByTestId('markdown-body');
+    fireEvent.compositionStart(body);
+    await pressCtrlKey('s');
+    expect(saveMarkdownFile).not.toHaveBeenCalled();
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('中文', 1)));
+    fireEvent.compositionEnd(body);
+    await waitFor(() => expect(saveMarkdownFile).toHaveBeenCalled());
+    expect(saveMarkdownFile.mock.calls.at(-1)?.[1]).toContain('中文标题');
   });
 
-  test('quick edits use existing close protection and save flow', async () => {
-    saveMarkdownFile.mockImplementationOnce(async (path: string, content: string) => ({
-      ok: true,
-      document: { ...sampleDoc, path, content }
-    }));
+  test('continuous edits retain close protection and save failure recovery', async () => {
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'SAVE_FAILED', message: '保存失败' });
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('p')!);
-    const quickEditor = screen.getByTestId('quick-edit-surface');
-    quickEditor.textContent = '阅读模式修改';
-    fireEvent.input(quickEditor);
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('未保存', 1)));
     await act(async () => closeRequestedHandler?.());
     expect(screen.getByTestId('discard-modal')).toBeTruthy();
     fireEvent.click(screen.getByTestId('discard-modal'));
-
     await pressCtrlKey('s');
-    await waitFor(() => {
-      expect(saveMarkdownFile).toHaveBeenCalledWith(
-        sampleDoc.path,
-        '# 标题\n\n阅读模式修改\n\n[外链](https://example.com)\n'
-      );
-      const calls = setUnsavedChanges.mock.calls.map((call) => call[0]);
-      expect(calls[calls.length - 1]).toBe(false);
-    });
+    expect(screen.getByTestId('status-text').textContent).toBe('保存失败');
+    expect(documentEditor().state.doc.textContent).toContain('未保存标题');
+    expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(true);
   });
 
-  test('links navigate normally until their containing block enters quick edit', async () => {
+  test('typing during a save cannot be overwritten by the older save response', async () => {
+    let finish!: (value: unknown) => void;
+    saveMarkdownFile.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    const body = screen.getByTestId('markdown-body');
-    const link = body.querySelector('a')!;
-    fireEvent.click(link);
-    await waitFor(() => expect(screen.getByTestId('external-link-modal')).toBeTruthy());
-    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
-    fireEvent.click(screen.getByTestId('external-cancel'));
-
-    fireEvent.click(screen.getByTestId('markdown-body').querySelectorAll('p')[1]);
-    const quickEditor = screen.getByTestId('quick-edit-surface');
-    fireEvent.click(quickEditor.querySelector('a')!);
-    expect(inspectMarkdownLink).toHaveBeenCalledTimes(1);
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('甲', 1)));
+    await pressCtrlKey('s');
+    const submitted = saveMarkdownFile.mock.calls.at(-1)?.[1];
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('乙', 1)));
+    await act(async () => finish({ ok: true, document: { ...sampleDoc, content: submitted } }));
+    expect(documentEditor().state.doc.textContent).toContain('乙甲标题');
+    expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(true);
   });
 
-  test('complex Markdown structures remain read-only', async () => {
-    const document: MarkdownDocument = {
-      ...sampleDoc,
-      content: '- 父项\n  - 子项\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n```text\ncode\n```\n'
-    };
-    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document });
+  test.each(['read', 'edit'])('saving from %s preserves later edits across a mode switch', async mode => {
+    let finish!: (value: unknown) => void;
+    saveMarkdownFile.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    const body = screen.getByTestId('markdown-body');
-    for (const selector of ['li', 'td', 'pre']) {
-      fireEvent.click(body.querySelector(selector)!);
-      expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
+    await screen.findByTestId('markdown-body');
+    if (mode === 'read') act(() => documentEditor().commands.insertContent('已提交'));
+    else {
+      fireEvent.click(screen.getByTestId('btn-edit'));
+      fireEvent.change(screen.getByTestId('source-editor'), { target: { value: '# 已提交' } });
     }
+    await pressCtrlKey('s');
+    const submitted = saveMarkdownFile.mock.calls.at(-1)![1];
+    fireEvent.click(screen.getByTestId(mode === 'read' ? 'btn-edit' : 'btn-read'));
+    if (mode === 'read') fireEvent.change(screen.getByTestId('source-editor'), { target: { value: '# 更新草稿' } });
+    else act(() => documentEditor().commands.insertContent('更新草稿'));
+    await act(async () => finish({ ok: true, document: { ...sampleDoc, content: submitted } }));
+    expect(setUnsavedChanges).toHaveBeenLastCalledWith(true);
+    if (mode === 'read') fireEvent.click(screen.getByTestId('btn-read'));
+    expect(documentEditor().state.doc.textContent).toContain('更新草稿');
+    await pressCtrlKey('s');
+    expect(saveMarkdownFile.mock.calls.at(-1)![1]).toContain('更新草稿');
   });
 
-  test('pending document open blocks quick edit', async () => {
+  test('a source save completed after returning to the document establishes a clean baseline', async () => {
+    let finish!: (value: unknown) => void;
+    saveMarkdownFile.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: '# 已提交' } });
+    await pressCtrlKey('s');
+    fireEvent.click(screen.getByTestId('btn-read'));
+    await act(async () => finish({ ok: true, document: { ...sampleDoc, content: '# 已提交' } }));
+    expect(setUnsavedChanges).toHaveBeenLastCalledWith(false);
+    expect(documentEditor().state.doc.textContent).toBe('已提交');
+  });
+
+  test('equivalent source syntax retains native close protection until the exact draft is saved', async () => {
+    const original = '## H\n\nbody\n';
+    const draft = 'H\n---\n\nbody\n';
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, content: original } });
+    saveMarkdownFile.mockImplementationOnce(async (_path, content) => ({ ok: true, document: { ...sampleDoc, content } }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: draft } });
+    fireEvent.click(screen.getByTestId('btn-read'));
+    await waitFor(() => expect(setUnsavedChanges).toHaveBeenLastCalledWith(true));
+    expect(document.title).toContain('•');
+    await act(async () => closeRequestedHandler?.());
+    expect(screen.getByTestId('close-cancel')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('close-cancel'));
+    expect(confirmClose).toHaveBeenCalledWith(false);
+    await pressCtrlKey('s');
+    expect(saveMarkdownFile).toHaveBeenLastCalledWith(sampleDoc.path, draft);
+    await waitFor(() => expect(setUnsavedChanges).toHaveBeenLastCalledWith(false));
+  });
+
+  test('an old save response cannot replace a new document session', async () => {
+    let finish!: (value: unknown) => void;
+    saveMarkdownFile.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    await pressCtrlKey('s');
+    openMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, path: 'C:/docs/next.md', content: '# 新会话' } });
+    await act(async () => openFilePathHandler?.('C:/docs/next.md'));
+    expect(documentEditor().state.doc.textContent).toBe('新会话');
+    await act(async () => finish({ ok: true, document: sampleDoc }));
+    expect(documentEditor().state.doc.textContent).toBe('新会话');
+    expect(documentEditor().can().undo()).toBe(false);
+    expect(setUnsavedChanges).toHaveBeenLastCalledWith(false);
+  });
+
+  test('search left open across mode changes preserves each scroll position and source selection', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    const main = screen.getByRole('main');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    await pressCtrlKey('f');
+    fireEvent.change(screen.getByTestId('search-input'), { target: { value: '正文' } });
+    const source = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+    source.setSelectionRange(1, 3);
+    main.scrollTop = 123;
+    fireEvent.click(screen.getByTestId('btn-read'));
+    main.scrollTop = 234;
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    expect(main.scrollTop).toBe(123);
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).selectionStart).toBe(1);
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).selectionEnd).toBe(3);
+    fireEvent.click(screen.getByTestId('btn-read'));
+    expect(main.scrollTop).toBe(234);
+  });
+
+  test('source search navigation reuses highlight nodes and measures the selected result once', async () => {
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, content: '匹配 一\n\n匹配 二\n\n匹配 三' } });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    Object.defineProperty(screen.getByRole('main'), 'clientHeight', { value: 600 });
+    await pressCtrlKey('f');
+    fireEvent.change(screen.getByTestId('search-input'), { target: { value: '匹配' } });
+    const layer = screen.getByTestId('source-search-highlight-layer');
+    const marks = [...layer.querySelectorAll('mark')];
+    const measure = vi.spyOn(window, 'getComputedStyle');
+    try {
+      fireEvent.click(screen.getByTestId('search-next'));
+      [...layer.querySelectorAll('mark')].forEach((mark, index) => expect(mark).toBe(marks[index]));
+      expect(layer.querySelectorAll('[data-active-search="true"]')).toHaveLength(1);
+      expect(marks[1].getAttribute('data-active-search')).toBe('true');
+      expect(measure.mock.calls.filter(([element]) => element === screen.getByTestId('source-editor'))).toHaveLength(1);
+    } finally { measure.mockRestore(); }
+  });
+
+  test('first source visit maps the visible block and later visits restore the source cursor', async () => {
+    const content = '# 标题\n\n第一段\n\n目标段落';
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, content } });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    const editor = documentEditor();
+    const main = screen.getByRole('main');
+    Object.defineProperty(main, 'clientHeight', { value: 600 });
+    Object.defineProperty(main, 'scrollHeight', { value: 4000 });
+    let position = 0;
+    editor.state.doc.descendants((node, pos) => { if (node.textContent === '目标段落' && node.isTextblock) position = pos + 1; });
+    const caret = vi.spyOn(editor.view, 'coordsAtPos').mockReturnValue({ top: -100, bottom: -80, left: 0, right: 1 });
+    const visible = vi.spyOn(editor.view, 'posAtCoords').mockReturnValue({ pos: position, inside: position - 1 });
+    try {
+      fireEvent.click(screen.getByTestId('btn-edit'));
+      const source = screen.getByTestId('source-editor') as HTMLTextAreaElement;
+      expect(source.selectionStart).toBe(content.indexOf('目标段落'));
+      expect(source.value).toBe(content);
+      expect(setUnsavedChanges.mock.lastCall?.[0]).toBe(false);
+      source.setSelectionRange(2, 4);
+      fireEvent.click(screen.getByTestId('btn-read'));
+      fireEvent.click(screen.getByTestId('btn-edit'));
+      expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).selectionStart).toBe(2);
+      expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).selectionEnd).toBe(4);
+    } finally { caret.mockRestore(); visible.mockRestore(); }
+  });
+
+  test('clicking link text edits it; opening uses the explicit link action', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-
-    type FailedOpen = { ok: false; code: 'READ_FAILED'; message: string };
-    let resolveOpen!: (value: FailedOpen) => void;
-    chooseMarkdownFile.mockReturnValueOnce(
-      new Promise<FailedOpen>((resolve) => {
-        resolveOpen = resolve;
-      })
-    );
-    fireEvent.click(screen.getByTestId('btn-open'));
-    await waitFor(() => expect(screen.getByTestId('btn-open')).toHaveProperty('disabled', true));
-
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
-    expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
-    await act(async () => {
-      resolveOpen({ ok: false, code: 'READ_FAILED', message: '读取失败' });
-    });
+    fireEvent.click(screen.getByTestId('markdown-body').querySelector('a')!);
+    expect(inspectMarkdownLink).not.toHaveBeenCalled();
+    await openSelectedLink();
+    await waitFor(() => expect(screen.getByTestId('external-link-modal')).toBeTruthy());
+    expect(openExternalUrl).not.toHaveBeenCalled();
   });
 
-  test('opening another document clears the active quick editor', async () => {
-    const nextDocument: MarkdownDocument = {
-      ...sampleDoc,
-      path: 'C:\\docs\\next.md',
-      name: 'next.md',
-      content: '# 下一个文档\n'
-    };
-    openMarkdownFile.mockResolvedValueOnce({ ok: true, document: nextDocument });
+  test('pending document open disables continuous editing and recovers after failure', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));
     await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('markdown-body').querySelector('h1')!);
-    expect(screen.getByTestId('quick-edit-surface')).toBeTruthy();
+    let resolveOpen!: (value: unknown) => void;
+    chooseMarkdownFile.mockReturnValueOnce(new Promise(resolve => { resolveOpen = resolve; }));
+    fireEvent.click(screen.getByTestId('btn-open'));
+    expect(documentEditor().isEditable).toBe(false);
+    await act(async () => resolveOpen({ ok: false, code: 'READ_FAILED', message: '读取失败' }));
+    expect(documentEditor().isEditable).toBe(true);
+  });
 
-    await waitFor(() => expect(openFilePathHandler).toBeTypeOf('function'));
-    act(() => openFilePathHandler?.('C:\\docs\\next.md'));
-    await waitFor(() => {
-      expect(screen.queryByTestId('quick-edit-surface')).toBeNull();
-      expect(screen.getByTestId('markdown-body').textContent).toContain('下一个文档');
+  test.each(['picker', 'path', 'link'])('rejected %s open keeps the draft/history and recovers editing', async origin => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    const editor = documentEditor();
+    act(() => editor.commands.insertContent('异常后保留'));
+    const failure = new Error('读取异常，草稿已保留');
+    if (origin === 'picker') {
+      chooseMarkdownFile.mockRejectedValueOnce(failure);
+      fireEvent.click(screen.getByTestId('btn-open'));
+    } else if (origin === 'path') {
+      openMarkdownFile.mockRejectedValueOnce(failure);
+      await act(async () => openFilePathHandler?.('C:/docs/next.md'));
+    } else {
+      inspectMarkdownLink.mockResolvedValueOnce({ ok: true, action: 'markdown' });
+      openMarkdownLink.mockRejectedValueOnce(failure);
+      await openSelectedLink();
+    }
+    fireEvent.click(await screen.findByTestId('discard-confirm'));
+    await waitFor(() => expect(screen.getByTestId('status-text').textContent).toBe(failure.message));
+    expect(documentEditor()).toBe(editor);
+    expect(editor.state.doc.textContent).toContain('异常后保留');
+    expect(editor.can().undo()).toBe(true);
+    await waitFor(() => expect(editor.isEditable).toBe(true));
+    expect(setUnsavedChanges).toHaveBeenLastCalledWith(true);
+  });
+
+  test('conversion failure protects the current document and recovers latest content into source mode', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    const editor = documentEditor();
+    vi.spyOn(editor.markdown!, 'serialize').mockImplementation(() => { throw new Error('serialization failed'); });
+    act(() => editor.view.dispatch(editor.state.tr.insertText('恢复内容', 1)));
+    expect((await screen.findByRole('alert')).textContent).toContain('内容转换失败');
+    expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(true);
+    await pressCtrlKey('s');
+    expect(saveMarkdownFile).not.toHaveBeenCalled();
+    await act(async () => closeRequestedHandler?.());
+    expect(screen.getByTestId('discard-modal')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('discard-modal'));
+    fireEvent.click(screen.getByRole('button', { name: '源码恢复' }));
+    expect(screen.getByTestId('source-editor')).toHaveProperty('value', expect.stringContaining('恢复内容标题'));
+    await pressCtrlKey('s');
+    expect(saveMarkdownFile.mock.calls.at(-1)?.[1]).toContain('恢复内容标题');
+  });
+
+  test('a close requested during composition waits for the final text before prompting', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    const body = screen.getByTestId('markdown-body');
+    fireEvent.compositionStart(body);
+    await act(async () => closeRequestedHandler?.());
+    expect(confirmClose).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('discard-modal')).toBeNull();
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('输入法', 1)));
+    fireEvent.compositionEnd(body);
+    await waitFor(() => expect(screen.getByTestId('discard-modal')).toBeTruthy());
+    expect(documentEditor().state.doc.textContent).toContain('输入法标题');
+  });
+
+  test('opening another document replaces the editor and its history', async () => {
+    openMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, path: 'C:\\docs\\next.md', content: '# 下一个文档' } });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    const originalEditor = documentEditor();
+    screen.getByTestId('content').scrollTop = 2400;
+    await pressCtrlKey('f');
+    expect(screen.getByTestId('search-bar')).toBeTruthy();
+    await act(async () => openFilePathHandler?.('C:\\docs\\next.md'));
+    await waitFor(() => expect(documentEditor().state.doc.textContent).toBe('下一个文档'));
+    expect(documentEditor()).not.toBe(originalEditor);
+    expect(documentEditor().can().undo()).toBe(false);
+    expect(screen.getByTestId('content').scrollTop).toBe(0);
+    expect(screen.queryByTestId('search-bar')).toBeNull();
+  });
+
+  test.each(['click', 'Enter', ' '])('activates a leading raw source fragment on first %s without dirtying the document', async action => {
+    chooseMarkdownFile.mockResolvedValueOnce({ ok: true, document: { ...sampleDoc, content: '<!-- comment -->\n\n正文' } });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    const preview = await screen.findByRole('button', { name: '编辑源码片段' });
+    // jsdom has no Range geometry.
+    act(() => documentEditor().view.setProps({ handleScrollToSelection: () => true }));
+    expect(documentEditor().state.selection.from).toBe(1);
+    if (action === 'click') fireEvent.click(preview);
+    else fireEvent.keyDown(preview, { key: action });
+    expect(preview.parentElement?.dataset.active).toBe('true');
+    expect(setUnsavedChanges.mock.calls.at(-1)?.[0]).toBe(false);
+    act(() => documentEditor().view.dispatch(documentEditor().state.tr.insertText('新增', 5)));
+    await pressCtrlKey('s');
+    expect(saveMarkdownFile.mock.calls.at(-1)?.[1]).toContain('<!--新增 comment -->');
+  });
+
+
+  test('the first toolbar save flushes a focused document and retains its draft after failure', async () => {
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'SAVE_FAILED', message: '请重试保存' });
+    saveMarkdownFile.mockImplementationOnce(async (_path, content) => ({ ok: true, document: { ...sampleDoc, content } }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    const body = await screen.findByTestId('markdown-body');
+    act(() => {
+      documentEditor().view.focus();
+      documentEditor().view.dispatch(documentEditor().state.tr.insertText('首次点击', 1));
     });
+    expect(document.activeElement).toBe(body);
+    const save = screen.getByTestId('btn-save') as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await screen.findByText('请重试保存');
+    expect(saveMarkdownFile).toHaveBeenCalledWith(sampleDoc.path, expect.stringContaining('# 首次点击标题'));
+    expect(body.textContent).toContain('首次点击标题');
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(save.disabled).toBe(true));
+    expect(saveMarkdownFile).toHaveBeenCalledTimes(2);
+    expect(saveMarkdownFile.mock.calls[1][1]).toBe(saveMarkdownFile.mock.calls[0][1]);
+    expect(setUnsavedChanges).toHaveBeenLastCalledWith(false);
+  });
+
+  test('find ignores IME shortcut events and repeated invocation preserves the query', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true, isComposing: true });
+    expect(screen.queryByTestId('search-bar')).toBeNull();
+    fireEvent.click(screen.getByTestId('btn-search'));
+    const input = screen.getByTestId('search-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '搜索词' } });
+    act(() => documentEditor().view.focus());
+    await pressCtrlKey('f');
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(input.value).toBe('搜索词');
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true });
+    expect(screen.getByTestId('search-bar')).toBeTruthy();
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('search-bar')).toBeNull();
+  });
+
+  test('a native close confirmation owns delayed search focus and has a neutral initial focus', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: '# 保留草稿\n' } });
+    fireEvent.click(screen.getByTestId('btn-search'));
+    act(() => closeRequestedHandler!());
+    const dialog = screen.getByRole('dialog');
+    await act(async () => new Promise(resolve => window.setTimeout(resolve, 10)));
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByTestId('close-save'));
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
+    expect(document.activeElement).toBe(screen.getByTestId('close-cancel'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe('# 保留草稿\n');
+    expect(confirmClose).toHaveBeenLastCalledWith(false);
+  });
+
+  test('the outline close button restores its toggle and an outside click still activates its target', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    try {
+      render(<App />);
+      fireEvent.click(screen.getByTestId('btn-open'));
+      await screen.findByTestId('markdown-body');
+      const toggle = screen.getByTestId('btn-outline');
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole('button', { name: '关闭目录' }));
+      expect(screen.queryByTestId('outline-panel')).toBeNull();
+      expect(document.activeElement).toBe(toggle);
+      fireEvent.click(toggle);
+      fireEvent.pointerDown(screen.getByTestId('btn-edit'));
+      fireEvent.click(screen.getByTestId('btn-edit'));
+      expect(screen.queryByTestId('outline-panel')).toBeNull();
+      expect(screen.getByTestId('source-editor')).toBeTruthy();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  test('source mode accepts empty quotes and list items without losing editability', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await waitFor(() => expect(screen.getByTestId('markdown-body')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: '>\n\n-\n\n1.\n\n正文' } });
+    fireEvent.click(screen.getByTestId('btn-read'));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(documentEditor().isEditable).toBe(true);
+    expect(() => documentEditor().state.doc.check()).not.toThrow();
   });
 });

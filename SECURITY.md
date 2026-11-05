@@ -1,10 +1,12 @@
-# 安全策略
+# 安全策略 / Security Policy
 
-## 支持范围
+## 支持范围 / Supported versions
 
 Vellora 目前只维护最新 GitHub Release。发现问题后，请先确认所用版本是否为 [最新版本](https://github.com/mirad-tech/vellora/releases/latest)。旧版本通常通过升级到当前版本获得修复。
 
-## 私下报告漏洞
+Vellora supports only the latest GitHub Release. Before reporting, check whether you are using the [latest release](https://github.com/mirad-tech/vellora/releases/latest). Older versions are normally addressed by upgrading.
+
+## 私下报告漏洞 / Report vulnerabilities privately
 
 请不要通过公开 Issue、Pull Request、讨论区或日志附件披露未修复漏洞。
 
@@ -18,7 +20,19 @@ Vellora 目前只维护最新 GitHub Release。发现问题后，请先确认所
 
 不要附带真实私密 Markdown 文档、凭据或个人信息；请使用最小脱敏样本。
 
-## 重点安全边界
+Do not disclose an unpatched vulnerability in public Issues, Pull Requests, discussions, or log attachments.
+
+Use the repository's [private vulnerability reporting form](https://github.com/mirad-tech/vellora/security/advisories/new) and include:
+
+- affected Vellora version, operating system, OS version, and architecture;
+- minimal reproduction steps or a proof of concept;
+- actual impact and conditions required for exploitation;
+- known mitigations; and
+- whether the issue has been disclosed to anyone else.
+
+Do not include real private Markdown documents, credentials, or personal information. Provide the smallest redacted sample that demonstrates the issue.
+
+## 重点安全边界 / Priority security boundaries
 
 以下行为属于高优先级安全问题：
 
@@ -29,8 +43,21 @@ Vellora 目前只维护最新 GitHub Release。发现问题后，请先确认所
 - 获得通用文件系统、Shell、任意 URL 或不必要的 Tauri capability
 - 未保存更改在关闭或切换文档时静默丢失
 
-## 处理原则
+The following are high-priority security issues:
+
+- bypassing the `.md` / `.markdown` extension restriction to read or write other files;
+- escaping the current document directory through relative paths, symbolic links, or encoding variants;
+- bypassing the 10 MiB image limit or loading a local image outside that directory;
+- opening external links without confirmation, or accepting `javascript:`, `data:`, `file:`, `vbscript:`, or similar schemes;
+- obtaining arbitrary filesystem, Shell, arbitrary URL, or unnecessary Tauri capability access; and
+- silently losing unsaved changes when closing or switching documents.
+
+## 处理原则 / Handling
 
 维护者会先确认报告是否可复现、影响范围和修复优先级。修复发布前，请避免公开细节或利用代码。处理时间取决于严重度与复现完整度；本项目不承诺固定响应时限。
 
 修复完成后，可在征得报告者同意的情况下于 GitHub Security Advisory 或 Release Notes 中致谢。
+
+Maintainers first assess reproducibility, impact, and repair priority. Avoid publishing details or exploit code before a fix is released. Handling time depends on severity and the completeness of the report; this project does not promise a fixed response time.
+
+After a fix, maintainers may acknowledge a reporter in a GitHub Security Advisory or Release Notes with the reporter's consent.

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::types::{CommandResult, DocumentPayload, MarkdownDocument};
+use crate::reliable_save::{atomic_write, ContentDigest, SaveFailure};
 
 const SUPPORTED_EXTENSIONS: &[&str] = &["md", "markdown"];
 
@@ -82,58 +83,25 @@ pub fn read_markdown_file(file_path: &str) -> CommandResult<DocumentPayload> {
   })
 }
 
-pub fn save_markdown_file(file_path: &str, content: &str) -> CommandResult<DocumentPayload> {
+pub fn save_markdown_file(file_path: &str, content: &str, expected: &ContentDigest) -> Result<MarkdownDocument, SaveFailure> {
   let trimmed = file_path.trim();
   if trimmed.is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。");
+    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "文件路径无效。").into());
   }
 
   if !is_markdown_path(Path::new(trimmed)) {
-    return CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能保存 .md 或 .markdown 文件。");
+    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "只能保存 .md 或 .markdown 文件。").into());
   }
 
   let path = PathBuf::from(trimmed);
-  let metadata = match fs::metadata(&path) {
-    Ok(m) => m,
-    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。");
-    }
-    Err(_) => {
-      return CommandResult::failure("SAVE_FAILED", "保存失败，请检查权限或文件状态。");
-    }
-  };
-
-  if !metadata.is_file() {
-    return CommandResult::failure("NOT_A_FILE", "选择的路径不是文件。");
-  }
-
-  if let Err(_) = fs::write(&path, content) {
-    return CommandResult::failure("SAVE_FAILED", "保存失败，请检查权限或文件状态。");
-  }
-
-  read_markdown_file(path.to_string_lossy().as_ref()).map_err_to_save()
-}
-
-trait MapReadToSave {
-  fn map_err_to_save(self) -> Self;
-}
-
-impl MapReadToSave for CommandResult<DocumentPayload> {
-  fn map_err_to_save(self) -> Self {
-    match self {
-      CommandResult::Err { code, message, .. } => {
-        let mapped = if code == "UNSUPPORTED_FILE_TYPE" {
-          code
-        } else if code == "NOT_FOUND" || code == "NOT_A_FILE" || code == "INVALID_ARGUMENT" {
-          code
-        } else {
-          "SAVE_FAILED".to_string()
-        };
-        CommandResult::failure(mapped, message)
-      }
-      other => other,
-    }
-  }
+  let metadata = atomic_write(&path, content.as_bytes(), expected)?;
+  Ok(MarkdownDocument {
+    path: trimmed.to_string(),
+    name: path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+    content: content.to_string(),
+    modified_at: modified_at_ms(&metadata),
+    size: content.len() as u64,
+  })
 }
 
 pub fn choose_markdown_file() -> CommandResult<DocumentPayload> {
@@ -181,11 +149,21 @@ mod tests {
       CommandResult::Err { code, message, .. } => panic!("{code}: {message}"),
     }
 
-    let saved = save_markdown_file(path.to_str().unwrap(), "# saved");
-    match saved {
-      CommandResult::Ok { data, .. } => assert_eq!(data.document.content, "# saved"),
-      CommandResult::Err { code, message, .. } => panic!("{code}: {message}"),
-    }
+    let saved = save_markdown_file(path.to_str().unwrap(), "# saved", &crate::reliable_save::content_digest(b"# hello")).unwrap();
+    assert_eq!(saved.content, "# saved");
+  }
+
+  #[test]
+  fn saving_replaces_the_target_without_truncating_its_previous_file() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let previous = dir.path().join("previous.md");
+    fs::write(&path, "original bytes").unwrap();
+    fs::hard_link(&path, &previous).unwrap();
+    let result = save_markdown_file(path.to_str().unwrap(), "saved bytes", &crate::reliable_save::content_digest(b"original bytes"));
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "saved bytes");
+    assert_eq!(fs::read_to_string(&previous).unwrap(), "original bytes");
   }
 
   #[test]

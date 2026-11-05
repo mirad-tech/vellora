@@ -1,14 +1,30 @@
-# Vellora
-
 <p align="center">
   <img src="src-tauri/icons/128x128.png" width="96" height="96" alt="Vellora icon">
 </p>
 
-Vellora is a **local-first Markdown reader and source editor for Windows and macOS**. Its workflow is intentionally focused: open a `.md` file, read it comfortably, make a quick change, and save.
+<h1 align="center">Vellora</h1>
 
-Built with **Tauri 2 + React + TypeScript + Vite**. Documents stay on the local machine.
+<p align="center">
+  A local-first Markdown reader and source editor. Windows ships as an official installer; macOS is supported for source, CI, and ad-hoc builds.
+</p>
 
-[中文](README.md) · [日本語](README.ja.md) · [Русский](README.ru.md)
+<p align="center">
+  <a href="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml"><img src="https://github.com/mirad-tech/vellora/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/mirad-tech/vellora/releases/latest"><img src="https://img.shields.io/github/v/release/mirad-tech/vellora?display_name=tag&amp;sort=semver" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mirad-tech/vellora" alt="MIT License"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">中文</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/vellora-preview.png" width="960" alt="Vellora previewing a Markdown document on Windows">
+</p>
+
+Documents are processed locally and are not uploaded to a server. Vellora is built with **Tauri 2 + React + TypeScript + Vite** and stays focused on opening, reading, quickly editing, and saving one Markdown document.
 
 ## Download
 
@@ -58,7 +74,7 @@ Find and save are keyboard-first and do not occupy toolbar buttons.
 
 ## Build from source
 
-Requirements: Windows 10/11, Node.js 22.13+ on the 22.x line or Node.js 24+; [Rust MSVC](https://rustup.rs/); Visual Studio C++ Build Tools; and WebView2.
+Requirements: Windows 10/11; Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+; [Rust MSVC](https://rustup.rs/); Visual Studio C++ Build Tools; and WebView2.
 
 ```powershell
 npm install
@@ -66,18 +82,15 @@ npm run dev
 npm run typecheck
 npm test
 npm run test:rust
-npm run test:e2e
 npm run build:web
 npm run dist
 ```
 
 Installer output:
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.2.5_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.4.2_x64-setup.exe`
 
-Real desktop E2E uses `npm run test:e2e:desktop` with external `tauri-driver` and a matching Edge WebDriver. Release builds never embed WebDriver and the test does not silently fall back to mocks.
-
-On macOS, install Xcode Command Line Tools and both Apple Rust targets, then use `npm run dev:mac`, `npm run test:e2e:mac`, or `npm run dist:mac`. The macOS E2E driver is feature-gated and is not present in production bundles. See [mac/README.md](mac/README.md).
+On macOS, use Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+, install Xcode Command Line Tools and both Apple Rust targets, then use `npm run dev:mac` or `npm run dist:mac`. See [mac/README.md](mac/README.md).
 
 ## Security
 
@@ -89,7 +102,7 @@ On macOS, install Xcode Command Line Tools and both Apple Rust targets, then use
 
 ## Repository and releases
 
-Version: **2.2.5**. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies an ad-hoc Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds and publishes the Windows NSIS installer; macOS remains supported for source builds and CI verification without an official signed DMG asset.
+Source version: **2.4.2**; see the download section for the public release. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies an ad-hoc Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds and publishes the Windows NSIS installer; macOS remains supported for source builds and CI verification without an official signed DMG asset.
 
 - [Changelog](CHANGELOG.md)
 - [Issues](https://github.com/mirad-tech/vellora/issues)

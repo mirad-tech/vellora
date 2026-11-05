@@ -1,0 +1,84 @@
+name: UI validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'tests/**'
+      - 'tools/webdriver/**'
+      - 'tools/verification/capture-ui-review.mjs'
+      - 'package*.json'
+      - 'vite.config.ts'
+      - '.github/workflows/ui-validation.yml'
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Optional Git ref for the before screenshots
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Chrome and native WebView2
+    # The UI polish run validated native session startup on this image.
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      VELLORA_E2E_SCREENSHOT_DIR: artifacts/ui-review/browser
+      VELLORA_DESKTOP_SCREENSHOT_DIR: artifacts/ui-review/desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.22.2'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tests/e2e/tooling/package-lock.json
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.0
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm run test:e2e:prepare
+      - run: npm run test:e2e:ci
+      - run: npm run test:ui:capture
+      - name: Check out a visual baseline
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.baseline_ref != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: artifacts/ui-baseline
+          persist-credentials: false
+      - name: Capture the visual baseline
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.baseline_ref != '' }}
+        env:
+          VELLORA_UI_REVIEW_ROOT: artifacts/ui-baseline
+          VELLORA_UI_REVIEW_LABEL: before
+        run: |
+          npm ci --prefix artifacts/ui-baseline
+          npm run test:ui:capture
+      - name: Prepare native test drivers
+        run: |
+          cargo install tauri-driver --version 2.0.6 --locked
+          npm run tools:msedgedriver
+      - run: npm run test:e2e:desktop
+      - name: Upload UI evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vellora-ui-validation-windows
+          path: artifacts/ui-review/
+          if-no-files-found: warn
+          retention-days: 14
