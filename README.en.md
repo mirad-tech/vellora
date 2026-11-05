@@ -5,7 +5,7 @@
 <h1 align="center">Vellora</h1>
 
 <p align="center">
-  A local-first Markdown reader and source editor. Windows ships as an official installer; macOS is supported for source, CI, and ad-hoc builds.
+  A local-first Markdown reader and source editor. Windows is the currently verified platform.
 </p>
 
 <p align="center">
@@ -30,28 +30,27 @@ Documents are processed locally and are not uploaded to a server. Vellora is bui
 
 | Platform | Support status | How to get it |
 |---|---|---|
-| Windows 10/11 x64 | Current public release: 2.2.5 | Download the NSIS installer |
-| macOS 12+ (Apple Silicon / Intel) | Source and Universal DMG builds verified by native CI on both architectures; no official macOS Release asset | Build an ad-hoc test package from source |
+| Windows 10/11 x64 | Source 2.4.3; public downloads are listed in Releases | Download the NSIS installer |
+| macOS | The Windows source and locally verified version is **2.4.3**. The `mac/` build scripts have been removed; remaining macOS npm/CI entries are not currently usable. | — |
 
 ### Windows 10/11 x64
 
-[**Download Vellora 2.2.5 (NSIS)**](https://github.com/mirad-tech/vellora/releases/download/v2.2.5/Vellora_2.2.5_x64-setup.exe)
+[**Download the public installer (NSIS)**](https://github.com/mirad-tech/vellora/releases/latest)
 
 - All versions: [GitHub Releases](https://github.com/mirad-tech/vellora/releases)
-- Asset: `Vellora_2.2.5_x64-setup.exe`
 - Requires Microsoft WebView2, normally included with Windows 10/11; the installer can bootstrap it if missing
 - When upgrading from Electron 1.x, uninstall 1.x first; uninstalling does not remove Markdown documents
 
-### macOS 12+
+### macOS
 
-The source tree continues to build a Universal app and DMG containing both `arm64` and `x86_64`. Official GitHub Releases publish the Windows NSIS installer only; macOS DMGs are ad-hoc artifacts for local and CI verification, not official release assets. See the [macOS build and verification guide](mac/README.md) for a test build.
+The Windows source and locally verified version is **2.4.3**. The `mac/` build scripts have been removed; remaining macOS npm/CI entries are not currently usable.
 
 ## Features
 
 - Open `.md` / `.markdown` through the picker, drag-and-drop, or file association
 - Render headings, lists, quotes, tables, fenced code, links, and relative images
 - Switch between reading and lightweight source editing
-- Quick-edit supported blocks from reading mode; `Ctrl+Enter` / `⌘Enter` commits and `Escape` cancels
+- Edit document text, code, nested lists and tables continuously, with undo and source-mode switching
 - Compact in-document search in read and source modes, with result counts and previous/next navigation
 - Collapsible outline that follows the current reading position
 - Unsaved-change confirmation before close or document switches
@@ -67,17 +66,17 @@ The interface uses a low-emphasis warm-paper palette. Read and source modes shar
 | `Ctrl+S` / `⌘S` | Save |
 | `Ctrl+F` / `⌘F` | Find in document |
 | `Enter` / `Shift+Enter` | Next / previous match |
-| `Escape` | Close the active overlay or cancel quick edit |
-| `Ctrl+Enter` / `⌘Enter` | Commit a reading-mode quick edit |
+| `Escape` | Close the active search or confirmation overlay |
+| `Ctrl+Enter` / `⌘Enter` | Leave a code block or raw source fragment |
 
-Find and save are keyboard-first and do not occupy toolbar buttons.
+Save and Find are available in the toolbar and through Ctrl+S / Ctrl+F. Reopening Find preserves the query and restores focus.
 
 ## Build from source
 
 Requirements: Windows 10/11; Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+; [Rust MSVC](https://rustup.rs/); Visual Studio C++ Build Tools; and WebView2.
 
 ```powershell
-npm install
+npm ci
 npm run dev
 npm run typecheck
 npm test
@@ -88,9 +87,9 @@ npm run dist
 
 Installer output:
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.4.2_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.4.3_x64-setup.exe`
 
-On macOS, use Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+, install Xcode Command Line Tools and both Apple Rust targets, then use `npm run dev:mac` or `npm run dist:mac`. See [mac/README.md](mac/README.md).
+The Windows source and locally verified version is **2.4.3**. The `mac/` build scripts have been removed; remaining macOS npm/CI entries are not currently usable.
 
 ## Security
 
@@ -102,10 +101,22 @@ On macOS, use Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+
 
 ## Repository and releases
 
-Source version: **2.4.2**; see the download section for the public release. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies an ad-hoc Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds and publishes the Windows NSIS installer; macOS remains supported for source builds and CI verification without an official signed DMG asset.
+The Windows source and locally verified version is **2.4.3**. The `mac/` build scripts have been removed; remaining macOS npm/CI entries are not currently usable. Windows checks cover version consistency, types, unit tests, builds, browser and native UI regression. A matching version tag triggers the Windows installer release workflow.
 
 - [Changelog](CHANGELOG.md)
 - [Issues](https://github.com/mirad-tech/vellora/issues)
 - [MIT License](LICENSE)
 
 App id: `app.markdown-viewer.desktop`.
+
+## UI regression
+
+```powershell
+npm run version:check
+npm run test:e2e:prepare
+npm run test:e2e
+npm run tools:msedgedriver
+npm run test:e2e:desktop
+```
+
+[Chrome and tauri-driver prerequisites](tests/e2e/README.md).

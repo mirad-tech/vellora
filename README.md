@@ -5,7 +5,7 @@
 <h1 align="center">Vellora</h1>
 
 <p align="center">
-  本地优先的 Markdown 文档与源码编辑器。Windows 提供正式安装包；macOS 提供源码、CI 与 ad-hoc 构建支持。
+  本地优先的 Markdown 文档与源码编辑器。当前验证平台为 Windows。
 </p>
 
 <p align="center">
@@ -30,21 +30,20 @@
 
 | 平台 | 支持状态 | 获取方式 |
 |---|---|---|
-| Windows 10/11 x64 | 当前公开版本为 2.2.5 | 下载 NSIS 安装包 |
-| macOS 12+（Apple Silicon / Intel） | 源码与 Universal DMG 构建已通过双架构 CI；不提供正式 macOS Release 资产 | 按 macOS 说明构建 ad-hoc 测试包 |
+| Windows 10/11 x64 | 源码 2.4.3；公开下载以 Releases 为准 | 下载 NSIS 安装包 |
+| macOS | 当前 Windows 源码与本机验证版本为 **2.4.3**。`mac/` 构建脚本已移除，残留的 macOS npm/CI 入口尚待整理，当前不能按这些入口构建。 | — |
 
 ### Windows 10/11 x64
 
-[**下载 Vellora 2.2.5 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.2.5/Vellora_2.2.5_x64-setup.exe)
+[**下载公开安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/latest)
 
 - 所有版本：[GitHub Releases](https://github.com/mirad-tech/vellora/releases)
-- 安装包：`Vellora_2.2.5_x64-setup.exe`
 - 运行环境：Microsoft WebView2；多数 Windows 10/11 已预装，缺失时安装程序会引导下载
 - 从 Electron 1.x 升级：建议先卸载 1.x，再安装当前版本；卸载不会删除 Markdown 文档
 
-### macOS 12+
+### macOS
 
-当前源码继续支持同时包含 `arm64` 与 `x86_64` 的 Universal 应用和 DMG。正式 GitHub Release 仅提供 Windows NSIS 安装包；macOS DMG 用于本机和 CI 的 ad-hoc 验证，不作为正式发布资产。可按 [macOS 构建与验证说明](mac/README.md) 生成测试包。
+当前 Windows 源码与本机验证版本为 **2.4.3**。`mac/` 构建脚本已移除，残留的 macOS npm/CI 入口尚待整理，当前不能按这些入口构建。
 
 ## 主要功能
 
@@ -76,7 +75,7 @@
 | `Tab` / `Shift+Tab` | 代码块缩进 / 反缩进 |
 | `Ctrl+Z` / `⌘Z` | 撤销文档内容或格式操作 |
 
-查找和保存不占用工具栏按钮，Windows 使用 `Ctrl`，macOS 使用 `⌘`。
+保存和查找均有工具栏按钮，也可使用 `Ctrl+S` / `Ctrl+F`。重复查找保留查询并重新聚焦；窄窗目录可浮层关闭。
 
 ## 安全边界
 
@@ -98,7 +97,7 @@
 - Microsoft WebView2 Runtime
 
 ```powershell
-npm install
+npm ci
 npm run dev          # Tauri 桌面开发模式
 npm run dev:web      # 仅运行前端
 ```
@@ -115,34 +114,25 @@ npm run dist         # Windows NSIS 安装包，并整理本地发布产物
 
 `npm run build` 的原始安装包输出到：
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.4.2_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.4.3_x64-setup.exe`
 
 `npm run dist` 还会把当前版本复制到：
 
-`artifacts/releases/current/Vellora_2.4.2_x64-setup.exe`
+`artifacts/releases/current/Vellora_2.4.3_x64-setup.exe`
 
 `artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，`manifest.json` 记录文件大小与 SHA-256；正式历史版本由 GitHub Releases 保留。
 可运行 `npm run release:prune-old` 删除遗留本地安装器，或运行
 `npm run release:check` 检查当前安装包与清单。详细规则见 [本地发布产物管理](docs/releases/local-artifacts.md)。
 
-### macOS 开发与构建
+### macOS 状态
 
-macOS 需要 Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+、Rust stable 与 Xcode Command Line Tools。Universal 构建还需 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个 Rust target：
-
-```bash
-npm ci
-npm run dev:mac
-npm run dist:mac
-```
-
-具体的 ad-hoc 模式、未来公开 DMG 的签名要求、产物位置和实机验收边界见 [mac/README.md](mac/README.md)。
+当前 Windows 源码与本机验证版本为 **2.4.3**。`mac/` 构建脚本已移除，残留的 macOS npm/CI 入口尚待整理，当前不能按这些入口构建。
 
 ## 项目结构
 
 ```text
 src/                    React 前端、Markdown 渲染、查找和交互
 src-tauri/              共享 Rust / Tauri 后端与安全权限
-mac/                    macOS 配置、构建脚本和说明
 src-tauri/capabilities/ Tauri 权限边界
 tests/                  Markdown 单元测试样本
 assets/icons/           应用图标源文件
@@ -157,14 +147,14 @@ docs/                   仓库结构与发布产物文档
 
 ## 版本与发布
 
-当前源码版本：**2.4.2**；公开下载版本见上方下载区。
+当前源码版本：**2.4.3**；公开下载版本见上方下载区。
 
-- `main` 和 Pull Request 会在 Windows、Apple Silicon 与 Intel GitHub Actions 中运行版本检查、类型检查、前端/Rust 单元测试和构建
-- macOS CI 还会构建 ad-hoc Universal DMG，并在 Intel runner 上复核 Apple Silicon runner 生成的同一份验证产物
+- Windows 验证包含版本、类型、前端/Rust 单测与构建；独立 UI 工作流运行浏览器和原生回归。
+- macOS 入口当前不可用，不将历史 CI 结果当作 2.4.3 的验证结果。
 - 版本号同步维护于 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`
 - `npm run version:check` 会阻止这些版本号不一致的提交或发布
 - 更新 [CHANGELOG.md](CHANGELOG.md) 后推送 `vX.Y.Z` 标签
-- Release 工作流会构建并验证 Windows NSIS、创建 GitHub Release，并上传同版本 Windows 安装包；macOS 源码、构建和 CI 支持不包含正式签名 DMG 资产
+- Release 工作流会构建并验证 Windows NSIS、创建 GitHub Release，并上传同版本 Windows 安装包
 
 将 `X.Y.Z` 替换为已经同步并通过版本检查的版本号：
 
@@ -184,3 +174,15 @@ git push origin vX.Y.Z
 - 仓库：[mirad-tech/vellora](https://github.com/mirad-tech/vellora)
 
 应用标识为 `app.markdown-viewer.desktop`，用于延续 Windows 文件关联与安装身份。
+
+## 界面回归
+
+```powershell
+npm run version:check
+npm run test:e2e:prepare
+npm run test:e2e
+npm run tools:msedgedriver
+npm run test:e2e:desktop
+```
+
+[测试环境、Chrome 与 tauri-driver 准备步骤](tests/e2e/README.md)。
