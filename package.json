@@ -62,7 +62,7 @@
     "@tiptap/starter-kit": "3.31.3",
     "dompurify": "^3.4.13",
     "highlight.js": "^11.11.1",
-    "markdown-it": "^14.3.0",
+    "markdown-it": "^14.3.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
