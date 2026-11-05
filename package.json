@@ -1,7 +1,7 @@
 {
   "name": "vellora-editor",
   "productName": "Vellora",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "private": true,
   "description": "Local-first Markdown reader and source editor built with Tauri 2 and React",
   "author": "Vellora Contributors",
