@@ -9,13 +9,13 @@ import typescript from 'highlight.js/lib/languages/typescript';
 import xml from 'highlight.js/lib/languages/xml';
 import MarkdownIt from 'markdown-it';
 import type Token from 'markdown-it/lib/token.mjs';
+import { headingId } from './headingIds';
 
 export type MarkdownRenderResult =
   | {
       status: 'ready';
       html: string;
       outline: MarkdownOutlineEntry[];
-      editableBlocks: MarkdownEditableBlock[];
     }
   | {
       status: 'empty';
@@ -28,20 +28,6 @@ export type MarkdownRenderResult =
 
 export type ReadyMarkdownRenderResult = Extract<MarkdownRenderResult, { status: 'ready' }>;
 
-export type MarkdownEditableBlockKind =
-  | 'heading'
-  | 'paragraph'
-  | 'list-item'
-  | 'blockquote'
-  | 'code-fence';
-
-export type MarkdownEditableBlock = {
-  id: string;
-  kind: MarkdownEditableBlockKind;
-  start: number;
-  end: number;
-};
-
 export type MarkdownOutlineEntry = {
   id: string;
   level: number;
@@ -51,6 +37,9 @@ export type MarkdownOutlineEntry = {
 export type MarkdownParser = {
   render: (content: string) => string;
 };
+
+export type MarkdownReferences = Record<string, { href: string; title: string }>;
+export type MarkdownRenderContext = { references?: MarkdownReferences };
 
 const ALLOWED_TAGS = [
   'a',
@@ -90,9 +79,6 @@ const ALLOWED_ATTR = [
   'class',
   'colspan',
   'data-heading-id',
-  'data-edit-block-id',
-  'data-edit-block-kind',
-  'data-edit-block-token',
   'data-local-image-token',
   'data-local-src',
   'data-md-href',
@@ -106,7 +92,7 @@ const ALLOWED_ATTR = [
 
 type MarkdownRenderEnvironment = {
   localImageToken?: string;
-  editBlockToken?: string;
+  references?: MarkdownReferences;
 };
 
 hljs.safeMode();
@@ -180,53 +166,15 @@ function createMarkdownParser(): MarkdownIt {
     return self.renderToken(tokens, index, options);
   };
 
-  const defaultFence =
-    parser.renderer.rules.fence ??
-    ((tokens: Token[], index: number, options, _env, self) => self.renderToken(tokens, index, options));
-
-  parser.renderer.rules.fence = (tokens, index, options, env, self) => {
-    const token = tokens[index];
-    const editId = token.attrGet('data-edit-block-id');
-    const editKind = token.attrGet('data-edit-block-kind');
-    const editToken = token.attrGet('data-edit-block-token');
-    if (editId) {
-      token.attrs = (token.attrs ?? []).filter(
-        ([name]) =>
-          name !== 'data-edit-block-id' &&
-          name !== 'data-edit-block-kind' &&
-          name !== 'data-edit-block-token'
-      );
-    }
-    const html = defaultFence(tokens, index, options, env, self);
-    if (!editId || !editKind || !editToken) return html;
-    return html.replace(
-      '<pre>',
-      `<pre data-edit-block-id="${editId}" data-edit-block-kind="${editKind}" data-edit-block-token="${editToken}">`
-    );
-  };
   return parser;
 }
 
 const defaultParser = createMarkdownParser();
 
-function slugifyHeading(text: string): string {
-  const slug = text
-    .normalize('NFKC')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}_-]+/gu, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  return slug || 'heading';
-}
-
-function uniqueHeadingId(text: string, usedIds: Map<string, number>): string {
-  const baseId = `heading-${slugifyHeading(text)}`;
-  const count = usedIds.get(baseId) ?? 0;
-  usedIds.set(baseId, count + 1);
-  return count === 0 ? baseId : `${baseId}-${count + 1}`;
+export function collectMarkdownReferences(sources: readonly string[]): MarkdownReferences {
+  const env: MarkdownRenderEnvironment = { references: Object.create(null) };
+  for (const source of sources) defaultParser.parse(source, env);
+  return env.references!;
 }
 
 function applyHeadingIds(tokens: Token[]): MarkdownOutlineEntry[] {
@@ -241,8 +189,11 @@ function applyHeadingIds(tokens: Token[]): MarkdownOutlineEntry[] {
     if (!inlineToken || inlineToken.type !== 'inline') continue;
 
     const level = Number(token.tag.slice(1));
-    const text = inlineToken.content.trim();
-    const id = uniqueHeadingId(text, usedIds);
+    const text = (inlineToken.children ?? []).map(child => {
+      if (child.type === 'text' || child.type === 'code_inline') return child.content;
+      return child.type === 'softbreak' ? '\n' : '';
+    }).join('').trim();
+    const id = headingId(text, usedIds);
 
     token.attrSet('id', id);
     token.attrSet('data-heading-id', id);
@@ -252,163 +203,37 @@ function applyHeadingIds(tokens: Token[]): MarkdownOutlineEntry[] {
   return outline;
 }
 
+/** Source editing needs heading metadata, without rendering or sanitizing HTML. */
+export function extractMarkdownOutline(content: string): MarkdownOutlineEntry[] {
+  try {
+    return applyHeadingIds(defaultParser.parse(content, {}));
+  } catch {
+    return [];
+  }
+}
+
 function createLocalImageToken(): string {
   return globalThis.crypto?.randomUUID?.() ?? `image-token-${Date.now()}-${Math.random()}`;
 }
 
-function createEditBlockToken(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `edit-token-${Date.now()}-${Math.random()}`;
-}
-
-function findMatchingClose(
-  tokens: Token[],
-  openIndex: number,
-  openType: string,
-  closeType: string
-): number {
-  let depth = 0;
-  for (let index = openIndex; index < tokens.length; index += 1) {
-    if (tokens[index].type === openType) depth += 1;
-    if (tokens[index].type !== closeType) continue;
-    depth -= 1;
-    if (depth === 0) return index;
-  }
-  return -1;
-}
-
-function sourceRangeForMap(
-  content: string,
-  lineStarts: number[],
-  map: [number, number]
-): { start: number; end: number } | null {
-  const start = lineStarts[map[0]];
-  const endExclusive = map[1] < lineStarts.length ? lineStarts[map[1]] : content.length;
-  if (start === undefined || endExclusive <= start) return null;
-
-  let end = endExclusive;
-  while (end > start && (content[end - 1] === '\n' || content[end - 1] === '\r')) {
-    end -= 1;
-  }
-  return end > start ? { start, end } : null;
-}
-
-function isSimpleContainer(
-  tokens: Token[],
-  openIndex: number,
-  closeIndex: number
-): boolean {
-  const inner = tokens.slice(openIndex + 1, closeIndex);
-  const paragraphCount = inner.filter((token) => token.type === 'paragraph_open').length;
-  if (paragraphCount !== 1) return false;
-
-  const disallowed = new Set([
-    'blockquote_open',
-    'bullet_list_open',
-    'ordered_list_open',
-    'fence',
-    'code_block',
-    'html_block',
-    'table_open',
-    'heading_open'
-  ]);
-  return !inner.some(
-    (token) =>
-      disallowed.has(token.type) ||
-      token.children?.some((child) => child.type === 'image' || child.type === 'html_inline')
-  );
-}
-
-function hasUnsupportedInlineContent(tokens: Token[], openIndex: number): boolean {
-  const inline = tokens[openIndex + 1];
-  return Boolean(
-    inline?.type === 'inline' &&
-      inline.children?.some((child) => child.type === 'image' || child.type === 'html_inline')
-  );
-}
-
-function applyEditableBlocks(
-  content: string,
-  tokens: Token[],
-  editBlockToken: string
-): MarkdownEditableBlock[] {
-  const blocks: MarkdownEditableBlock[] = [];
-  const lineStarts = [0];
-  for (let index = 0; index < content.length; index += 1) {
-    if (content[index] === '\n') lineStarts.push(index + 1);
-  }
-
-  const addBlock = (token: Token, kind: MarkdownEditableBlockKind) => {
-    if (!token.map) return;
-    const range = sourceRangeForMap(content, lineStarts, token.map);
-    if (!range) return;
-    const id = `edit-block-${kind}-${range.start}`;
-    token.attrSet('data-edit-block-id', id);
-    token.attrSet('data-edit-block-kind', kind);
-    token.attrSet('data-edit-block-token', editBlockToken);
-    blocks.push({ id, kind, ...range });
-  };
-
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (
-      token.type === 'heading_open' &&
-      token.level === 0 &&
-      !hasUnsupportedInlineContent(tokens, index)
-    ) {
-      addBlock(token, 'heading');
-      continue;
-    }
-    if (
-      token.type === 'paragraph_open' &&
-      token.level === 0 &&
-      !hasUnsupportedInlineContent(tokens, index)
-    ) {
-      addBlock(token, 'paragraph');
-      continue;
-    }
-    if (token.type === 'blockquote_open' && token.level === 0) {
-      const closeIndex = findMatchingClose(tokens, index, 'blockquote_open', 'blockquote_close');
-      if (closeIndex > index && isSimpleContainer(tokens, index, closeIndex)) {
-        addBlock(token, 'blockquote');
-      }
-      continue;
-    }
-    if (token.type === 'list_item_open' && token.level === 1) {
-      const closeIndex = findMatchingClose(tokens, index, 'list_item_open', 'list_item_close');
-      if (closeIndex > index && isSimpleContainer(tokens, index, closeIndex)) {
-        addBlock(token, 'list-item');
-      }
-    }
-    if (token.type === 'fence' && token.level === 0) {
-      addBlock(token, 'code-fence');
-    }
-  }
-
-  return blocks;
-}
-
-function renderWithOutline(content: string, parser: MarkdownIt): ReadyMarkdownRenderResult {
-  const editBlockToken = createEditBlockToken();
+function renderWithOutline(content: string, parser: MarkdownIt, context: MarkdownRenderContext): ReadyMarkdownRenderResult {
   const env: MarkdownRenderEnvironment = {
     localImageToken: createLocalImageToken(),
-    editBlockToken
+    ...(context.references ? { references: { ...context.references } } : {})
   };
   const tokens = parser.parse(content, env);
   const outline = applyHeadingIds(tokens);
-  const editableBlocks = applyEditableBlocks(content, tokens, editBlockToken);
   const unsafeHtml = parser.renderer.render(tokens, parser.options, env);
 
   return {
     status: 'ready',
-    html: sanitizeHtml(unsafeHtml, env.localImageToken, editBlockToken),
-    outline,
-    editableBlocks
+    html: sanitizeHtml(unsafeHtml, env.localImageToken),
+    outline
   };
 }
 
-function sanitizeHtml(html: string, localImageToken?: string, editBlockToken?: string): string {
+function sanitizeHtml(html: string, localImageToken?: string): string {
   const hasToken = typeof localImageToken === 'string' && localImageToken.length > 0;
-  const hasEditToken = typeof editBlockToken === 'string' && editBlockToken.length > 0;
 
   const securityHook = (node: Element) => {
     if (node.tagName === 'IMG') {
@@ -435,17 +260,7 @@ function sanitizeHtml(html: string, localImageToken?: string, editBlockToken?: s
       }
     }
 
-    const hasEditMetadata =
-      node.hasAttribute('data-edit-block-id') ||
-      node.hasAttribute('data-edit-block-kind') ||
-      node.hasAttribute('data-edit-block-token');
-    if (hasEditMetadata) {
-      if (!hasEditToken || node.getAttribute('data-edit-block-token') !== editBlockToken) {
-        node.removeAttribute('data-edit-block-id');
-        node.removeAttribute('data-edit-block-kind');
-      }
-      node.removeAttribute('data-edit-block-token');
-    }
+
   };
 
   DOMPurify.addHook('afterSanitizeAttributes', securityHook);
@@ -486,7 +301,8 @@ function sanitizeHtml(html: string, localImageToken?: string, editBlockToken?: s
 
 export function renderMarkdownDocument(
   content: string,
-  parser: MarkdownParser = defaultParser
+  parser: MarkdownParser = defaultParser,
+  context: MarkdownRenderContext = {}
 ): MarkdownRenderResult {
   if (content.trim().length === 0) {
     return {
@@ -497,15 +313,14 @@ export function renderMarkdownDocument(
 
   try {
     if (parser === defaultParser) {
-      return renderWithOutline(content, defaultParser);
+      return renderWithOutline(content, defaultParser, context);
     }
 
     const unsafeHtml = parser.render(content);
     return {
       status: 'ready',
       html: sanitizeHtml(unsafeHtml),
-      outline: [],
-      editableBlocks: []
+      outline: []
     };
   } catch {
     return {

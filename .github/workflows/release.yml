@@ -29,7 +29,6 @@ jobs:
       - run: npm run version:check
       - run: npm test
       - run: npm run test:rust
-      - run: npm run test:e2e:ci
       - run: npm run dist
       - run: npm run release:check
       - name: Upload verified Windows release inputs

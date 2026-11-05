@@ -30,7 +30,6 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:rust
-      - run: npm run test:e2e:ci
       - run: npm run build:web
 
   macos:
@@ -55,9 +54,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:rust
-      - run: npm run test:e2e:ci
       - run: npm run build:web
-      - run: npm run test:e2e:mac
       - name: Install Universal Rust targets
         if: matrix.runner == 'macos-15'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin

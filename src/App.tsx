@@ -1,336 +1,46 @@
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent
-} from 'react';
-
-import {
-  chooseMarkdownFile,
-  confirmClose,
-  getInitialDocument,
-  inspectMarkdownLink,
-  onCloseRequested,
-  onDragDropPaths,
-  onOpenFilePath,
-  openExternalUrl,
-  openMarkdownFile,
-  openMarkdownLink,
-  resolveLocalImage,
-  saveMarkdownFile,
-  setUnsavedChanges
-} from './api/tauri';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import appIconUrl from '../src-tauri/icons/128x128.png';
-import { renderMarkdownDocument, type MarkdownOutlineEntry } from './markdown/renderMarkdown';
-import { DocumentEditor, type DocumentEditorHandle } from './editor/DocumentEditor';
-import {
-  collectLocalImageResolutionGroups,
-  resolveImageGroupsWithLimit,
-  type ImageResolutionMap
-} from './markdown/resolveImages';
-import type { MarkdownDocument } from './types';
-
-type SourceSearchMatch = { start: number; end: number };
-
-type SourceSearchResult = {
-  count: number;
-  activeIndex: number;
-  matches: SourceSearchMatch[];
-};
-
-const TEXTAREA_MIRROR_PROPERTIES = [
-  'box-sizing',
-  'border-top-width',
-  'border-right-width',
-  'border-bottom-width',
-  'border-left-width',
-  'border-top-style',
-  'border-right-style',
-  'border-bottom-style',
-  'border-left-style',
-  'padding-top',
-  'padding-right',
-  'padding-bottom',
-  'padding-left',
-  'font-family',
-  'font-size',
-  'font-style',
-  'font-variant',
-  'font-weight',
-  'letter-spacing',
-  'line-height',
-  'text-align',
-  'text-indent',
-  'text-transform',
-  'word-spacing',
-  'tab-size',
-  'direction'
-] as const;
-
-type ViewState =
-  | { status: 'empty' }
-  | { status: 'loading' }
-  | { status: 'ready'; document: MarkdownDocument }
-  | { status: 'error'; message: string };
-
-type EditorMode = 'read' | 'edit';
-type SaveState =
-  | { status: 'idle' }
-  | { status: 'saving' }
-  | { status: 'saved' }
-  | { status: 'error'; message: string };
-
-type PendingExternalLink = { url: string } | null;
-
-const IMAGE_RESOLVE_DEBOUNCE_MS = 300;
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
-
-function getPreferredScrollBehavior(): ScrollBehavior {
-  return typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_MOTION_QUERY).matches
-    ? 'auto'
-    : 'smooth';
-}
-
-function isReadyDirty(state: ViewState, draft: string): boolean {
-  return state.status === 'ready' && draft !== state.document.content;
-}
-
-function isMarkdownFilePath(path: string): boolean {
-  const lower = path.toLowerCase();
-  return lower.endsWith('.md') || lower.endsWith('.markdown');
-}
-
-function normalizeSearchQuery(query: string): string {
-  return query.trim();
-}
-
-function escapeSearchQuery(query: string): string {
-  return query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function findSourceSearchMatches(
-  source: string,
-  rawQuery: string,
-  requestedActiveIndex: number
-): SourceSearchResult {
-  const query = normalizeSearchQuery(rawQuery);
-  if (!query) {
-    return {
-      count: 0,
-      activeIndex: -1,
-      matches: []
-    };
-  }
-
-  const matches: SourceSearchMatch[] = [];
-  const matcher = new RegExp(escapeSearchQuery(query), 'giu');
-  for (const match of source.matchAll(matcher)) {
-    if (match.index === undefined) continue;
-    matches.push({
-      start: match.index,
-      end: match.index + match[0].length
-    });
-  }
-
-  if (matches.length === 0) {
-    return { count: 0, activeIndex: -1, matches };
-  }
-
-  const safeRequestedActiveIndex = Math.max(0, requestedActiveIndex);
-  return {
-    count: matches.length,
-    activeIndex: safeRequestedActiveIndex % matches.length,
-    matches
-  };
-}
-
-function measureTextareaMatch(
-  editor: HTMLTextAreaElement,
-  match: SourceSearchMatch
-): { top: number; height: number } | null {
-  const view = editor.ownerDocument.defaultView;
-  const body = editor.ownerDocument.body;
-  if (!view || !body) return null;
-
-  const computed = view.getComputedStyle(editor);
-  const mirror = editor.ownerDocument.createElement('div');
-  mirror.setAttribute('aria-hidden', 'true');
-  for (const property of TEXTAREA_MIRROR_PROPERTIES) {
-    mirror.style.setProperty(property, computed.getPropertyValue(property));
-  }
-  mirror.style.position = 'fixed';
-  mirror.style.top = '0';
-  mirror.style.left = '-10000px';
-  mirror.style.width = computed.width;
-  mirror.style.height = 'auto';
-  mirror.style.minHeight = '0';
-  mirror.style.maxHeight = 'none';
-  mirror.style.overflow = 'hidden';
-  mirror.style.visibility = 'hidden';
-  mirror.style.pointerEvents = 'none';
-  mirror.style.whiteSpace = editor.wrap === 'off' ? 'pre' : 'pre-wrap';
-  mirror.style.overflowWrap = editor.wrap === 'off' ? 'normal' : 'break-word';
-  mirror.style.wordBreak = computed.wordBreak;
-
-  mirror.textContent = editor.value.slice(0, match.start);
-  const marker = editor.ownerDocument.createElement('span');
-  marker.textContent = editor.value.slice(match.start, match.end) || '\u200b';
-  mirror.append(marker);
-  body.append(mirror);
-
-  try {
-    const lineHeight = Number.parseFloat(computed.lineHeight);
-    const fontSize = Number.parseFloat(computed.fontSize);
-    const fallbackHeight = Number.isFinite(lineHeight)
-      ? lineHeight
-      : (Number.isFinite(fontSize) ? fontSize : 16) * 1.5;
-    return {
-      top: marker.offsetTop,
-      height: Math.max(marker.offsetHeight, fallbackHeight)
-    };
-  } finally {
-    mirror.remove();
-  }
-}
-
-function selectSourceSearchMatch(
-  editor: HTMLTextAreaElement,
-  scroller: HTMLElement | null,
-  match: SourceSearchMatch
-): void {
-  editor.setSelectionRange(match.start, match.end);
-  if (!scroller || scroller.clientHeight <= 0) return;
-
-  const metrics = measureTextareaMatch(editor, match);
-  if (!metrics) return;
-
-  const editorTop =
-    editor.getBoundingClientRect().top -
-    scroller.getBoundingClientRect().top +
-    scroller.scrollTop;
-  const matchTop = editorTop + metrics.top;
-  const matchBottom = matchTop + metrics.height;
-  const viewportTop = scroller.scrollTop;
-  const viewportBottom = viewportTop + scroller.clientHeight;
-  const viewportMargin = 24;
-
-  if (
-    matchTop < viewportTop + viewportMargin ||
-    matchBottom > viewportBottom - viewportMargin
-  ) {
-    scroller.scrollTop = Math.max(
-      0,
-      matchTop - (scroller.clientHeight - metrics.height) / 2
-    );
-  }
-}
+import type { MarkdownOutlineEntry } from './markdown/renderMarkdown';
+import { useSourceOutline } from './markdown/useSourceOutline';
+import { DocumentEditor } from './editor/DocumentEditor';
+import { SourceEditor, type SourceEditorHandle } from './editor/SourceEditor';
+import { useDocumentImages } from './markdown/useDocumentImages';
+import { useDocumentSession } from './session/useDocumentSession';
+import { useDocumentSearch } from './ui/useDocumentSearch';
+import { useDocumentViewport } from './ui/useDocumentViewport';
+import { SearchPanel } from './ui/SearchPanel';
+import { ConfirmationDialogs } from './ui/ConfirmationDialogs';
 
 export default function App() {
-  const [viewState, setViewState] = useState<ViewState>({ status: 'empty' });
-  const [draftContent, setDraftContent] = useState('');
-  const [editorMode, setEditorMode] = useState<EditorMode>('read');
-  const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [activeHeadingId, setActiveHeadingId] = useState('');
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchActiveIndex, setSearchActiveIndex] = useState(0);
-  const [imageMap, setImageMap] = useState<ImageResolutionMap>({});
-  const [pendingExternal, setPendingExternal] = useState<PendingExternalLink>(null);
-  const [discardDialog, setDiscardDialog] = useState<
-    null | { reason: 'open' | 'close' | 'switch'; proceed: () => void }
-  >(null);
-  const [statusMessage, setStatusMessage] = useState('');
-  const [documentOpenPending, setDocumentOpenPending] = useState(false);
-  const [documentSession, setDocumentSession] = useState(0);
+  const [imageSources, setImageSources] = useState<string[]>([]);
   const [documentOutline, setDocumentOutline] = useState<MarkdownOutlineEntry[]>([]);
-  const [searchResult, setDocumentSearchResult] = useState({ count: 0, activeIndex: -1 });
-  const documentEditorRef = useRef<DocumentEditorHandle>(null);
-  const compositionRef = useRef(false);
-  const compositionWaiters = useRef<Array<() => void>>([]);
-  const savingRef = useRef(false);
-  const [editorFailure, setEditorFailure] = useState(false);
-  const editorFailureRef = useRef(false);
+  const sourceEditorRef = useRef<SourceEditorHandle>(null);
+  const outlineButtonRef = useRef<HTMLButtonElement>(null);
+  const outlinePanelRef = useRef<HTMLElement>(null);
+  const { state, actions, editorBindings } = useDocumentSession({
+    onApplied: () => { search.reset(); setImageSources([]); viewport.reset(); },
+    onBeforeModeChange: change => viewport.capture(change),
+    onAnchor: id => viewport.scrollToHeading(id),
+  });
+  const { viewState, draftContent, editorMode, saveState, hasUnsaved,
+    documentOpenPending, documentSession, statusMessage, composing, dialog } = state;
+  const { chooseFile: handleChooseFile, save: handleSave, switchMode,
+    openLink: handleMarkdownNavigation, cancelDialog: cancelDiscardDialog } = actions;
+  const { ref: documentEditorRef, onChange: updateDraft,
+    onTransaction: onEditorTransaction, onError: handleEditorError } = editorBindings;
+  const viewport = useDocumentViewport({ mode: editorMode, session: documentSession,
+    editor: documentEditorRef, source: sourceEditorRef });
+  const { readerRef, contentRef } = viewport;
+  const search = useDocumentSearch({ ready: viewState.status === 'ready', mode: editorMode,
+    content: draftContent, composing, editor: documentEditorRef, source: sourceEditorRef,
+    focusEditor: viewport.focusEditor });
+  const { isOpen: searchOpen, query: searchQuery, index: searchActiveIndex, navigation: searchNavigation } = search;
+  const imageMap = useDocumentImages(viewState.status === 'ready' ? viewState.document.path : null, documentSession, imageSources);
 
-  const readerRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLElement | null>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
-  const sourceEditInProgressRef = useRef(false);
-  const imageRequestId = useRef(0);
-  const documentRequestId = useRef(0);
-  const documentOpenPendingRef = useRef(false);
-  const viewStateRef = useRef(viewState);
-  const draftRef = useRef(draftContent);
-  const discardDialogRef = useRef(discardDialog);
-  const initialLoadStarted = useRef(false);
-
-  const effectiveDraftContent = draftContent;
-  viewStateRef.current = viewState;
-  draftRef.current = effectiveDraftContent;
-  discardDialogRef.current = discardDialog;
-
-  const hasUnsaved = editorFailure || isReadyDirty(viewState, effectiveDraftContent);
-
-  /** Sync dirty flag immediately (do not wait for useEffect) to avoid close races. */
-  const syncUnsaved = useCallback((dirty: boolean) => {
-    void setUnsavedChanges(dirty || editorFailureRef.current);
-  }, []);
-
-  const updateDraft = useCallback(
-    (value: string) => {
-      if (documentOpenPendingRef.current) return;
-      if (editorFailureRef.current) setStatusMessage('');
-      editorFailureRef.current = false;
-      setEditorFailure(false);
-      setDraftContent(value);
-      draftRef.current = value;
-      const dirty = isReadyDirty(viewStateRef.current, value);
-      syncUnsaved(dirty);
-      setSaveState({ status: 'idle' });
-    },
-    [syncUnsaved]
-  );
-
-  const handleEditorError = useCallback((message: string) => {
-    editorFailureRef.current = true;
-    setEditorFailure(true);
-    setStatusMessage(message);
-    syncUnsaved(true);
-  }, [syncUnsaved]);
-
-  const flushDocument = useCallback(() => {
-    if (editorMode !== 'read') return true;
-    const value = documentEditorRef.current?.flush();
-    if (value === null) return false;
-    if (value !== undefined && (value !== draftRef.current || editorFailureRef.current)) updateDraft(value);
-    return true;
-  }, [editorMode, updateDraft]);
-
-  const beginDocumentRequest = useCallback(() => {
-    const requestId = ++documentRequestId.current;
-    documentOpenPendingRef.current = true;
-    setDocumentOpenPending(true);
-    return requestId;
-  }, []);
-
-  const finishDocumentRequest = useCallback((requestId: number) => {
-    if (requestId !== documentRequestId.current) return;
-    documentOpenPendingRef.current = false;
-    setDocumentOpenPending(false);
-  }, []);
-
-  // Keep backend in sync on non-edit transitions (open / save / apply).
-  useEffect(() => {
-    void setUnsavedChanges(hasUnsaved);
-  }, [hasUnsaved]);
-
-  const rendered = useMemo(() => renderMarkdownDocument(draftContent), [draftContent]);
-
-  const baseHtml = rendered.status === 'ready' ? rendered.html : '';
-  const outline = editorMode === 'read' ? documentOutline : rendered.status === 'ready' ? rendered.outline : [];
+  const sourceOutline = useSourceOutline(draftContent, editorMode === 'edit' && outlineOpen, documentSession, composing);
+  const outline = editorMode === 'read' ? documentOutline : sourceOutline;
 
   const updateActiveHeading = useCallback(() => {
     if (editorMode !== 'read' || outline.length === 0) return;
@@ -364,503 +74,46 @@ export default function App() {
     updateActiveHeading();
   }, [outlineOpen, updateActiveHeading]);
 
-  const sourceSearchResult = useMemo(
-    () =>
-      findSourceSearchMatches(
-        draftContent,
-        searchOpen && editorMode === 'edit' ? searchQuery : '',
-        searchActiveIndex
-      ),
-    [draftContent, editorMode, searchOpen, searchQuery, searchActiveIndex]
-  );
-  const sourceSearchHighlights = useMemo(() => {
-    if (sourceSearchResult.count === 0) return null;
-
-    const content: React.ReactNode[] = [];
-    let cursor = 0;
-    sourceSearchResult.matches.forEach((match, index) => {
-      if (match.start > cursor) {
-        content.push(
-          <span key={`source-text-${cursor}-${match.start}`}>
-            {draftContent.slice(cursor, match.start)}
-          </span>
-        );
-      }
-      content.push(
-        <mark
-          key={`source-hit-${match.start}-${match.end}`}
-          className="source-search-hit"
-          data-source-search-hit={index}
-          data-active-search={index === sourceSearchResult.activeIndex ? 'true' : undefined}
-        >
-          {draftContent.slice(match.start, match.end)}
-        </mark>
-      );
-      cursor = match.end;
-    });
-    if (cursor < draftContent.length) {
-      content.push(
-        <span key={`source-text-${cursor}-${draftContent.length}`}>
-          {draftContent.slice(cursor)}
-        </span>
-      );
-    }
-    return content;
-  }, [draftContent, sourceSearchResult]);
-  const activeSearchCount = editorMode === 'edit' ? sourceSearchResult.count : searchResult.count;
-  const activeSearchIndex = editorMode === 'edit' ? sourceSearchResult.activeIndex : searchResult.activeIndex;
-  const searchExpanded = searchQuery.trim().length > 0;
-
-  const navigateSearch = useCallback(
-    (delta: number) => {
-      if (activeSearchCount <= 0) return;
-
-      const nextIndex =
-        (activeSearchIndex + delta + activeSearchCount) % activeSearchCount;
-      setSearchActiveIndex(nextIndex);
-
-      if (editorMode !== 'edit') return;
-      const match = sourceSearchResult.matches[nextIndex];
-      const editor = sourceEditorRef.current;
-      if (!editor || !match) return;
-      selectSourceSearchMatch(editor, contentRef.current, match);
-    },
-    [activeSearchCount, activeSearchIndex, editorMode, sourceSearchResult.matches]
-  );
-
-
   useEffect(() => {
-    if (rendered.status !== 'ready' || viewState.status !== 'ready') {
-      setImageMap({});
-      return;
-    }
-
-    const documentPath = viewState.document.path;
-    const requestId = ++imageRequestId.current;
-    const timer = window.setTimeout(() => {
-      const groups = collectLocalImageResolutionGroups(baseHtml);
-      if (groups.length === 0) {
-        setImageMap({});
-        return;
+    if (!outlineOpen || dialog) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!window.matchMedia?.('(max-width: 1023px)').matches) return;
+      const target = event.target as Node;
+      if (!outlinePanelRef.current?.contains(target) && !outlineButtonRef.current?.contains(target)) {
+        setOutlineOpen(false);
       }
-      void resolveImageGroupsWithLimit(groups, (src) => resolveLocalImage(documentPath, src), 4, () =>
-        requestId !== imageRequestId.current
-      ).then((map) => {
-        if (requestId === imageRequestId.current) {
-          setImageMap(map);
-        }
-      });
-    }, IMAGE_RESOLVE_DEBOUNCE_MS);
-
-    return () => { window.clearTimeout(timer); imageRequestId.current += 1; };
-  }, [baseHtml, rendered.status, viewState]);
-
-  useEffect(() => {
-    if (!searchOpen) return;
-
-    if (editorMode === 'edit') {
-      const editor = sourceEditorRef.current;
-      const preserveEditorSelection =
-        sourceEditInProgressRef.current && document.activeElement === editor;
-      sourceEditInProgressRef.current = false;
-      if (preserveEditorSelection) return;
-      if (sourceSearchResult.count <= 0) return;
-      const currentMatch = sourceSearchResult.matches[sourceSearchResult.activeIndex];
-      if (!editor || !currentMatch) return;
-
-      selectSourceSearchMatch(editor, contentRef.current, currentMatch);
-      return;
-    }
-
-    const active = readerRef.current?.querySelector<HTMLElement>('[data-active-search="true"]');
-    if (active && typeof active.scrollIntoView === 'function') {
-      active.scrollIntoView({ block: 'center', behavior: getPreferredScrollBehavior() });
-    }
-  }, [editorMode, searchOpen, sourceSearchResult.activeIndex, sourceSearchResult.count, sourceSearchResult.matches, searchResult.activeIndex, searchResult.count]);
-
-  const applyDocument = useCallback(
-    (document: MarkdownDocument) => {
-      setViewState({ status: 'ready', document });
-      setDraftContent(document.content);
-      draftRef.current = document.content;
-      viewStateRef.current = { status: 'ready', document };
-      setEditorMode('read');
-      setDocumentSession(value => value + 1);
-      editorFailureRef.current = false;
-      setEditorFailure(false);
-      imageRequestId.current += 1;
-      setSaveState({ status: 'idle' });
-      setStatusMessage(document.name);
-      setSearchQuery('');
-      setSearchActiveIndex(0);
-      setImageMap({});
-      syncUnsaved(false);
-    },
-    [syncUnsaved]
-  );
-
-  const confirmIfDirty = useCallback(
-    (reason: 'open' | 'close' | 'switch', proceed: () => void) => {
-      const check = () => {
-        if (documentEditorRef.current?.editor?.isEditable) {
-          const value = documentEditorRef.current.flush();
-          if (value !== null && value !== draftRef.current) {
-            draftRef.current = value;
-            setDraftContent(value);
-          }
-        }
-        if (!editorFailureRef.current && !isReadyDirty(viewStateRef.current, draftRef.current)) {
-          proceed();
-          return;
-        }
-        setDiscardDialog({ reason, proceed });
-      };
-      if (compositionRef.current) compositionWaiters.current.push(check);
-      else check();
-    },
-    []
-  );
-
-  const cancelDiscardDialog = useCallback(() => {
-    if (discardDialog?.reason === 'close') {
-      void confirmClose(false);
-    }
-    discardDialogRef.current = null;
-    setDiscardDialog(null);
-  }, [discardDialog]);
-
-  const discardCloseDraft = useCallback(() => {
-    const current = viewStateRef.current;
-    if (current.status !== 'ready') return;
-    setDocumentSession(value => value + 1);
-    editorFailureRef.current = false;
-    setEditorFailure(false);
-    setDraftContent(current.document.content);
-    draftRef.current = current.document.content;
-    setEditorMode('read');
-    setSaveState({ status: 'idle' });
-  }, []);
-
-  /** Restore non-ready UI after a failed open; a ready document is preserved in place. */
-  const restoreAfterFailedOpen = useCallback(
-    (prevView: ViewState, message?: string) => {
-      if (prevView.status === 'ready') {
-        // The ready document remains visible while opening. Preserve any edits or save
-        // that happened while the request was pending instead of restoring a stale snapshot.
-        const currentView = viewStateRef.current;
-        const currentDraft = draftRef.current;
-        if (currentView.status === 'ready') {
-          syncUnsaved(isReadyDirty(currentView, currentDraft));
-        }
-        if (message) setStatusMessage(message);
-        return;
-      }
-      if (prevView.status === 'loading' || prevView.status === 'empty') {
-        setViewState({ status: 'empty' });
-        syncUnsaved(false);
-        return;
-      }
-      setViewState(prevView);
-      if (message) setStatusMessage(message);
-    },
-    [syncUnsaved]
-  );
-
-  const applyOpenResult = useCallback(
-    (requestId: number, document: MarkdownDocument) => {
-      if (requestId !== documentRequestId.current) return;
-      finishDocumentRequest(requestId);
-      applyDocument(document);
-    },
-    [applyDocument, finishDocumentRequest]
-  );
-
-  const openPath = useCallback(
-    (path: string) => {
-      confirmIfDirty('open', () => {
-        const requestId = beginDocumentRequest();
-        const prevView = viewStateRef.current;
-        if (prevView.status !== 'ready') {
-          setViewState({ status: 'loading' });
-        }
-        void openMarkdownFile(path).then((result) => {
-          if (requestId !== documentRequestId.current) return;
-          if (result.ok) {
-            applyOpenResult(requestId, result.document);
-            return;
-          }
-          if (result.code === 'CANCELED') {
-            restoreAfterFailedOpen(prevView);
-            return;
-          }
-          restoreAfterFailedOpen(prevView, result.message);
-          if (prevView.status !== 'ready') {
-            setViewState({ status: 'error', message: result.message });
-          }
-        }).finally(() => finishDocumentRequest(requestId));
-      });
-    },
-    [
-      applyOpenResult,
-      beginDocumentRequest,
-      confirmIfDirty,
-      finishDocumentRequest,
-      restoreAfterFailedOpen
-    ]
-  );
-
-  const handleChooseFile = useCallback(() => {
-    if (documentOpenPendingRef.current) return;
-    confirmIfDirty('open', () => {
-      const requestId = beginDocumentRequest();
-      const prevView = viewStateRef.current;
-      if (prevView.status !== 'ready') {
-        setViewState({ status: 'loading' });
-      }
-      void chooseMarkdownFile().then((result) => {
-        if (requestId !== documentRequestId.current) return;
-        if (result.ok) {
-          applyOpenResult(requestId, result.document);
-          return;
-        }
-        if (result.code === 'CANCELED') {
-          restoreAfterFailedOpen(prevView);
-          return;
-        }
-        restoreAfterFailedOpen(prevView, result.message);
-        if (prevView.status !== 'ready') {
-          setViewState({ status: 'error', message: result.message });
-        }
-      }).finally(() => finishDocumentRequest(requestId));
-    });
-  }, [
-    applyOpenResult,
-    beginDocumentRequest,
-    confirmIfDirty,
-    finishDocumentRequest,
-    restoreAfterFailedOpen
-  ]);
-
-  const handleSave = useCallback(async () => {
-    if (savingRef.current || documentOpenPendingRef.current) return false;
-    savingRef.current = true;
-    const requestId = documentRequestId.current;
-    try {
-      if (compositionRef.current) await new Promise<void>(resolve => compositionWaiters.current.push(resolve));
-      if (requestId !== documentRequestId.current || documentOpenPendingRef.current || !flushDocument()) return false;
-      const current = viewStateRef.current;
-      if (current.status !== 'ready') return false;
-      const contentToSave = draftRef.current;
-      setSaveState({ status: 'saving' });
-      const result = await saveMarkdownFile(current.document.path, contentToSave);
-      if (requestId !== documentRequestId.current) return false;
-      if (result.ok) {
-        setViewState({ status: 'ready', document: result.document });
-        viewStateRef.current = { status: 'ready', document: result.document };
-        if (draftRef.current === contentToSave) {
-          setDraftContent(result.document.content);
-          draftRef.current = result.document.content;
-        }
-        const dirty = draftRef.current !== result.document.content;
-        syncUnsaved(dirty);
-        setSaveState({ status: dirty ? 'idle' : 'saved' });
-        return !dirty;
-      }
-      setSaveState({ status: 'error', message: result.message });
-      return false;
-    } finally { savingRef.current = false; }
-  }, [flushDocument, syncUnsaved]);
-
-  const handleSaveAndClose = useCallback(async () => {
-    if (!discardDialog || discardDialog.reason !== 'close') return;
-    const dialog = discardDialog;
-    const saved = await handleSave();
-    if (!saved || discardDialogRef.current !== dialog) return;
-    discardDialogRef.current = null;
-    setDiscardDialog(null);
-    dialog.proceed();
-  }, [discardDialog, handleSave]);
-
-  const handleMarkdownNavigation = useCallback(
-    (href: string) => {
-      if (viewState.status !== 'ready' || documentOpenPendingRef.current) return;
-
-      if (href.startsWith('#')) {
-        let id: string;
-        try { id = decodeURIComponent(href.slice(1)); }
-        catch { setStatusMessage('链接格式无效'); return; }
-        if (id) {
-          const el = readerRef.current?.querySelector(`#${CSS.escape(id)}`);
-          if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
-            (el as HTMLElement).scrollIntoView({
-              behavior: getPreferredScrollBehavior(),
-              block: 'start'
-            });
-          }
-        }
-        return;
-      }
-
-      // Non-navigable placeholder from renderer
-      if (!href || href === '#') {
-        return;
-      }
-
-      const sourcePath = viewState.document.path;
-      const inspectionRequestId = documentRequestId.current;
-      void inspectMarkdownLink(sourcePath, href).then((result) => {
-      if (inspectionRequestId !== documentRequestId.current || viewStateRef.current.status !== 'ready' || viewStateRef.current.document.path !== sourcePath) return;
-      if (!result.ok) {
-        setStatusMessage(result.message);
-        return;
-      }
-
-      if (result.action === 'external') {
-        setPendingExternal({ url: result.url });
-        return;
-      }
-
-      // Local Markdown: only switch session after user confirms discard (if dirty).
-      confirmIfDirty('switch', () => {
-        const requestId = beginDocumentRequest();
-        void openMarkdownLink(sourcePath, href).then((opened) => {
-          if (requestId !== documentRequestId.current) return;
-          if (opened.ok) {
-            applyOpenResult(requestId, opened.document);
-            return;
-          }
-          // Failed open must not clear dirty / replace document.
-          const stillDirty = isReadyDirty(viewStateRef.current, draftRef.current);
-          syncUnsaved(stillDirty);
-          setStatusMessage(opened.message);
-        }).finally(() => finishDocumentRequest(requestId));
-      });
-      });
-    },
-    [
-      applyOpenResult,
-      beginDocumentRequest,
-      confirmIfDirty,
-      finishDocumentRequest,
-      syncUnsaved,
-      viewState
-    ]
-  );
-
-  const handleConfirmExternal = useCallback(async () => {
-    if (!pendingExternal) return;
-    const result = await openExternalUrl(pendingExternal.url);
-    if (!result.ok) {
-      setStatusMessage(result.message);
-    }
-    setPendingExternal(null);
-  }, [pendingExternal]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unsubs: Array<() => void> = [];
-
-    const registerListenersAndLoadInitial = async () => {
-      const trackRegistration = async (registration: Promise<() => void>) => {
-        const unsubscribe = await registration;
-        if (disposed) {
-          unsubscribe();
-        } else {
-          unsubs.push(unsubscribe);
-        }
-      };
-      const registrations = await Promise.allSettled([
-        trackRegistration(
-          onOpenFilePath((path) => {
-            openPath(path);
-          })
-        ),
-        trackRegistration(
-          onDragDropPaths((paths) => {
-            const md = paths.find(isMarkdownFilePath);
-            if (md) openPath(md);
-          })
-        ),
-        trackRegistration(
-          onCloseRequested(() => {
-            confirmIfDirty('close', () => {
-              void confirmClose(true).then((result) => {
-                // A macOS close hides the reusable window. Only discard the
-                // in-memory draft after Rust confirms that hide/close succeeded.
-                if (result.ok) discardCloseDraft();
-              });
-            });
-          })
-        )
-      ]);
-
-      for (const registration of registrations) {
-        if (registration.status === 'rejected') {
-          console.error('Failed to register a native application event listener.', registration.reason);
-        }
-      }
-
-      if (disposed) return;
-
-      if (initialLoadStarted.current) return;
-      initialLoadStarted.current = true;
-      // Register the open-path listener before telling Rust the renderer is ready.
-      // Any later event starts a newer request and makes this initial result stale.
-      const requestId = ++documentRequestId.current;
-      void getInitialDocument().then((result) => {
-        if (requestId === documentRequestId.current && result.ok) {
-          applyDocument(result.document);
-        }
-      });
     };
-
-    void registerListenersAndLoadInitial();
-
-    return () => {
-      disposed = true;
-      for (const u of unsubs) u();
-    };
-  }, [applyDocument, confirmIfDirty, discardCloseDraft, openPath]);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [outlineOpen, dialog]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key === 'Escape' && (event.isComposing || event.keyCode === 229 || composing || search.isComposing())) return;
       if (event.key === 'Escape') {
-        if (pendingExternal) {
-          setPendingExternal(null);
-          return;
-        }
-        if (discardDialog) {
-          cancelDiscardDialog();
-          return;
-        }
-        if (searchOpen) {
-          setSearchOpen(false);
-          return;
-        }
-        if (outlineOpen) {
+        if (dialog) cancelDiscardDialog();
+        else if (searchOpen) search.close();
+        else if (outlineOpen) {
           setOutlineOpen(false);
+          outlineButtonRef.current?.focus({ preventScroll: true });
         }
         return;
       }
-      // A confirmation owns the current interaction. In particular, do not let
-      // Command-S clear Rust's pending QuitApp/HideWindow intent behind it.
-      if (pendingExternal || discardDialog) return;
-
+      // A confirmation owns the interaction, including save/quit decisions.
+      if (dialog) return;
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.key.toLowerCase() === 's') {
         event.preventDefault();
         void handleSave();
-        return;
-      }
-      if (mod && event.key.toLowerCase() === 'f') {
+      } else if (mod && event.key.toLowerCase() === 'f') {
         event.preventDefault();
-        setSearchOpen(true);
-        window.setTimeout(() => searchInputRef.current?.focus(), 0);
+        search.open();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [cancelDiscardDialog, discardDialog, handleSave, outlineOpen, pendingExternal, searchOpen]);
+  }, [cancelDiscardDialog, dialog, composing, handleSave, outlineOpen, searchOpen, search.open, search.close, search.isComposing]);
 
   const titleText =
     viewState.status === 'ready'
@@ -869,7 +122,9 @@ export default function App() {
 
   const documentName = viewState.status === 'ready' ? viewState.document.name : 'Vellora';
   const toolbarStatus =
-    saveState.status === 'saving'
+    documentOpenPending
+      ? '正在打开文件'
+      : saveState.status === 'saving'
         ? '正在保存'
         : saveState.status === 'saved'
           ? '已保存'
@@ -886,6 +141,15 @@ export default function App() {
           : viewState.status === 'loading'
             ? '正在打开文件'
             : '未打开文件';
+  const toolbarFeedback = viewState.status === 'ready' && !documentOpenPending &&
+    saveState.status !== 'saving' && saveState.status !== 'saved'
+    ? saveState.status === 'error'
+      ? saveState.message
+      : statusMessage && statusMessage !== viewState.document.name ? statusMessage : ''
+    : '';
+  const identityStatus = toolbarFeedback
+    ? hasUnsaved ? '有未保存更改' : 'Markdown 文档'
+    : toolbarStatus;
 
   useEffect(() => {
     document.title = titleText;
@@ -893,15 +157,15 @@ export default function App() {
 
   return (
     <div className="app-shell" data-testid="app-shell"
-      onCompositionStartCapture={() => { compositionRef.current = true; syncUnsaved(true); }}
-      onCompositionEndCapture={() => {
-        window.setTimeout(() => {
-          compositionRef.current = false;
-          syncUnsaved(isReadyDirty(viewStateRef.current, draftRef.current));
-          compositionWaiters.current.splice(0).forEach(resolve => resolve());
-        }, 0);
+      onCompositionStartCapture={event => {
+        if (!(event.target as HTMLElement).closest('.document-editor, [data-testid="source-editor"]')) return;
+        editorBindings.onCompositionStart();
+      }}
+      onCompositionEndCapture={event => {
+        if (!(event.target as HTMLElement).closest('.document-editor, [data-testid="source-editor"]')) return;
+        editorBindings.onCompositionEnd();
       }}>
-      <header className="toolbar" data-testid="toolbar">
+      <header className="toolbar" data-testid="toolbar" inert={Boolean(dialog)}>
         <div className="toolbar-leading">
           <button
             type="button"
@@ -911,27 +175,34 @@ export default function App() {
             onClick={handleChooseFile}
             title="打开 Markdown 文件"
           >
+            <svg className="toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M2.5 6V4.5a1 1 0 0 1 1-1h4l2 2h6a1 1 0 0 1 1 1V8M3.5 16.5h12l2-8h-12l-2 8-1-10" />
+            </svg>
             打开
           </button>
           <div className="document-identity">
-            <span className="document-name">{documentName}</span>
+            <span className="document-name" title={documentName}>{documentName}</span>
             <span
               className={hasUnsaved ? 'document-status unsaved' : 'document-status'}
-              data-testid="status-text"
+              data-testid={toolbarFeedback ? undefined : 'status-text'}
+              data-busy={documentOpenPending || saveState.status === 'saving' || viewState.status === 'loading'}
+              role={toolbarFeedback ? undefined : 'status'}
+              title={identityStatus}
             >
-              {toolbarStatus}
+              {identityStatus}
             </span>
           </div>
         </div>
 
-        <div className="mode-toggle" role="group" aria-label="查看方式">
+        <div className="mode-toggle" data-mode={editorMode} role="group" aria-label="查看方式">
           <button
             type="button"
             className={editorMode === 'read' ? 'mode-btn active' : 'mode-btn'}
             data-testid="btn-read"
+            aria-pressed={editorMode === 'read'}
             disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => {
-              if (!compositionRef.current) setEditorMode('read');
+              switchMode('read');
             }}
           >
             文档
@@ -940,138 +211,85 @@ export default function App() {
             type="button"
             className={editorMode === 'edit' ? 'mode-btn active' : 'mode-btn'}
             data-testid="btn-edit"
+            aria-pressed={editorMode === 'edit'}
             disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => {
-              if (!compositionRef.current && flushDocument()) setEditorMode('edit');
+              switchMode('edit');
             }}
           >
             源码
           </button>
         </div>
 
-        <div className="toolbar-actions">
+        <div className="toolbar-actions" role="group" aria-label="文档操作">
+          <button
+            type="button"
+            className={hasUnsaved || saveState.status === 'saving'
+              ? 'button button--toolbar save-action button--primary'
+              : 'button button--toolbar save-action'}
+            data-testid="btn-save"
+            data-saving={saveState.status === 'saving'}
+            aria-busy={saveState.status === 'saving'}
+            disabled={viewState.status !== 'ready' || !hasUnsaved || documentOpenPending || saveState.status === 'saving'}
+            onClick={() => void handleSave()}
+            title="保存 (Ctrl/⌘+S)"
+          >
+            {saveState.status === 'saving' ? <span className="save-progress" aria-hidden="true" /> : (
+              <svg className="toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 3.5h8.5l3 3v8.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V5A1.5 1.5 0 0 1 5 3.5Z" />
+                <path d="M7 3.5v4h5.5v-4M7 16.5v-5h6v5" />
+              </svg>
+            )}
+            保存
+          </button>
+          <button
+            type="button"
+            className={searchOpen ? 'button button--icon active' : 'button button--icon'}
+            data-testid="btn-search"
+            disabled={viewState.status !== 'ready' || documentOpenPending}
+            onClick={search.open}
+            aria-label="查找"
+            aria-expanded={searchOpen}
+            aria-controls="document-search"
+            title="查找 (Ctrl/⌘+F)"
+          >
+            <svg className="toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="8.5" cy="8.5" r="5.25" />
+              <path d="m12.5 12.5 4 4" />
+            </svg>
+          </button>
           <button
             type="button"
             className={
-              outlineOpen ? 'button button--toolbar active' : 'button button--toolbar'
+              outlineOpen ? 'button button--icon active' : 'button button--icon'
             }
             data-testid="btn-outline"
-            disabled={viewState.status !== 'ready'}
+            ref={outlineButtonRef}
+            disabled={viewState.status !== 'ready' || documentOpenPending}
             onClick={() => setOutlineOpen((v) => !v)}
+            aria-label="目录"
+            aria-expanded={outlineOpen}
+            aria-controls="document-outline"
+            title="目录"
           >
-            目录
+            <svg className="toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+              <rect x="2.5" y="3.5" width="15" height="13" rx="2" />
+              <path d="M7.5 3.5v13M10.5 7h4M10.5 10h4M10.5 13h2" />
+            </svg>
           </button>
         </div>
       </header>
 
-      {searchOpen && viewState.status === 'ready' ? (
-        <div
-          className="search-bar"
-          data-testid="search-bar"
-          data-expanded={searchExpanded}
-          role="search"
-        >
-          <div className="search-query-row">
-            <svg className="search-icon" viewBox="0 0 20 20" aria-hidden="true">
-              <circle cx="8.5" cy="8.5" r="5.25" />
-              <path d="m12.5 12.5 4 4" />
-            </svg>
-            <input
-              ref={searchInputRef}
-              type="search"
-              className="search-input"
-              data-testid="search-input"
-              placeholder="查找"
-              aria-label="搜索当前文档"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setSearchActiveIndex(0);
-              }}
-              onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  setSearchOpen(false);
-                  return;
-                }
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  if (activeSearchCount <= 0) return;
-                  const delta = e.shiftKey ? -1 : 1;
-                  navigateSearch(delta);
-                }
-              }}
-            />
-            <button
-              type="button"
-              className="search-icon-btn search-close"
-              data-testid="search-close"
-              onClick={() => setSearchOpen(false)}
-              aria-label="关闭查找"
-            >
-              <svg
-                className="search-control-icon search-close-icon"
-                viewBox="0 0 16 16"
-                aria-hidden="true"
-                focusable="false"
-              >
-                <path d="M5.53 4.47a.75.75 0 0 0-1.06 1.06L6.94 8l-2.47 2.47a.75.75 0 0 0 1.06 1.06L8 9.06l2.47 2.47a.75.75 0 0 0 1.06-1.06L9.06 8l2.47-2.47a.75.75 0 0 0-1.06-1.06L8 6.94 5.53 4.47Z" />
-              </svg>
-            </button>
-          </div>
-          <div className="search-navigation-row" aria-hidden={!searchExpanded}>
-            <div className="search-navigation-actions">
-              <button
-                type="button"
-                className="search-icon-btn"
-                data-testid="search-prev"
-                disabled={activeSearchCount <= 0}
-                onClick={() => {
-                  navigateSearch(-1);
-                }}
-                aria-label="上一个匹配项"
-              >
-                <svg
-                  className="search-control-icon search-arrow-icon"
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path d="M6 6l2-2 2 2M8 4v8" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className="search-icon-btn"
-                data-testid="search-next"
-                disabled={activeSearchCount <= 0}
-                onClick={() => {
-                  navigateSearch(1);
-                }}
-                aria-label="下一个匹配项"
-              >
-                <svg
-                  className="search-control-icon search-arrow-icon"
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path d="m6 10 2 2 2-2M8 12V4" />
-                </svg>
-              </button>
-            </div>
-            <span className="search-count" data-testid="search-count">
-              {activeSearchCount > 0
-                ? `${activeSearchIndex + 1} / ${activeSearchCount}`
-                : '0 / 0'}
-            </span>
-          </div>
+      {toolbarFeedback ? (
+        <div className="toolbar-feedback" data-testid="status-text" role="status" inert={Boolean(dialog)}>
+          {toolbarFeedback}
         </div>
       ) : null}
 
-      <div className="main-row">
+      <div className="main-row" inert={Boolean(dialog)}>
+        {searchOpen && viewState.status === 'ready' ? <SearchPanel search={search} inert={Boolean(dialog)} /> : null}
         {outlineOpen && viewState.status === 'ready' ? (
-          <aside className="outline-panel" data-testid="outline-panel">
+          <aside ref={outlinePanelRef} id="document-outline" className="outline-panel" data-testid="outline-panel" aria-label="文档目录">
             <div className="outline-heading">大纲</div>
             {outline.length === 0 ? (
               <div className="outline-empty">无大纲</div>
@@ -1086,22 +304,15 @@ export default function App() {
                     }
                     data-testid="outline-item"
                     data-level={entry.level}
+                    title={entry.text}
                     aria-current={activeHeadingId === entry.id ? 'location' : undefined}
                     style={{ paddingLeft: `${(entry.level - 1) * 12 + 8}px` }}
                     onClick={() => {
-                      if (compositionRef.current) return;
+                      if (composing) return;
                       setActiveHeadingId(entry.id);
-                      if (editorMode !== 'read') setEditorMode('read');
-                      window.setTimeout(() => {
-                        const reader = readerRef.current;
-                        const heading = reader?.ownerDocument.getElementById(entry.id);
-                        if (reader && heading && reader.contains(heading)) {
-                          heading.scrollIntoView({
-                            behavior: getPreferredScrollBehavior(),
-                            block: 'start'
-                          });
-                        }
-                      }, 0);
+                      if (editorMode !== 'read') switchMode('read');
+                      if (window.matchMedia?.('(max-width: 1023px)').matches) setOutlineOpen(false);
+                      viewport.jumpToHeading(entry.id);
                     }}
                   >
                     <span className="outline-item-label">{entry.text}</span>
@@ -1116,6 +327,7 @@ export default function App() {
           ref={contentRef}
           className="content"
           data-testid="content"
+          tabIndex={-1}
           onScroll={outlineOpen ? updateActiveHeading : undefined}
         >
           {viewState.status === 'empty' ? (
@@ -1165,162 +377,26 @@ export default function App() {
           ) : null}
 
           {viewState.status === 'ready' && editorMode === 'edit' ? (
-            <div className="source-editor-shell">
-              {sourceSearchHighlights ? (
-                <div
-                  className="source-search-layer"
-                  data-testid="source-search-highlight-layer"
-                  aria-hidden="true"
-                >
-                  {sourceSearchHighlights}
-                </div>
-              ) : null}
-              <textarea
-                className={
-                  sourceSearchHighlights
-                    ? 'source-editor source-editor--searching'
-                    : 'source-editor'
-                }
-                data-testid="source-editor"
-                ref={sourceEditorRef}
-                value={draftContent}
-                disabled={documentOpenPending}
-                spellCheck={false}
-                aria-label="Markdown 源码"
-                onChange={(e) => {
-                  sourceEditInProgressRef.current = searchOpen;
-                  updateDraft(e.target.value);
-                }}
-              />
-            </div>
+            <SourceEditor ref={sourceEditorRef} value={draftContent} disabled={documentOpenPending}
+              onChange={updateDraft} scroller={contentRef} matches={search.matches}
+              activeIndex={search.activeIndex} searchOpen={searchOpen} />
           ) : null}
 
           {viewState.status === 'ready' ? (
             <div className="reader-stage" ref={readerRef} hidden={editorMode !== 'read'}>
               <DocumentEditor key={documentSession} ref={documentEditorRef}
                 content={draftContent} active={editorMode === 'read'} disabled={documentOpenPending}
-                images={imageMap} query={searchOpen ? searchQuery : ''} searchIndex={searchActiveIndex}
-                onChange={updateDraft} onOutline={setDocumentOutline} onSearch={setDocumentSearchResult}
+                savedContent={viewState.document.content} onTransaction={onEditorTransaction} onImageSources={setImageSources}
+                images={imageMap} query={searchOpen ? searchQuery : ''} searchIndex={searchActiveIndex} searchNavigation={searchNavigation}
+                onChange={updateDraft} onOutline={setDocumentOutline} onSearch={search.onDocumentResult}
                 onOpenLink={handleMarkdownNavigation} onError={handleEditorError}
-                onRecover={value => { updateDraft(value); setStatusMessage(''); setEditorMode('edit'); }} />
+                onRecover={editorBindings.onRecover} />
             </div>
           ) : null}
         </main>
       </div>
 
-      {pendingExternal ? (
-        <div className="modal-backdrop" data-testid="external-link-modal">
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="ext-title">
-            <h2 id="ext-title">安全提示</h2>
-            <p>您即将访问外部链接，确认离开此应用程序吗？</p>
-            <p className="modal-url">{pendingExternal.url}</p>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="button"
-                data-testid="external-cancel"
-                onClick={() => setPendingExternal(null)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="button button--primary"
-                data-testid="external-confirm"
-                onClick={() => void handleConfirmExternal()}
-              >
-                继续访问
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {discardDialog ? (
-        <div
-          className="modal-backdrop"
-          data-testid="discard-modal"
-          onClick={(event) => {
-            if (event.target === event.currentTarget && discardDialog.reason === 'close') {
-              cancelDiscardDialog();
-            }
-          }}
-        >
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="discard-title">
-            <h2 id="discard-title">未保存更改</h2>
-            <p>当前文档有未保存更改。</p>
-            {discardDialog.reason === 'close' && documentOpenPending ? (
-              <p
-                className="modal-feedback"
-                data-testid="close-save-feedback"
-                role="status"
-              >
-                正在打开文档，请稍候。
-              </p>
-            ) : discardDialog.reason === 'close' && saveState.status === 'error' ? (
-              <p
-                className="modal-feedback modal-feedback--error"
-                data-testid="close-save-feedback"
-                role="alert"
-              >
-                {saveState.message}
-              </p>
-            ) : null}
-            <div className="modal-actions">
-              {discardDialog.reason === 'close' ? (
-                <>
-                  <button
-                    type="button"
-                    className="button button--danger"
-                    data-testid="close-discard"
-                    disabled={saveState.status === 'saving'}
-                    onClick={() => {
-                      const { proceed } = discardDialog;
-                      setDiscardDialog(null);
-                      proceed();
-                    }}
-                  >
-                    不保存并退出
-                  </button>
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    data-testid="close-save"
-                    disabled={saveState.status === 'saving' || documentOpenPending}
-                    onClick={() => void handleSaveAndClose()}
-                  >
-                    保存并退出
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="button"
-                    data-testid="discard-cancel"
-                    onClick={cancelDiscardDialog}
-                  >
-                    继续编辑
-                  </button>
-                  <button
-                    type="button"
-                    className="button button--danger"
-                    data-testid="discard-confirm"
-                    onClick={() => {
-                      const { proceed } = discardDialog;
-                      setDiscardDialog(null);
-                      // Do not clear dirty here — only successful document replace clears it.
-                      proceed();
-                    }}
-                  >
-                    放弃更改
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ConfirmationDialogs state={state} actions={actions} restoreEditor={viewport.focusEditor} />
     </div>
   );
 }

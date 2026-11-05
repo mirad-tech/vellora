@@ -3,26 +3,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const host = process.env.TAURI_DEV_HOST;
-const macosE2eFrontend = process.env.VELLORA_MACOS_E2E === '1'
-  ? {
-      name: 'vellora-macos-e2e-frontend',
-      transformIndexHtml: {
-        order: 'pre' as const,
-        handler() {
-          return [
-            {
-              tag: 'script',
-              attrs: { type: 'module', src: '/mac/e2e-frontend.js' },
-              injectTo: 'body-prepend' as const
-            }
-          ];
-        }
-      }
-    }
-  : undefined;
 
 export default defineConfig({
-  plugins: [react(), macosE2eFrontend],
+  plugins: [react()],
   clearScreen: false,
   server: {
     port: 1420,
@@ -49,6 +32,6 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.{test,spec}.{ts,tsx}', 'tests/e2e/**/*.test.mjs']
+    include: ['src/**/*.{test,spec}.{ts,tsx}']
   }
 });

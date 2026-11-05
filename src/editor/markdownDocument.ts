@@ -4,6 +4,9 @@ import type Token from 'markdown-it/lib/token.mjs';
 
 const parser = new MarkdownIt({ html: true, linkify: false, typographer: false });
 
+export type SourceLineRange = { start: number; end: number };
+export type SourceLineRanges = WeakMap<JSONContent, SourceLineRange>;
+
 function imageAltText(tokens: Token[]): string {
   return tokens.map(token => {
     if (['text', 'text_special', 'code_inline'].includes(token.type)) return token.content;
@@ -50,7 +53,7 @@ function inlineContent(tokens: Token[]): JSONContent[] {
   return result;
 }
 
-function convertTokens(tokens: Token[]): JSONContent[] {
+function convertTokens(tokens: Token[], ranges?: SourceLineRanges): JSONContent[] {
   const root: JSONContent = { type: 'doc', content: [] };
   const stack = [root];
   const nodeNames: Record<string, string> = {
@@ -61,11 +64,27 @@ function convertTokens(tokens: Token[]): JSONContent[] {
   for (const token of tokens) {
     if (/^(thead|tbody)_(open|close)$/.test(token.type)) continue;
     const parent = stack[stack.length - 1];
-    if (token.nesting === -1) { stack.pop(); continue; }
+    if (token.nesting === -1) {
+      // Markdown permits empty containers and list items that begin with a
+      // nested block. ProseMirror requires a block, and a leading paragraph in
+      // each list item, respectively.
+      if ((parent.type === 'blockquote' && !parent.content?.length) ||
+        (parent.type === 'listItem' && parent.content?.[0]?.type !== 'paragraph')) {
+        parent.content!.unshift({ type: 'paragraph' });
+      }
+      stack.pop();
+      continue;
+    }
     if (nodeNames[token.type]) {
       const node: JSONContent = { type: nodeNames[token.type], content: [] };
+      if (token.map) ranges?.set(node, { start: token.map[0], end: token.map[1] });
       if (token.type === 'heading_open') node.attrs = { level: Number(token.tag.slice(1)) };
-      if (token.type === 'ordered_list_open') node.attrs = { start: Number(token.attrGet('start') ?? 1) };
+      if (token.type === 'ordered_list_open') {
+        node.attrs = {
+          start: Number(token.attrGet('start') ?? 1),
+          markdownDelimiter: token.markup === ')' ? ')' : '.',
+        };
+      }
       if (token.type === 'th_open' || token.type === 'td_open') {
         node.attrs = { align: token.attrGet('style')?.match(/text-align:(\w+)/)?.[1] ?? null };
       }
@@ -79,10 +98,14 @@ function convertTokens(tokens: Token[]): JSONContent[] {
     } else if (token.type === 'fence' || token.type === 'code_block') {
       // markdown-it includes one structural newline after the code body.
       const text = token.content.replace(/\n$/, '');
-      parent.content!.push({ type: 'codeBlock', attrs: { language: token.info.trim() || null },
-        content: text ? [{ type: 'text', text }] : [] });
+      const node = { type: 'codeBlock', attrs: { language: token.info.trim() || null },
+        content: text ? [{ type: 'text', text }] : [] };
+      if (token.map) ranges?.set(node, { start: token.map[0], end: token.map[1] });
+      parent.content!.push(node);
     } else if (token.type === 'hr') {
-      parent.content!.push({ type: 'horizontalRule' });
+      const node = { type: 'horizontalRule' };
+      if (token.map) ranges?.set(node, { start: token.map[0], end: token.map[1] });
+      parent.content!.push(node);
     } else throw new Error(`Unsupported block token: ${token.type}`);
   }
   return root.content!;
@@ -92,22 +115,43 @@ export function rawSourceNode(source: string): JSONContent {
   return { type: 'rawSource', content: source ? [{ type: 'text', text: source }] : [] };
 }
 
+function dependsOnReferences(token: Token): boolean {
+  if (token.type !== 'inline' || !token.children?.some(child => child.type === 'link_open' || child.type === 'image')) return false;
+  // The parser resolves full, collapsed and shortcut references identically.
+  // Reparse without definitions to distinguish them from inline links/images,
+  // including references nested inside image alt text, without guessing syntax.
+  const independent = parser.parseInline(token.content, {})[0].children;
+  return JSON.stringify(token.children) !== JSON.stringify(independent);
+}
+
 /** Import from the existing Markdown grammar, before any HTML sanitization.
  * A top-level construct that cannot be represented is retained as editable source.
  * Unemitted source (e.g. reference definitions) is retained too.
  */
-export function importMarkdown(source: string): JSONContent {
+export function importMarkdown(source: string, ranges?: SourceLineRanges): JSONContent {
   const normalized = source.replace(/\r\n|\r/g, '\n');
   const lines = normalized.split('\n');
-  const tokens = parser.parse(normalized, {});
-  const content: JSONContent[] = [];
-  let cursor = 0;
+  const frontmatterEnd = /^\uFEFF?---[ \t]*$/.test(lines[0])
+    ? lines.findIndex((line, index) => index > 0 && /^(?:---|\.\.\.)[ \t]*$/.test(line)) + 1
+    : 0;
+  // Mask the header so token maps keep their original line offsets. Its source
+  // must not become a horizontal rule / setext heading when the body is edited.
+  const body = frontmatterEnd ? lines.map((line, index) => index < frontmatterEnd ? '' : line).join('\n') : normalized;
+  const env: { references?: Record<string, unknown> } = {};
+  const tokens = parser.parse(body, env);
+  const sourceNode = (start: number, end: number) => {
+    const node = rawSourceNode(lines.slice(start, end).join('\n'));
+    ranges?.set(node, { start, end });
+    return node;
+  };
+  const content: JSONContent[] = frontmatterEnd ? [sourceNode(0, frontmatterEnd)] : [];
+  let cursor = frontmatterEnd;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (!token.map || token.level !== 0) continue;
     const [start, end] = token.map;
     const gap = lines.slice(cursor, start).join('\n');
-    if (gap.trim()) content.push(rawSourceNode(gap));
+    if (gap.trim()) content.push(sourceNode(cursor, start));
     let last = index;
     if (token.nesting === 1) {
       while (last + 1 < tokens.length) {
@@ -115,26 +159,24 @@ export function importMarkdown(source: string): JSONContent {
         if (tokens[last].level === 0 && tokens[last].nesting === -1) break;
       }
     }
-    try { content.push(...convertTokens(tokens.slice(index, last + 1))); }
-    catch { content.push(rawSourceNode(lines.slice(start, end).join('\n'))); }
+    const block = tokens.slice(index, last + 1);
+    const hasTasks = block.some((part, offset) => part.type === 'list_item_open' &&
+      block[offset + 1]?.type === 'paragraph_open' && block[offset + 2]?.type === 'inline' &&
+      /^\[[ xX]\](?:[ \t]|$)/.test(block[offset + 2].content));
+    try {
+      if (hasTasks || (env.references && block.some(dependsOnReferences))) content.push(sourceNode(start, end));
+      else content.push(...convertTokens(block, ranges));
+    }
+    catch { content.push(sourceNode(start, end)); }
     cursor = end;
     index = last;
   }
   const remainder = lines.slice(cursor).join('\n');
-  if (remainder.trim()) content.push(rawSourceNode(remainder));
+  if (remainder.trim()) content.push(sourceNode(cursor, lines.length));
   return { type: 'doc', content: content.length ? content : [{ type: 'paragraph' }] };
 }
 
 export function documentLineEnding(source: string): '\r\n' | '\n' {
   const index = source.indexOf('\n');
   return index > 0 && source[index - 1] === '\r' ? '\r\n' : '\n';
-}
-
-export function headingId(text: string, seen: Map<string, number>): string {
-  const slug = text.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}_-]+/gu, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  const base = `heading-${slug || 'heading'}`;
-  const count = (seen.get(base) ?? 0) + 1;
-  seen.set(base, count);
-  return count === 1 ? base : `${base}-${count}`;
 }

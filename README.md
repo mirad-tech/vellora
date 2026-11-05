@@ -51,7 +51,7 @@
 - 打开 `.md` / `.markdown`：文件选择、拖放、文件关联启动
 - Markdown 阅读：标题、段落、列表、引用、表格、围栏代码、链接、相对路径图片
 - 连续文档编辑：正文、代码块、嵌套列表和表格直接修改，支持跨段落选择、删除及撤销
-- 按需格式操作：选中文字调整强调或链接，通过格式菜单调整段落、代码语言和表格行列；输入和粘贴默认按普通文字处理
+- 保持文档排版：直接编辑文字和代码，点击、选择内容不显示格式工具；输入和粘贴默认按普通文字处理，格式及图片属性可在源码模式修改
 - 源码编辑：轻量 `textarea` 编辑器，文档/源码模式快速切换；复杂 HTML 和注释保留为原位可编辑的源码片段
 - 文档内查找：文档模式高亮匹配，源码模式选中并滚动到当前匹配，支持结果计数与上一项/下一项；高亮不会写入文件
 - 标题目录：自动跟随当前阅读位置
@@ -61,7 +61,7 @@
 
 界面使用暖灰纸张主题和低强调度配色。预览与源码页面共用窗口右侧滚动条，代码高亮保持克制的单色层级。
 
-打开、浏览和切换模式不会改写文件。实际编辑后保存可规范化 Markdown 写法，保留原文件换行风格及代码、源码片段内容。保存后仍可撤销；源码发生修改后，返回文档模式会重新建立编辑历史。点击链接文字定位光标，通过“链接 → 打开链接”访问目标。
+打开、浏览和切换模式不会改写文件。实际编辑后保存可规范化 Markdown 写法，保留原文件换行风格及代码、源码片段内容。保存后仍可撤销；源码发生修改后，返回文档模式会重新建立编辑历史。点击链接文字定位光标，通过 Ctrl／⌘+单击访问目标；光标位于链接中时也可按 Alt+Enter。外链仍需确认后打开。
 
 ## 快捷键
 
@@ -71,7 +71,7 @@
 | `Ctrl+F` / `⌘F` | 打开查找 |
 | `Enter` | 下一个查找结果 |
 | `Shift+Enter` | 上一个查找结果 |
-| `Escape` | 关闭当前格式菜单、查找或确认层 |
+| `Escape` | 关闭当前查找或确认层 |
 | `Ctrl+Enter` / `⌘Enter` | 离开代码块或源码片段，在下方继续输入 |
 | `Tab` / `Shift+Tab` | 代码块缩进 / 反缩进 |
 | `Ctrl+Z` / `⌘Z` | 撤销文档内容或格式操作 |
@@ -109,36 +109,21 @@ npm run dev:web      # 仅运行前端
 npm run typecheck    # TypeScript 类型检查
 npm test             # 前端单元测试
 npm run test:rust    # Rust 单元测试
-npm run test:e2e     # 浏览器 E2E，mock Tauri IPC
 npm run build:web    # 前端生产构建
 npm run dist         # Windows NSIS 安装包，并整理本地发布产物
 ```
 
 `npm run build` 的原始安装包输出到：
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.2.5_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.4.2_x64-setup.exe`
 
 `npm run dist` 还会把当前版本复制到：
 
-`artifacts/releases/current/Vellora_2.2.5_x64-setup.exe`
+`artifacts/releases/current/Vellora_2.4.2_x64-setup.exe`
 
 `artifacts/releases/` 是不提交到 Git 的本地发布库：`current/` 只保留当前版本，`manifest.json` 记录文件大小与 SHA-256；正式历史版本由 GitHub Releases 保留。
 可运行 `npm run release:prune-old` 删除遗留本地安装器，或运行
 `npm run release:check` 检查当前安装包与清单。详细规则见 [本地发布产物管理](docs/releases/local-artifacts.md)。
-
-### 桌面 E2E
-
-`npm run test:e2e:desktop` 使用真实 release `vellora.exe`、`tauri-driver` 和与本机 Edge 主版本一致的 `msedgedriver`。正式安装包不包含 WebDriver，也不会在驱动缺失时降级为 mock。
-
-运行前必须关闭所有 Vellora 窗口。测试脚本使用唯一会话令牌识别自己的进程，只清理本次启动的 WDIO、驱动和测试应用；无法确认进程归属时会安全失败。
-
-```powershell
-cargo install tauri-driver --locked
-npm run tools:msedgedriver
-npm run test:e2e:desktop
-```
-
-参考：[Tauri WebDriver 文档](https://v2.tauri.app/develop/tests/webdriver/)
 
 ### macOS 开发与构建
 
@@ -147,7 +132,6 @@ macOS 需要 Node.js 22.22.2+（22.x）、24.15+（24.x）或 26+、Rust stable 
 ```bash
 npm ci
 npm run dev:mac
-npm run test:e2e:mac
 npm run dist:mac
 ```
 
@@ -158,11 +142,11 @@ npm run dist:mac
 ```text
 src/                    React 前端、Markdown 渲染、查找和交互
 src-tauri/              共享 Rust / Tauri 后端与安全权限
-mac/                    macOS 配置、构建脚本、E2E 和说明
+mac/                    macOS 配置、构建脚本和说明
 src-tauri/capabilities/ Tauri 权限边界
-tests/                  单元测试、E2E 和 Markdown 样本
+tests/                  Markdown 单元测试样本
 assets/icons/           应用图标源文件
-tools/                  图标、版本、发布和 WebDriver 维护工具
+tools/                  图标、版本和发布维护工具
 docs/                   仓库结构与发布产物文档
 .github/workflows/      CI 与标签发布流程
 ```
@@ -173,10 +157,10 @@ docs/                   仓库结构与发布产物文档
 
 ## 版本与发布
 
-当前版本：**2.2.5**。
+当前源码版本：**2.4.2**；公开下载版本见上方下载区。
 
-- `main` 和 Pull Request 会在 Windows、Apple Silicon 与 Intel GitHub Actions 中运行版本检查、类型检查、前端/Rust 测试、浏览器 E2E 和构建
-- macOS CI 还会运行真实桌面 E2E、构建 ad-hoc Universal DMG，并在 Intel runner 上复核 Apple Silicon runner 生成的同一份验证产物
+- `main` 和 Pull Request 会在 Windows、Apple Silicon 与 Intel GitHub Actions 中运行版本检查、类型检查、前端/Rust 单元测试和构建
+- macOS CI 还会构建 ad-hoc Universal DMG，并在 Intel runner 上复核 Apple Silicon runner 生成的同一份验证产物
 - 版本号同步维护于 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`
 - `npm run version:check` 会阻止这些版本号不一致的提交或发布
 - 更新 [CHANGELOG.md](CHANGELOG.md) 后推送 `vX.Y.Z` 标签

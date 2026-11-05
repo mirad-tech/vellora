@@ -1,6 +1,6 @@
 [package]
 name = "vellora"
-version = "2.2.5"
+version = "2.4.2"
 description = "Vellora lightweight Markdown viewer and editor"
 authors = ["Vellora Contributors"]
 edition = "2021"
@@ -19,22 +19,21 @@ open = "5"
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "=0.10.9"
+tempfile = "=3.27.0"
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
-tauri-plugin-wdio = { version = "1", optional = true }
-tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 thiserror = "2"
 url = "2"
 
-[dev-dependencies]
-tempfile = "3"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_Security_Authorization"] }
 
-# Production / desktop E2E must enable this so the app loads embedded frontendDist
+# Production must enable this so the app loads embedded frontendDist
 # instead of devUrl (http://localhost:1420). `tauri build` enables it; plain
-# `cargo build --release` must pass `--features custom-protocol` (see run-desktop.mjs).
+# `cargo build --release` must pass `--features custom-protocol`.
 [features]
 custom-protocol = ["tauri/custom-protocol"]
-macos-e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [profile.release]
 panic = "abort"

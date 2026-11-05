@@ -22,6 +22,8 @@ pub enum CommandResult<T> {
     ok: bool,
     code: String,
     message: String,
+    #[serde(rename = "conflictToken", skip_serializing_if = "Option::is_none")]
+    conflict_token: Option<String>,
   },
 }
 
@@ -35,6 +37,16 @@ impl<T: Serialize> CommandResult<T> {
       ok: false,
       code: code.into(),
       message: message.into(),
+      conflict_token: None,
+    }
+  }
+
+  pub fn file_changed(token: String) -> Self {
+    Self::Err {
+      ok: false,
+      code: "FILE_CHANGED".to_string(),
+      message: "文件已被其他程序修改，请选择保留草稿、重新加载或确认覆盖。".to_string(),
+      conflict_token: Some(token),
     }
   }
 }

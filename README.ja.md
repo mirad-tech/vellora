@@ -24,7 +24,7 @@
   <img src="docs/assets/vellora-preview.png" width="960" alt="Windows で Markdown をプレビューする Vellora">
 </p>
 
-現在のバージョンは **2.2.5**。**Tauri 2 + React + TypeScript + Vite** で構築されています。ドキュメントはローカルで処理し、サーバーへアップロードしません。
+現在のソースバージョンは **2.4.2**（公開版はダウンロード欄を参照）。**Tauri 2 + React + TypeScript + Vite** で構築されています。ドキュメントはローカルで処理し、サーバーへアップロードしません。
 
 リポジトリ：[`mirad-tech/vellora`](https://github.com/mirad-tech/vellora)。製品名は **Vellora** です。
 
@@ -65,7 +65,7 @@ npm run dev
 npm run dist
 ```
 
-macOS では `npm run dev:mac`、`npm run test:e2e:mac`、`npm run dist:mac` を使用します。
+macOS では `npm run dev:mac`、`npm run dist:mac` を使用します。
 
 ## ライセンス
 

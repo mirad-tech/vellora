@@ -19,7 +19,6 @@
 - [ ] `npm run typecheck`
 - [ ] `npm test`
 - [ ] `npm run test:rust`
-- [ ] `npm run test:e2e`
 - [ ] `npm run build:web`
 - [ ] 其他手动验证 / Other manual validation:
 

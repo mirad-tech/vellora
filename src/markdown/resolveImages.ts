@@ -1,10 +1,6 @@
 import type { ImageResolutionResult } from '../types';
 
 export type ImageResolutionMap = Record<string, ImageResolutionResult>;
-export type LocalImageResolutionGroup = {
-  normalizedSource: string;
-  sources: string[];
-};
 
 export const MAX_LOCAL_IMAGE_SOURCES = 80;
 export const LOCAL_IMAGE_RESOLUTION_CONCURRENCY = 4;
@@ -36,125 +32,52 @@ export function normalizeLocalImageSource(source: string): string {
   return decodePath(removeUrlSuffix(trimmed));
 }
 
-export function collectLocalImageResolutionGroups(
-  html: string,
-  maxGroups = MAX_LOCAL_IMAGE_SOURCES
-): LocalImageResolutionGroup[] {
-  const template = document.createElement('template');
-  template.innerHTML = html;
-
-  const groups = new Map<string, string[]>();
-  const limit = Math.max(0, Math.floor(maxGroups));
-  const images = Array.from(template.content.querySelectorAll<HTMLImageElement>('img[data-local-src]'));
-
-  for (const image of images) {
-    const source = image.getAttribute('data-local-src') ?? '';
-    const normalizedSource = normalizeLocalImageSource(source);
-    if (normalizedSource.length === 0) continue;
-
-    const existingSources = groups.get(normalizedSource);
-    if (existingSources) {
-      existingSources.push(source);
-      continue;
-    }
-
-    if (groups.size >= limit) continue;
-    groups.set(normalizedSource, [source]);
-  }
-
-  return Array.from(groups, ([normalizedSource, sources]) => ({ normalizedSource, sources }));
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, rejectMessage: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(rejectMessage)), timeoutMs);
-    promise
-      .then((res) => {
-        clearTimeout(timer);
-        resolve(res);
+/** Bound one IPC request; the document hook owns scheduling and alias mapping. */
+export async function resolveImageWithTimeout(
+  source: string,
+  resolveSource: (source: string) => Promise<ImageResolutionResult>
+): Promise<ImageResolutionResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolveSource(source),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`解析超时: ${source}`)), 10000);
       })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-  });
+    ]);
+  } catch (error) {
+    return { ok: false, code: 'IMAGE_READ_FAILED', message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export async function resolveImageGroupsWithLimit(
-  groups: LocalImageResolutionGroup[],
-  resolveSource: (source: string) => Promise<ImageResolutionResult>,
-  concurrency = LOCAL_IMAGE_RESOLUTION_CONCURRENCY,
-  isCanceled: () => boolean = () => false
-): Promise<ImageResolutionMap> {
-  const resolutions: ImageResolutionMap = {};
-  const workerCount = Math.min(groups.length, Math.max(1, Math.floor(concurrency)));
-  let nextIndex = 0;
+const placeholderImages = new WeakMap<Element, HTMLImageElement>();
 
-  async function runWorker(): Promise<void> {
-    while (!isCanceled()) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= groups.length) return;
-
-      const group = groups[index];
-      try {
-        const resolution = await withTimeout(
-          resolveSource(group.normalizedSource),
-          10000,
-          `解析超时: ${group.normalizedSource}`
-        );
-        for (const source of group.sources) {
-          resolutions[source] = resolution;
-        }
-      } catch (error) {
-        const failedResult: ImageResolutionResult = {
-          ok: false,
-          code: 'IMAGE_READ_FAILED',
-          message: error instanceof Error ? error.message : String(error)
-        };
-        for (const source of group.sources) {
-          resolutions[source] = failedResult;
-        }
+/** Refresh image nodes in a sanitized preview without replacing its other DOM. */
+export function updatePreviewImages(root: HTMLElement, resolutions: ImageResolutionMap): void {
+  for (const element of root.querySelectorAll<HTMLElement>('img[data-local-src], .image-placeholder[data-local-src]')) {
+    const image = element instanceof HTMLImageElement ? element : placeholderImages.get(element);
+    if (!image) continue;
+    const source = image.getAttribute('data-local-src') ?? '';
+    const result = resolutions[source];
+    if (!result) continue;
+    if (result.ok) {
+      if (image.getAttribute('src') !== result.src) image.setAttribute('src', result.src);
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      if (element !== image) element.replaceWith(image);
+    } else {
+      const placeholder = element === image ? document.createElement('span') : element;
+      placeholder.className = 'image-placeholder';
+      placeholder.dataset.testid = 'missing-image';
+      placeholder.dataset.localSrc = source;
+      placeholder.textContent = `图片缺失：${source}`;
+      placeholder.title = result.message;
+      if (element === image) {
+        placeholderImages.set(placeholder, image);
+        image.replaceWith(placeholder);
       }
     }
   }
-
-  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-  return resolutions;
-}
-
-export function applyImageResolutions(html: string, resolutions: ImageResolutionMap): string {
-  if (Object.keys(resolutions).length === 0) {
-    return html;
-  }
-
-  const template = document.createElement('template');
-  template.innerHTML = html;
-
-  const images = Array.from(template.content.querySelectorAll<HTMLImageElement>('img[data-local-src]'));
-
-  for (const image of images) {
-    const source = image.getAttribute('data-local-src') ?? '';
-    const resolution = resolutions[source];
-
-    if (!resolution) {
-      image.removeAttribute('src');
-      continue;
-    }
-
-    if (resolution.ok) {
-      image.setAttribute('src', resolution.src);
-      image.setAttribute('loading', 'lazy');
-      image.setAttribute('decoding', 'async');
-      continue;
-    }
-
-    const placeholder = document.createElement('span');
-    placeholder.className = 'image-placeholder';
-    placeholder.setAttribute('data-testid', 'missing-image');
-    placeholder.textContent = `图片缺失：${source}`;
-    image.replaceWith(placeholder);
-  }
-
-  return template.innerHTML;
 }

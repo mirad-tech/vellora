@@ -26,8 +26,8 @@ npm run dev
 
 - `src/`：React、Markdown 渲染与前端交互
 - `src-tauri/`：Rust/Tauri 文件操作、链接处理和桌面生命周期
-- `mac/`：macOS 配置、Universal 构建、验证脚本与桌面 E2E
-- `tests/`：单元测试、浏览器 E2E 与 Markdown 样本
+- `mac/`：macOS 配置、Universal 构建与验证脚本
+- `tests/`：Markdown 单元测试样本
 - `.github/workflows/`：持续集成、代码扫描与标签发布
 
 ## 变更原则
@@ -48,19 +48,8 @@ npm run version:check
 npm run typecheck
 npm test
 npm run test:rust
-npm run test:e2e
 npm run build:web
 ```
-
-Windows 桌面 E2E 依赖 `tauri-driver` 和本机 Edge 对应版本的 `msedgedriver`，不作为普通 PR 的必需本地检查：
-
-```powershell
-cargo install tauri-driver --locked
-npm run tools:msedgedriver
-npm run test:e2e:desktop
-```
-
-macOS 桌面 E2E 使用仅测试构建启用的内嵌驱动；运行 `npm run test:e2e:mac`，环境和验收边界见 [macOS 构建与验证说明](mac/README.md)。
 
 ## Pull Request
 
@@ -90,5 +79,5 @@ Vellora is a local-first Markdown reader and lightweight editor. Windows has off
 - Use Windows 10/11 or macOS 12+, Node.js 22.22.2+ on 22.x, 24.15+ on 24.x, or 26+, plus the platform prerequisites listed above. Install and run with `npm install` and `npm run dev`.
 - Keep the security boundaries: only `.md` / `.markdown` files; local images and Markdown links stay inside the current document directory and images are at most 10 MiB; HTTP(S) links require confirmation; do not grant arbitrary filesystem, Shell, or URL permissions.
 - Keep each PR focused. Describe the user-visible change, risk boundary, checks actually run, and any skipped checks. Attach screenshots for UI changes. Do not commit generated directories or unrelated formatting.
-- Run the relevant checks before review: `npm run version:check`, `npm run typecheck`, `npm test`, `npm run test:rust`, `npm run test:e2e`, and `npm run build:web`. Changes to file access, images, links, search, or close protection require both frontend and Rust unit tests.
+- Run the relevant checks before review: `npm run version:check`, `npm run typecheck`, `npm test`, `npm run test:rust`, and `npm run build:web`. Changes to file access, images, links, search, or close protection require both frontend and Rust unit tests.
 - Maintainers alone release versions. Keep version files and `CHANGELOG.md` aligned, and do not create or push release tags from ordinary PRs.

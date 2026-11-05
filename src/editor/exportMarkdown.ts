@@ -6,7 +6,14 @@ function prepareCodeSpans(node: JSONContent): JSONContent {
     return { type: 'serializedCode', marks: node.marks.filter(mark => mark.type !== 'code'),
       content: [{ type: 'text', text: node.text }] };
   }
-  return { ...node, ...(node.content ? { content: node.content.map(prepareCodeSpans) } : {}) };
+  const content = node.content?.map(prepareCodeSpans);
+  // Keep each inline run together so marks span text, code and images without
+  // the Markdown manager closing/reopening delimiters around every inline atom.
+  if (content && ['paragraph', 'heading'].includes(node.type ?? '') &&
+    content.some(child => child.type === 'serializedCode' || child.type === 'image')) {
+    return { ...node, content: [{ type: 'serializedInline', content }] };
+  }
+  return { ...node, ...(content ? { content } : {}) };
 }
 
 export function exportMarkdown(editor: Editor, freshManager = false): string {

@@ -3,10 +3,13 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
+import hljs from 'highlight.js/lib/core';
+import DOMPurify from 'dompurify';
 
 import {
   renderMarkdownDocument,
+  extractMarkdownOutline,
   type MarkdownRenderResult
 } from './renderMarkdown';
 
@@ -21,6 +24,17 @@ function asReadyResult(result: MarkdownRenderResult) {
 }
 
 describe('safe Markdown rendering', () => {
+  test('extracts the same heading IDs without HTML rendering or code highlighting', () => {
+    const source = '# 标题 *A*\n\n## 标题 A\n\n> ### 引用 `代码`\n\n```js\nconst value = 123;\n```';
+    const expected = asReadyResult(renderMarkdownDocument(source)).outline;
+    const highlight = vi.spyOn(hljs, 'highlight');
+    const sanitize = vi.spyOn(DOMPurify, 'sanitize');
+    try {
+      expect(extractMarkdownOutline(source)).toEqual(expected);
+      expect(highlight).not.toHaveBeenCalled();
+      expect(sanitize).not.toHaveBeenCalled();
+    } finally { highlight.mockRestore(); sanitize.mockRestore(); }
+  });
   test('renders five different Markdown structures without errors', async () => {
     const fixtureNames = [
       '01-headings-paragraphs.md',
@@ -52,7 +66,7 @@ describe('safe Markdown rendering', () => {
       }
     ]);
     expect(readyResults[0].html).toContain('id="heading-一级标题"');
-    expect(readyResults[1].html).toContain('<blockquote data-edit-block-id=');
+    expect(readyResults[1].html).toContain('<blockquote>');
     expect(readyResults[1].html).toContain('<ul>');
     expect(readyResults[2].html).toContain('<table>');
     expect(readyResults[3].html).toContain('hljs');
@@ -110,93 +124,40 @@ describe('safe Markdown rendering', () => {
     expect(ready.html).toContain('id="heading-最深"');
   });
 
-  test('adds quick-edit metadata only to supported Markdown blocks', () => {
-    const result = renderMarkdownDocument(`# 标题
-
-正文段落
-
-- 列表项
-
-[链接](https://example.com)
-
-| A | B |
-| - | - |
-| 1 | 2 |
-`);
-
-    const ready = asReadyResult(result);
-    expect(ready.html).toContain('data-edit-block-kind="heading"');
-    expect(ready.html).toContain('data-edit-block-kind="paragraph"');
-    expect(ready.html).toContain('data-edit-block-kind="list-item"');
-    expect(ready.html).not.toMatch(/<table[^>]*data-edit-block-id/);
-    expect(ready.editableBlocks).toHaveLength(4);
-  });
-
-  test('strips forged quick-edit attributes from raw HTML', () => {
-    const result = renderMarkdownDocument(`# 标题
-
-<p data-edit-block-id="edit-block-1" data-edit-block-kind="heading">伪造编辑块</p>
-`);
-
-    const ready = asReadyResult(result);
-    const template = document.createElement('template');
-    template.innerHTML = ready.html;
-
-    const heading = template.content.querySelector('h1');
-    const forgedParagraph = template.content.querySelector('p');
-
-    expect(heading?.hasAttribute('data-edit-block-id')).toBe(true);
-    expect(heading?.hasAttribute('data-edit-block-token')).toBe(false);
-    expect(forgedParagraph?.hasAttribute('data-edit-block-id')).toBe(false);
-    expect(forgedParagraph?.hasAttribute('data-edit-block-kind')).toBe(false);
-  });
-
-  test('maps duplicate rendered text to distinct source ranges', () => {
-    const content = '# 相同\n\n相同\n\n相同\n\n- 项目\n\n> 引用\n';
-    const ready = asReadyResult(renderMarkdownDocument(content));
-
-    expect(ready.editableBlocks.map((block) => ({
-      kind: block.kind,
-      source: content.slice(block.start, block.end)
-    }))).toEqual([
-      { kind: 'heading', source: '# 相同' },
-      { kind: 'paragraph', source: '相同' },
-      { kind: 'paragraph', source: '相同' },
-      { kind: 'list-item', source: '- 项目' },
-      { kind: 'blockquote', source: '> 引用' }
+  test('outline labels and anchors use visible heading text across formatting and links', () => {
+    const ready = asReadyResult(renderMarkdownDocument('# [目标](./target.md) **标题** `代码`\n\n## 目标 标题 代码\n\n### A &amp; B'));
+    expect(ready.outline).toEqual([
+      { id: 'heading-目标-标题-代码', level: 1, text: '目标 标题 代码' },
+      { id: 'heading-目标-标题-代码-2', level: 2, text: '目标 标题 代码' },
+      { id: 'heading-a-b', level: 3, text: 'A & B' },
     ]);
-    expect(new Set(ready.editableBlocks.map((block) => block.start)).size).toBe(5);
   });
 
-  test('retains existing fenced source metadata without exposing complex raw HTML', () => {
-    const ready = asReadyResult(renderMarkdownDocument(`- 父项
-  - 子项
-
-| A | B |
-| - | - |
-| 1 | 2 |
-
-\`\`\`text
-code
-\`\`\`
-
-<section>raw</section>
-
-![图片](assets/test.png)
-
-正文 <span>inline html</span>
-`));
+  test('renders supported and complex blocks without obsolete editing metadata', () => {
+    const ready = asReadyResult(renderMarkdownDocument('# 标题\n\n正文\n\n- 父项\n  - 子项\n\n> 引用\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n```js\nconst x = 1;\n```\n\n<section>raw</section>\n\n![图片](assets/test.png)'));
+    expect(ready).not.toHaveProperty('editableBlocks');
+    expect(ready.html).not.toContain('data-edit-block');
     const template = document.createElement('template');
     template.innerHTML = ready.html;
+    expect(template.content.querySelectorAll('li')).toHaveLength(2);
+    expect(template.content.querySelector('blockquote')?.textContent).toContain('引用');
+    expect(template.content.querySelector('pre code')?.textContent).toBe('const x = 1;\n');
+    expect(template.content.querySelector('section')?.textContent).toBe('raw');
+    expect(template.content.querySelector('img')?.getAttribute('data-local-src')).toBe('assets/test.png');
+    expect(ready.outline).toEqual([{ id: 'heading-标题', level: 1, text: '标题' }]);
+  });
 
-    expect(template.content.querySelectorAll('li[data-edit-block-id]')).toHaveLength(0);
-    expect(template.content.querySelector('table[data-edit-block-id]')).toBeNull();
-    expect(template.content.querySelector('pre[data-edit-block-kind="code-fence"]')).not.toBeNull();
-    expect(template.content.querySelector('section[data-edit-block-id]')).toBeNull();
-    expect(template.content.querySelector('img')?.closest('[data-edit-block-id]')).toBeNull();
-    expect(Array.from(template.content.querySelectorAll('p')).find((paragraph) =>
-      paragraph.textContent?.includes('inline html')
-    )?.hasAttribute('data-edit-block-id')).toBe(false);
+  test('strips forged legacy editing attributes and active content from raw HTML', () => {
+    const ready = asReadyResult(renderMarkdownDocument('<p data-edit-block-id="forged" data-edit-block-kind="heading" data-edit-block-token="token" contenteditable="true" onclick="alert(1)">保留文字</p>'));
+    expect(ready.html).toContain('<p>保留文字</p>');
+    expect(ready.html).not.toMatch(/data-edit-block|contenteditable|onclick/);
+  });
+
+  test('keeps custom parser output sanitized without obsolete metadata', () => {
+    const ready = asReadyResult(renderMarkdownDocument('source', {
+      render: () => '<p data-edit-block-id="forged">preview</p><script>alert(1)</script>'
+    }));
+    expect(ready).toEqual({ status: 'ready', html: '<p>preview</p>', outline: [] });
   });
 
   test('keeps Markdown images as inert local image references before controlled resolution', () => {

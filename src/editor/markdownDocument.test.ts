@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { Editor, type JSONContent } from '@tiptap/core';
 import { editorExtensions } from './extensions';
 import { importMarkdown } from './markdownDocument';
+import { sourceOffsetForPosition } from './sourcePosition';
 import { exportMarkdown } from './exportMarkdown';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,6 +18,77 @@ function open(source: string) {
 afterEach(() => { editors.splice(0).forEach(editor => editor.destroy()); });
 
 describe('continuous Markdown document conversion', () => {
+  test.each([
+    ['\uFEFF---\r\ntitle: 文档\r\n---\r\n\r\n重复段落\r\n\r\n重复段落', '重复段落', '重复段落'],
+    ['# 标题\n\n- 第一项\n\n  列表内段落\n', '列表内段落', '  列表内段落'],
+    ['# 标题\n\n```js\nconst value = 123;\n```', 'const value', '```js'],
+    ['# 标题\n\n<span>说明</span> 特殊段落', '特殊段落', '<span>'],
+    ['# 标题\n\n- [ ] 任务\n- [x] 完成', '完成', '- [ ]'],
+    ['\uFEFF---\r\ntitle: 文档\r\n---\r\n\r\n正文', 'title:', '\uFEFF---'],
+  ])('maps a visible block to its original source without changing the document: %s', (source, text, start) => {
+    const editor = open(source);
+    let position = 0;
+    editor.state.doc.descendants((node, pos) => { if (node.isTextblock && node.textContent.includes(text)) position = pos + 1; });
+    const before = editor.getJSON();
+    expect(sourceOffsetForPosition(editor.state.doc, source, position)).toBe(source.lastIndexOf(start));
+    expect(editor.getJSON()).toEqual(before);
+    expect(importMarkdown(source, new WeakMap())).toEqual(importMarkdown(source));
+  });
+
+  test('unmatched edited blocks fall back to a shared preceding heading or the caller scroll ratio', () => {
+    const withHeading = open('# 标题\n\n正文');
+    withHeading.commands.insertContentAt(withHeading.state.doc.content.size - 1, '已修改');
+    expect(sourceOffsetForPosition(withHeading.state.doc, '# 标题\n\n正文', withHeading.state.doc.content.size - 2)).toBe(0);
+    const noHeading = open('正文');
+    noHeading.commands.insertContentAt(1, '已修改');
+    expect(sourceOffsetForPosition(noHeading.state.doc, '正文', 2)).toBeNull();
+  });
+  test.each([
+    '*a `code` b*', '**a `code` b**', '~~a `code` b~~',
+    '**a *`code`* b**', '*a ![图](a.png) b*', '**a ![图](a.png) b**',
+    '[a `code` b](./other.md)', '[a ![图](a.png) b](./other.md)',
+    '**`first` and `last`**',
+    '*a \ue0000\ue001 `\ue0000\ue001` ![图](a.png) b*',
+  ])('keeps inline atom mark boundaries through three fresh imports: %s', source => {
+    for (const input of [source, '## ' + source, '| H |\n| --- |\n| ' + source + ' |']) {
+      let editor = open(input);
+      const expected = editor.getJSON();
+      for (let round = 0; round < 3; round += 1) {
+        const saved = exportMarkdown(editor, round === 2);
+        editor.destroy();
+        editor = open(saved);
+        expect(editor.getJSON(), saved).toEqual(expected);
+      }
+    }
+  });
+
+  test.each([
+    '[link](https://example.com/?a=1&amp;amp;b=2 "&amp;copy;")',
+    '![图](img&amp;amp;x.png "&amp;copy;")',
+    '[![图](img&amp;copy;.png "&amp;quot;")](./a&amp;amp;b.md "&amp;lt;")',
+  ])('retains literal entities in destinations and titles: %s', source => {
+    let editor = open(source + '\n\n正文');
+    editor.commands.insertContentAt(editor.state.doc.content.size, { type: 'paragraph', content: [{ type: 'text', text: '追加' }] });
+    const expected = editor.getJSON();
+    for (let round = 0; round < 3; round += 1) {
+      const saved = exportMarkdown(editor);
+      editor.destroy();
+      editor = open(saved);
+      expect(editor.getJSON(), saved).toEqual(expected);
+    }
+  });
+
+  test.each(['>', '-', '1.', '> >', '-\n  -', '- ```js\n  code\n  ```'])('imports valid empty containers with schema-valid children: %s', source => {
+    let editor = open(source + '\n\n正文');
+    const expected = editor.getJSON();
+    for (let round = 0; round < 3; round += 1) {
+      const saved = exportMarkdown(editor);
+      editor.destroy();
+      editor = open(saved);
+      expect(editor.getJSON(), saved).toEqual(expected);
+    }
+  });
+
   test.each([
     { type: 'text', text: 'A|B' },
     { type: 'text', text: '|first\\|middle|last|' },
@@ -195,6 +267,21 @@ describe('continuous Markdown document conversion', () => {
     const saved = exportMarkdown(editor);
     const reopened = open(saved);
     expect(reopened.getJSON()).toEqual(editor.getJSON());
+  });
+
+  test('new table rows inherit column alignment and undo with their insertion', () => {
+    const editor = open('| Left | Center | Right |\n| :--- | :---: | ---: |\n| A | B | C |');
+    const original = editor.getJSON();
+    editor.commands.setTextSelection(3);
+    editor.commands.addRowAfter();
+    const expected = editor.getJSON();
+    const insertedRow = editor.state.doc.firstChild!.child(1);
+    expect(Array.from({ length: insertedRow.childCount }, (_, index) => insertedRow.child(index).attrs.align))
+      .toEqual(['left', 'center', 'right']);
+    const saved = exportMarkdown(editor);
+    editor.commands.undo();
+    expect(editor.getJSON()).toEqual(original);
+    expect(open(saved).getJSON()).toEqual(expected);
   });
 
   test.each(['    indented text', '1. literal list', '---', '| A | B |\n:--- | ---:', '> literal quote'])('typed paragraph %j cannot turn into another block type', text => {

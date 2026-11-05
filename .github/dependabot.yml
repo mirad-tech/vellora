@@ -15,13 +15,6 @@ updates:
         update-types:
           - minor
           - patch
-      desktop-e2e:
-        patterns:
-          - '@wdio/*'
-          - 'puppeteer-core'
-        update-types:
-          - minor
-          - patch
       frontend-runtime:
         dependency-type: production
         patterns:

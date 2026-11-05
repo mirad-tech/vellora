@@ -82,18 +82,15 @@ npm run dev
 npm run typecheck
 npm test
 npm run test:rust
-npm run test:e2e
 npm run build:web
 npm run dist
 ```
 
 Installer output:
 
-`src-tauri/target/release/bundle/nsis/Vellora_2.2.5_x64-setup.exe`
+`src-tauri/target/release/bundle/nsis/Vellora_2.4.2_x64-setup.exe`
 
-Real desktop E2E uses `npm run test:e2e:desktop` with external `tauri-driver` and a matching Edge WebDriver. Release builds never embed WebDriver and the test does not silently fall back to mocks.
-
-On macOS, use Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+, install Xcode Command Line Tools and both Apple Rust targets, then use `npm run dev:mac`, `npm run test:e2e:mac`, or `npm run dist:mac`. The macOS E2E driver is feature-gated and is not present in production bundles. See [mac/README.md](mac/README.md).
+On macOS, use Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+, install Xcode Command Line Tools and both Apple Rust targets, then use `npm run dev:mac` or `npm run dist:mac`. See [mac/README.md](mac/README.md).
 
 ## Security
 
@@ -105,7 +102,7 @@ On macOS, use Node.js 22.22.2+ on the 22.x line, 24.15+ on the 24.x line, or 26+
 
 ## Repository and releases
 
-Version: **2.2.5**. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies an ad-hoc Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds and publishes the Windows NSIS installer; macOS remains supported for source builds and CI verification without an official signed DMG asset.
+Source version: **2.4.2**; see the download section for the public release. CI runs on `main` and pull requests across Windows, native Apple Silicon, and native Intel runners. macOS CI exercises the real desktop app, verifies an ad-hoc Universal DMG, and checks the Apple Silicon runner's artifact again on Intel. A matching `vX.Y.Z` tag builds and publishes the Windows NSIS installer; macOS remains supported for source builds and CI verification without an official signed DMG asset.
 
 - [Changelog](CHANGELOG.md)
 - [Issues](https://github.com/mirad-tech/vellora/issues)

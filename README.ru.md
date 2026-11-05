@@ -24,7 +24,7 @@
   <img src="docs/assets/vellora-preview.png" width="960" alt="Vellora просматривает документ Markdown в Windows">
 </p>
 
-Текущая версия — **2.2.5**, на **Tauri 2 + React + TypeScript + Vite**. Документы обрабатываются локально и не загружаются на сервер.
+Текущая версия исходного кода — **2.4.2** (публичный выпуск указан в разделе загрузки), на **Tauri 2 + React + TypeScript + Vite**. Документы обрабатываются локально и не загружаются на сервер.
 
 Репозиторий: [`mirad-tech/vellora`](https://github.com/mirad-tech/vellora). Продукт: **Vellora**.
 
@@ -65,7 +65,7 @@ npm run dev
 npm run dist
 ```
 
-На macOS используйте `npm run dev:mac`, `npm run test:e2e:mac` и `npm run dist:mac`.
+На macOS используйте `npm run dev:mac` и `npm run dist:mac`.
 
 ## Лицензия
 

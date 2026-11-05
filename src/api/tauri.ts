@@ -20,9 +20,10 @@ export async function openMarkdownFile(path: string): Promise<MarkdownOpenResult
 
 export async function saveMarkdownFile(
   path: string,
-  content: string
+  content: string,
+  conflictToken?: string
 ): Promise<MarkdownSaveResult> {
-  return invoke<MarkdownSaveResult>('save_markdown_file', { path, content });
+  return invoke<MarkdownSaveResult>('save_markdown_file', { path, content, ...(conflictToken ? { conflictToken } : {}) });
 }
 
 export async function resolveLocalImage(
@@ -89,8 +90,8 @@ export async function onCloseRequested(handler: () => void): Promise<UnlistenFn>
 export async function onDragDropPaths(
   handler: (paths: string[]) => void
 ): Promise<UnlistenFn> {
-  // Browser smoke tests mock invoke/event only and intentionally have no native
-  // WebView metadata. Native Tauri builds still register the real drop listener.
+  // Browser previews have no native WebView metadata.
+  // Native Tauri builds register the real drop listener.
   if (!isTauri()) return () => undefined;
   const webview = getCurrentWebview();
   return webview.onDragDropEvent((event) => {
