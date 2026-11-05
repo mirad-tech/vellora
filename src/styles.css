@@ -733,7 +733,8 @@ a:focus-visible {
   background: var(--control-active);
 }
 
-.outline-item.current {
+.outline-item.current,
+.outline-item.current:hover:not(:disabled) {
   background: var(--control-active);
   color: var(--text);
   font-weight: 600;
@@ -1153,6 +1154,7 @@ a:focus-visible {
 
 .markdown-body th,
 .markdown-body td {
+  min-width: 96px;
   padding: 8px 12px;
   border: 1px solid var(--border);
   vertical-align: top;
