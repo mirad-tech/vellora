@@ -618,12 +618,17 @@ textarea:focus-visible {
 .outline-heading {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   height: var(--control-height);
   padding: 0 var(--space-4);
   margin-bottom: var(--space-2);
   font-size: 12px;
   font-weight: 500;
   color: var(--muted);
+}
+
+.outline-close {
+  margin-right: -4px;
 }
 
 .outline-empty {
@@ -708,6 +713,11 @@ textarea:focus-visible {
 .muted {
   color: var(--muted);
   font-size: 14px;
+}
+
+.empty-state > p {
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .empty-state > p:first-of-type {
@@ -819,7 +829,7 @@ textarea:focus-visible {
 .document-editor td p, .document-editor th p { margin: 0; }
 .document-editor .tableWrapper { overflow-x: auto; }
 .document-editor table { table-layout: fixed; }
-.document-editor td, .document-editor th { min-width: 60px; position: relative; }
+.document-editor td, .document-editor th { position: relative; }
 .document-editor .search-hit { background: var(--hit); border-radius: var(--radius-highlight); }
 .document-editor .search-hit[data-active-search='true'] { background: var(--hit-active); box-shadow: 0 0 0 1px var(--focus-ring); }
 .document-editor .search-hit[data-active-search='true'],
@@ -1015,6 +1025,7 @@ textarea:focus-visible {
 
 .markdown-body th,
 .markdown-body td {
+  min-width: 96px;
   border: 1px solid var(--border);
   padding: 6px 10px;
 }
@@ -1041,7 +1052,7 @@ textarea:focus-visible {
 mark.search-hit {
   background: var(--hit);
   color: inherit;
-  padding: 0 1px;
+  padding: 0;
   border-radius: var(--radius-highlight);
 }
 
@@ -1099,10 +1110,10 @@ mark.search-hit[data-active-search='true'] {
   color: var(--danger-text);
 }
 
-.modal-url {
+.modal .modal-url {
   word-break: break-all;
-  font-size: 12px !important;
-  color: var(--text) !important;
+  font-size: 12px;
+  color: var(--text);
   background: var(--bg);
   border-radius: var(--radius-control);
   padding: var(--space-4);

@@ -34,7 +34,8 @@ export default function App() {
     editor: documentEditorRef, source: sourceEditorRef });
   const { readerRef, contentRef } = viewport;
   const search = useDocumentSearch({ ready: viewState.status === 'ready', mode: editorMode,
-    content: draftContent, composing, editor: documentEditorRef, source: sourceEditorRef,
+    content: draftContent, composing, blocked: Boolean(dialog) || documentOpenPending,
+    editor: documentEditorRef, source: sourceEditorRef,
     focusEditor: viewport.focusEditor });
   const { isOpen: searchOpen, query: searchQuery, index: searchActiveIndex, navigation: searchNavigation } = search;
   const imageMap = useDocumentImages(viewState.status === 'ready' ? viewState.document.path : null, documentSession, imageSources);
@@ -89,7 +90,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape' && (event.isComposing || event.keyCode === 229 || composing || search.isComposing())) return;
       if (event.key === 'Escape') {
         if (dialog) cancelDiscardDialog();
@@ -281,7 +282,7 @@ export default function App() {
       </header>
 
       {toolbarFeedback ? (
-        <div className="toolbar-feedback" data-testid="status-text" role="status" inert={Boolean(dialog)}>
+        <div className="toolbar-feedback" data-testid="status-text" role={saveState.status === 'error' ? 'alert' : 'status'} inert={Boolean(dialog)}>
           {toolbarFeedback}
         </div>
       ) : null}
@@ -290,11 +291,22 @@ export default function App() {
         {searchOpen && viewState.status === 'ready' ? <SearchPanel search={search} inert={Boolean(dialog)} /> : null}
         {outlineOpen && viewState.status === 'ready' ? (
           <aside ref={outlinePanelRef} id="document-outline" className="outline-panel" data-testid="outline-panel" aria-label="文档目录">
-            <div className="outline-heading">大纲</div>
+            <div className="outline-heading">
+              <span>目录</span>
+              <button type="button" className="search-icon-btn outline-close" data-testid="close-outline"
+                aria-label="关闭目录" title="关闭目录" onClick={() => {
+                  setOutlineOpen(false);
+                  outlineButtonRef.current?.focus({ preventScroll: true });
+                }}>
+                <svg className="toolbar-icon" viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="m6 6 8 8M14 6l-8 8" />
+                </svg>
+              </button>
+            </div>
             {outline.length === 0 ? (
               <div className="outline-empty">无大纲</div>
             ) : (
-              <nav className="outline-list">
+              <nav className="outline-list" aria-label="文档标题">
                 {outline.map((entry) => (
                   <button
                     key={entry.id}
@@ -327,6 +339,7 @@ export default function App() {
           ref={contentRef}
           className="content"
           data-testid="content"
+          aria-busy={documentOpenPending}
           tabIndex={-1}
           onScroll={outlineOpen ? updateActiveHeading : undefined}
         >
@@ -356,7 +369,7 @@ export default function App() {
           ) : null}
 
           {viewState.status === 'loading' ? (
-            <div className="empty-state" data-testid="loading-state">
+            <div className="empty-state" data-testid="loading-state" role="status">
               正在打开文件
             </div>
           ) : null}

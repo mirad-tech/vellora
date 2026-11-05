@@ -9,6 +9,7 @@ type Options = {
   mode: EditorMode;
   content: string;
   composing: boolean;
+  blocked: boolean;
   editor: RefObject<DocumentEditorHandle | null>;
   source: RefObject<SourceEditorHandle | null>;
   focusEditor: () => void;
@@ -44,7 +45,7 @@ function findSourceSearchMatches(
 
 
 /** Coordinates two search surfaces without owning either editor's document or DOM. */
-export function useDocumentSearch({ ready, mode, content, composing, editor, source, focusEditor }: Options) {
+export function useDocumentSearch({ ready, mode, content, composing, blocked, editor, source, focusEditor }: Options) {
   const [isOpen, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
@@ -52,6 +53,13 @@ export function useDocumentSearch({ ready, mode, content, composing, editor, sou
   const [documentResult, onDocumentResult] = useState({ count: 0, activeIndex: -1 });
   const inputRef = useRef<HTMLInputElement>(null);
   const inputComposing = useRef(false);
+  const focusTimer = useRef<number | undefined>(undefined);
+  const blockedRef = useRef(blocked);
+  blockedRef.current = blocked;
+  useEffect(() => {
+    if (blocked) window.clearTimeout(focusTimer.current);
+    return () => window.clearTimeout(focusTimer.current);
+  }, [blocked]);
   const previousNavigation = useRef({ mode, query: '', index: 0, open: false });
   const matches = useMemo(() => findSourceSearchMatches(content, isOpen && mode === 'edit' ? query : ''),
     [content, mode, isOpen, query]);
@@ -62,11 +70,18 @@ export function useDocumentSearch({ ready, mode, content, composing, editor, sou
   const { count, activeIndex } = mode === 'edit' ? sourceResult : documentResult;
 
   const open = useCallback(() => {
-    if (!ready) return;
+    if (!ready || blockedRef.current) return;
     setOpen(true);
-    window.setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 0);
+    window.clearTimeout(focusTimer.current);
+    focusTimer.current = window.setTimeout(() => {
+      const input = inputRef.current;
+      if (blockedRef.current || !input || input.closest('[inert]')) return;
+      input.focus({ preventScroll: true });
+      input.select();
+    }, 0);
   }, [ready]);
   const close = useCallback(() => {
+    window.clearTimeout(focusTimer.current);
     if (document.activeElement?.closest('[role="search"]') && count > 0) {
       if (mode === 'edit') {
         const match = matches[activeIndex];
@@ -86,7 +101,10 @@ export function useDocumentSearch({ ready, mode, content, composing, editor, sou
     setNavigation(value => value + 1);
   }, [count, activeIndex]);
   const changeQuery = useCallback((value: string) => { setQuery(value); setIndex(0); }, []);
-  const reset = useCallback(() => { setOpen(false); setQuery(''); setIndex(0); }, []);
+  const reset = useCallback(() => {
+    window.clearTimeout(focusTimer.current);
+    setOpen(false); setQuery(''); setIndex(0);
+  }, []);
   const isComposing = useCallback(() => inputComposing.current, []);
   const onCompositionStart = useCallback(() => { inputComposing.current = true; }, []);
   const onCompositionEnd = useCallback(() => {

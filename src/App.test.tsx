@@ -1884,6 +1884,95 @@ describe('App', () => {
     expect(saveMarkdownFile.mock.calls.at(-1)?.[1]).toContain('<!--新增 comment -->');
   });
 
+
+  test('the first toolbar save flushes a focused document and retains its draft after failure', async () => {
+    saveMarkdownFile.mockResolvedValueOnce({ ok: false, code: 'SAVE_FAILED', message: '请重试保存' });
+    saveMarkdownFile.mockImplementationOnce(async (_path, content) => ({ ok: true, document: { ...sampleDoc, content } }));
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    const body = await screen.findByTestId('markdown-body');
+    act(() => {
+      documentEditor().view.focus();
+      documentEditor().view.dispatch(documentEditor().state.tr.insertText('首次点击', 1));
+    });
+    expect(document.activeElement).toBe(body);
+    const save = screen.getByTestId('btn-save') as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await screen.findByText('请重试保存');
+    expect(saveMarkdownFile).toHaveBeenCalledWith(sampleDoc.path, expect.stringContaining('# 首次点击标题'));
+    expect(body.textContent).toContain('首次点击标题');
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(save.disabled).toBe(true));
+    expect(saveMarkdownFile).toHaveBeenCalledTimes(2);
+    expect(saveMarkdownFile.mock.calls[1][1]).toBe(saveMarkdownFile.mock.calls[0][1]);
+    expect(setUnsavedChanges).toHaveBeenLastCalledWith(false);
+  });
+
+  test('find ignores IME shortcut events and repeated invocation preserves the query', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true, isComposing: true });
+    expect(screen.queryByTestId('search-bar')).toBeNull();
+    fireEvent.click(screen.getByTestId('btn-search'));
+    const input = screen.getByTestId('search-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '搜索词' } });
+    act(() => documentEditor().view.focus());
+    await pressCtrlKey('f');
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(input.value).toBe('搜索词');
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true });
+    expect(screen.getByTestId('search-bar')).toBeTruthy();
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('search-bar')).toBeNull();
+  });
+
+  test('a native close confirmation owns delayed search focus and has a neutral initial focus', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('btn-open'));
+    await screen.findByTestId('markdown-body');
+    fireEvent.click(screen.getByTestId('btn-edit'));
+    fireEvent.change(screen.getByTestId('source-editor'), { target: { value: '# 保留草稿\n' } });
+    fireEvent.click(screen.getByTestId('btn-search'));
+    act(() => closeRequestedHandler!());
+    const dialog = screen.getByRole('dialog');
+    await act(async () => new Promise(resolve => window.setTimeout(resolve, 10)));
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByTestId('close-save'));
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
+    expect(document.activeElement).toBe(screen.getByTestId('close-cancel'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect((screen.getByTestId('source-editor') as HTMLTextAreaElement).value).toBe('# 保留草稿\n');
+    expect(confirmClose).toHaveBeenLastCalledWith(false);
+  });
+
+  test('the outline close button restores its toggle and an outside click still activates its target', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    try {
+      render(<App />);
+      fireEvent.click(screen.getByTestId('btn-open'));
+      await screen.findByTestId('markdown-body');
+      const toggle = screen.getByTestId('btn-outline');
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole('button', { name: '关闭目录' }));
+      expect(screen.queryByTestId('outline-panel')).toBeNull();
+      expect(document.activeElement).toBe(toggle);
+      fireEvent.click(toggle);
+      fireEvent.pointerDown(screen.getByTestId('btn-edit'));
+      fireEvent.click(screen.getByTestId('btn-edit'));
+      expect(screen.queryByTestId('outline-panel')).toBeNull();
+      expect(screen.getByTestId('source-editor')).toBeTruthy();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   test('source mode accepts empty quotes and list items without losing editability', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('btn-open'));

@@ -30,6 +30,7 @@ export function ConfirmationDialogs({ state, actions, restoreEditor }: Props) {
               type="button"
               className="button"
               data-testid="external-cancel"
+              data-dialog-initial-focus
               onClick={cancelDiscardDialog}
             >
               取消
@@ -58,7 +59,7 @@ export function ConfirmationDialogs({ state, actions, restoreEditor }: Props) {
             <p className="modal-feedback modal-feedback--error" role="alert">{saveState.message}</p>
           ) : null}
           <div className="modal-actions">
-            <button type="button" className="button" disabled={saveState.status === 'saving'} onClick={() => cancelDiscardDialog()}>继续编辑</button>
+            <button type="button" className="button" data-dialog-initial-focus disabled={saveState.status === 'saving'} onClick={() => cancelDiscardDialog()}>继续编辑</button>
             {conflict.step === 'choose' ? <>
               <button type="button" className="button" onClick={() => actions.chooseConflict('reload')}>重新加载</button>
               <button type="button" className="button button--danger" onClick={() => actions.chooseConflict('overwrite')}>覆盖外部版本</button>
@@ -130,6 +131,7 @@ export function ConfirmationDialogs({ state, actions, restoreEditor }: Props) {
                   type="button"
                   className="button"
                   data-testid="discard-cancel"
+                  data-dialog-initial-focus
                   onClick={cancelDiscardDialog}
                 >
                   继续编辑
