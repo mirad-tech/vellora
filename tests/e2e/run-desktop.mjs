@@ -8,7 +8,7 @@
  *
  * Prerequisites on PATH:
  *   - tauri-driver  (cargo install tauri-driver --locked)
- *   - msedgedriver.exe matching Edge major version
+ *   - msedgedriver.exe matching the WebView2 Runtime major.minor.build version
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -23,6 +23,11 @@ import {
   createCleanupController,
   isValidSessionToken
 } from './desktop-processes.mjs';
+import {
+  driverMatchesRuntime,
+  readWebView2Runtime,
+  verifyMicrosoftSignature
+} from '../../tools/webdriver/webview2-runtime.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '../..');
 const appBinary = path.resolve(root, 'src-tauri', 'target', 'release', 'vellora.exe');
@@ -44,29 +49,6 @@ function which(cmd) {
   }
 }
 
-function edgeVersion() {
-  const candidates = [
-    path.join(process.env['ProgramFiles(x86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    path.join(process.env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
-  ];
-  const edge = candidates.find((p) => fs.existsSync(p));
-  if (!edge) fail('Microsoft Edge not found (required for WebView2 desktop E2E).');
-  try {
-    const escapedEdge = edge.replace(/'/g, "''");
-    const script = `(Get-Item -LiteralPath '${escapedEdge}').VersionInfo.ProductVersion`;
-    return execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
-      encoding: 'utf8'
-    }).trim();
-  } catch {
-    fail(`Could not read Edge version from ${edge}`);
-  }
-}
-
-function major(version) {
-  const m = String(version).match(/^(\d+)/);
-  return m ? m[1] : null;
-}
-
 function msedgedriverVersion(driverPath) {
   try {
     const out = execFileSync(driverPath, ['--version'], { encoding: 'utf8' });
@@ -80,10 +62,11 @@ function msedgedriverVersion(driverPath) {
 function resolveMsedgedriver() {
   const candidates = [
     process.env.MSEDGEDRIVER_PATH,
+    // Prefer the project-local, signature-verified WebView2 match over a driver
+    // provided by the runner for the independently updated full Edge browser.
+    path.join(root, 'artifacts', 'webdriver', 'msedgedriver.exe'),
     which('msedgedriver'),
-    which('msedgedriver.exe'),
-    // Project-local install from: npm run tools:msedgedriver
-    path.join(root, 'artifacts', 'webdriver', 'msedgedriver.exe')
+    which('msedgedriver.exe')
   ].filter(Boolean);
   for (const p of candidates) {
     if (p && fs.existsSync(p)) return path.resolve(p);
@@ -103,27 +86,30 @@ function ensureDrivers() {
   const msedgedriver = resolveMsedgedriver();
   if (!msedgedriver) {
     fail(
-      'msedgedriver.exe not found. Install a build matching your Edge major version:\n' +
+      'msedgedriver.exe not found. Install a build matching your WebView2 Runtime:\n' +
         '  npm run tools:msedgedriver\n' +
         'or download from https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/\n' +
         'and set MSEDGEDRIVER_PATH / PATH, or place it at artifacts/webdriver/msedgedriver.exe'
     );
   }
 
-  const edgeV = edgeVersion();
+  const runtime = readWebView2Runtime();
+  console.log(`[e2e:desktop] WebView2 Runtime: ${runtime.version}`);
+  console.log(`[e2e:desktop] Runtime registry: ${runtime.sources.join('; ')}`);
+  // Check the chosen binary before executing it, including an existing local
+  // download. Keep the fetch tool's Authenticode requirement at launch time.
+  const signature = verifyMicrosoftSignature(msedgedriver);
   const driverV = msedgedriverVersion(msedgedriver);
-  const edgeMajor = major(edgeV);
-  const driverMajor = major(driverV);
-  if (!edgeMajor || !driverMajor || edgeMajor !== driverMajor) {
+  if (!driverMatchesRuntime(driverV, runtime.version)) {
     fail(
-      `Edge major version (${edgeV}) does not match msedgedriver (${driverV}). ` +
+      `WebView2 Runtime (${runtime.version}) does not match msedgedriver (${driverV}) major.minor.build. ` +
         'Install a matching driver; refusing to fall back to mocks.'
     );
   }
 
   console.log(`[e2e:desktop] tauri-driver: ${tauriDriver}`);
   console.log(`[e2e:desktop] msedgedriver: ${msedgedriver} (${driverV})`);
-  console.log(`[e2e:desktop] Edge: ${edgeV}`);
+  console.log(`[e2e:desktop] Authenticode: ${signature.status} (${signature.subject})`);
   return { tauriDriver, msedgedriver };
 }
 

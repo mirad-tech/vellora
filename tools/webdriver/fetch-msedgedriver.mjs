@@ -1,5 +1,5 @@
 /**
- * Download msedgedriver matching the installed Microsoft Edge major/full version.
+ * Download msedgedriver matching the registered Microsoft Edge WebView2 Runtime.
  * Writes to artifacts/webdriver/msedgedriver.exe (gitignored).
  *
  * Usage: npm run tools:msedgedriver
@@ -8,6 +8,11 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  driverMatchesRuntime,
+  readWebView2Runtime,
+  verifyMicrosoftSignature
+} from './webview2-runtime.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '../..');
@@ -26,75 +31,6 @@ function cleanupDownloadArtifacts({ removeDriver = false } = {}) {
   if (removeDriver) {
     removePath(driverPath);
   }
-}
-
-function verifyMicrosoftSignature(target) {
-  const escapedTarget = target.replace(/'/g, "''");
-  const ps = `
-$ErrorActionPreference = 'Stop'
-Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-$signature = Get-AuthenticodeSignature -LiteralPath '${escapedTarget}'
-$result = [PSCustomObject]@{
-  Status = [string]$signature.Status
-  Subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
-}
-$result | ConvertTo-Json -Compress
-`;
-
-  let output = null;
-  let lastError = null;
-  for (const shell of ['pwsh.exe', 'powershell.exe']) {
-    try {
-      output = execFileSync(
-        shell,
-        ['-NoProfile', '-NonInteractive', '-Command', ps],
-        { encoding: 'utf8', windowsHide: true }
-      );
-      break;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  if (output == null) {
-    throw new Error(
-      `Failed to verify msedgedriver Authenticode signature: ${lastError?.message || lastError}`
-    );
-  }
-
-  let result;
-  try {
-    result = JSON.parse(output.trim());
-  } catch (err) {
-    throw new Error(`Invalid Authenticode verification output: ${err?.message || err}`);
-  }
-
-  const status = typeof result?.Status === 'string' ? result.Status : '';
-  const subject = typeof result?.Subject === 'string' ? result.Subject : '';
-  if (status !== 'Valid' || !subject.includes('Microsoft Corporation')) {
-    throw new Error(
-      `Rejected msedgedriver signature (status=${status || 'missing'}, subject=${subject || 'missing'})`
-    );
-  }
-
-  return { status, subject };
-}
-
-function edgeProductVersion() {
-  const candidates = [
-    path.join(process.env['ProgramFiles(x86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    path.join(process.env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
-  ];
-  const edge = candidates.find((p) => fs.existsSync(p));
-  if (!edge) {
-    throw new Error('Microsoft Edge not found (required to pick msedgedriver version).');
-  }
-  const ps = `(Get-Item '${edge.replace(/'/g, "''")}').VersionInfo.ProductVersion`;
-  const out = execFileSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', ps],
-    { encoding: 'utf8', windowsHide: true }
-  );
-  return out.trim();
 }
 
 function download(url, dest) {
@@ -145,23 +81,23 @@ function main() {
   }
 
   fs.mkdirSync(outDir, { recursive: true });
-  const version = edgeProductVersion();
-  console.log(`[tools] Edge version: ${version}`);
+  const runtime = readWebView2Runtime();
+  const version = runtime.version;
+  console.log(`[tools] WebView2 Runtime: ${version}`);
+  console.log(`[tools] Runtime registry: ${runtime.sources.join('; ')}`);
 
   if (fs.existsSync(driverPath)) {
     try {
       const signature = verifyMicrosoftSignature(driverPath);
       const v = execFileSync(driverPath, ['--version'], { encoding: 'utf8' });
-      const majorEdge = version.split('.')[0];
-      const majorDriver = (v.match(/(\d+)\./) || [])[1];
-      if (majorDriver === majorEdge) {
+      if (driverMatchesRuntime(v, version)) {
         cleanupDownloadArtifacts();
         console.log(`[tools] Authenticode: ${signature.status} (${signature.subject})`);
         console.log(`[tools] Already have matching driver: ${v.trim()}`);
         console.log(`[tools] Path: ${driverPath}`);
         return;
       }
-      console.log(`[tools] Existing driver major ${majorDriver || 'unknown'} does not match Edge ${majorEdge}.`);
+      console.log(`[tools] Existing driver ${v.trim()} does not match WebView2 Runtime ${version}.`);
     } catch (err) {
       console.warn(`[tools] Existing driver rejected: ${err?.message || err}`);
     }
@@ -179,11 +115,9 @@ function main() {
     // Never execute a downloaded driver before its Authenticode signature is trusted.
     const signature = verifyMicrosoftSignature(driverPath);
     const verOut = execFileSync(driverPath, ['--version'], { encoding: 'utf8' }).trim();
-    const majorEdge = version.split('.')[0];
-    const majorDriver = (verOut.match(/(\d+)\./) || [])[1];
-    if (majorDriver !== majorEdge) {
+    if (!driverMatchesRuntime(verOut, version)) {
       throw new Error(
-        `Downloaded driver major ${majorDriver || 'unknown'} does not match Edge ${majorEdge}`
+        `Downloaded driver ${verOut} does not match WebView2 Runtime ${version}`
       );
     }
 

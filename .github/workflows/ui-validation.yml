@@ -15,7 +15,9 @@ concurrency:
 jobs:
   windows:
     name: Windows UI and native regression
-    runs-on: windows-latest
+    # WebView2 session creation is currently unreliable on the 2025 image:
+    # https://github.com/actions/runner-images/issues/14738
+    runs-on: windows-2022
     timeout-minutes: 45
     env:
       VELLORA_E2E_SCREENSHOT_DIR: artifacts/ui-review/browser

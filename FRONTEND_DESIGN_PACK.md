@@ -52,6 +52,7 @@
 | `src/components/AppIcon.tsx` | 统一展示图标，无业务状态 | SVG 隐藏于辅助技术，按钮保留明确名称 |
 | `src/styles.css` | 全部可见区域与源码高亮的几何关系 | 共享源码度量规则；检查断点、长内容、减少动态效果 |
 | 回归测试与 UI 工作流 | 单元测试、浏览器截图、Windows 原生回归 | 测试样本与真实用户文件隔离；只生成测试可执行文件，不打安装包 |
+| `tools/webdriver/*`、`tests/e2e/run-desktop.mjs` | 仅供 Windows 桌面测试下载、选择和校验驱动，不进入应用运行路径 | 按实际 WebView2 Runtime 注册版本匹配驱动；保留 Microsoft 签名校验与原有进程、文件清理；显式驱动路径优先，其次项目本地驱动、PATH |
 
 后端命令、API 数据结构、文件格式、会话状态、文件访问策略、Markdown 渲染与编辑器接口均保持原有实现；依赖及锁文件不变。
 
@@ -60,9 +61,12 @@
 ### 当前记录
 
 - 原始基线：`npm ci`、版本一致性、类型检查、94 项单元测试、Web 构建通过。
-- 修改后：类型检查、Web 构建、6 个测试文件中的 98 项单元测试已通过（原基线为 94 项）。新增回归覆盖保存按钮候选内容与禁用状态、查找入口、输入法 Escape、窄目录关闭和焦点、确认框 Tab 约束及取消后的编辑器恢复。
-- 本地 Linux 环境缺少 `cargo`；官方 Chromium 下载返回访问受限页面，因此本地未产生浏览器或 Tauri 窗口验收证据。
-- 分支专用 **UI validation** 工作流在 Windows 上运行完整门禁、同场景前后截图和原生桌面 E2E。工作流结果及产物是远端验证依据；配置了检查不等于检查已通过。
+- 源码 `47bb5eaed30dbac43c801a20d7188d581a01cad6` 的 [Windows 验证 42091389244](https://github.com/mirad-tech/vellora/actions/runs/42091389244)：锁文件依赖恢复、版本检查、类型检查、Web 构建、6 个测试文件中的 **98 项单元测试**、**36 项 Rust 测试**及浏览器 E2E **10 个行为场景**全部通过。
+- 新增单元回归覆盖保存按钮候选内容与禁用状态、查找入口、输入法 Escape、窄目录关闭和焦点、确认框 Tab 约束及取消后的编辑器恢复。浏览器回归另检查控件几何、可见焦点、对比度、减少动态效果及 `759/760/761px`、`1023/1024/1025px` 等布局断点。
+- 已产生同场景前后各 9 张真实 Chrome 截图并复核；当前 9 个场景均无页面级横向溢出或脚本错误。表格的最小列宽与目录选中项 hover 修正在本轮截图和回归中通过。主要图片见[实际渲染对照](docs/ui-review/README.md)。
+- Windows 原生可执行文件编译成功，但该次桌面 E2E 在创建 WebView2 会话时出现 `DevToolsActivePort file doesn't exist`，尚未进入产品断言；**不能据此标记原生窗口及 IPC 验收通过**。
+- 针对与 [runner-images #14738](https://github.com/actions/runner-images/issues/14738) 一致的启动问题，本工作流改用 `windows-2022`。同时依据 [Microsoft WebView2 WebDriver 文档](https://learn.microsoft.com/microsoft-edge/webview2/how-to/webdriver)，驱动选择与校验使用实际 WebView2 Runtime，而非独立更新的完整 Edge 浏览器；不降低应用运行时版本、不关闭沙箱、不放宽签名校验。该调整的远端复验结果待记录。
+- 本地 Linux 环境缺少 `cargo`，官方 Chromium 下载也不可用；本地未产生窗口验收证据，以上截图与 Rust 结果均来自所链接的 Windows 工作流。
 
 ### 同场景截图
 
@@ -80,7 +84,7 @@ $env:VELLORA_UI_REVIEW_LABEL = 'before'
 node tools/verification/capture-ui-review.mjs
 ```
 
-Windows 原生测试使用 `tauri-driver` 与对应 Edge 驱动，运行真实应用及 IPC；测试中验证可见保存按钮、源码快捷键、文件跳转、搜索、目录和外链取消，输出原生 WebView 截图。工作流先上传 `vellora-ui-comparison-windows` 供对照查看，最终产物 `vellora-ui-review-windows` 汇集对照截图、渲染度量和原生截图。
+Windows 原生测试使用 `tauri-driver` 与匹配 WebView2 Runtime 的 Edge 驱动，运行真实应用及 IPC；测试定义涵盖可见保存按钮、源码快捷键、文件跳转、搜索、目录和外链取消，仅在成功创建原生会话后输出原生 WebView 截图。工作流先上传 `vellora-ui-comparison-windows` 供对照查看，最终产物 `vellora-ui-review-windows` 汇集本次实际产生的截图与度量；原生会话失败时不包含原生截图。
 
 ### 最终门禁
 
@@ -91,6 +95,7 @@ npm test
 npm run test:rust
 npm run test:e2e
 npm run build:web
+npm run test:e2e:desktop
 ```
 
-人工复核还需关注 Windows 显示缩放、真实中文输入法选词、最小高度 400px，以及 759/760/761px、1023/1024/1025px 断点附近；任何尚未执行的检查都应记录为待验收。
+人工复核仍待完成 Windows 125%/150% 显示缩放、真实中文输入法选词及原生最小高度 400px。布局断点已通过浏览器自动化，不能替代上述系统级检查。尚未执行或被环境阻塞的项目均保留为待验收。
