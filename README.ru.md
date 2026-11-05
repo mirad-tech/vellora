@@ -5,7 +5,7 @@
 <h1 align="center">Vellora</h1>
 
 <p align="center">
-  Локальный лёгкий просмотрщик и редактор Markdown для Windows и macOS.
+  Локальный лёгкий просмотрщик и редактор Markdown для Windows.
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
   <img src="docs/assets/vellora-preview.png" width="960" alt="Vellora просматривает документ Markdown в Windows">
 </p>
 
-Текущая версия исходного кода — **2.4.2** (публичный выпуск указан в разделе загрузки), на **Tauri 2 + React + TypeScript + Vite**. Документы обрабатываются локально и не загружаются на сервер.
+Текущая версия исходного кода — **2.4.3** (публичный выпуск указан в разделе загрузки), на **Tauri 2 + React + TypeScript + Vite**. Документы обрабатываются локально и не загружаются на сервер.
 
 Репозиторий: [`mirad-tech/vellora`](https://github.com/mirad-tech/vellora). Продукт: **Vellora**.
 
@@ -32,21 +32,20 @@
 
 | Платформа | Статус поддержки | Как получить |
 |---|---|---|
-| Windows 10/11 x64 | Текущая публичная версия — 2.2.5 | Скачать установщик NSIS |
-| macOS 12+ (Apple Silicon / Intel) | Исходники и сборка Universal DMG проверены в CI на обеих архитектурах; официального артефакта macOS в GitHub Release нет | Собрать тестовый ad-hoc пакет из исходников |
+| Windows 10/11 x64 | Исходники 2.4.3; публичные версии — в Releases | Скачать установщик NSIS |
+| macOS | Версия исходников и локально проверенной сборки Windows — **2.4.3**. Скрипты сборки `mac/` удалены; оставшиеся команды npm и задания CI для macOS сейчас не работают. | — |
 
 ### Windows 10/11 x64
 
-[**Установщик Vellora 2.2.5**](https://github.com/mirad-tech/vellora/releases/download/v2.2.5/Vellora_2.2.5_x64-setup.exe)
+[**Установщик публичной версии Vellora**](https://github.com/mirad-tech/vellora/releases/latest)
 
-- Имя файла: `Vellora_2.2.5_x64-setup.exe`
 - Все версии: [Releases](https://github.com/mirad-tech/vellora/releases)
 - Нужен **WebView2** (обычно уже есть в системе; runtime не вшивается в установщик)
 - С 1.x (Electron): сначала удалите 1.x, затем установите последнюю версию
 
-### macOS 12+
+### macOS
 
-Исходники по-прежнему создают Universal-приложение и DMG с `arm64` и `x86_64`. Официальные GitHub Releases публикуют только Windows NSIS; macOS DMG используется как ad-hoc артефакт для локальной проверки и CI, а не как официальный артефакт Release. Тестовая сборка описана в [инструкции по сборке и проверке macOS](mac/README.md).
+Версия исходников и локально проверенной сборки Windows — **2.4.3**. Скрипты сборки `mac/` удалены; оставшиеся команды npm и задания CI для macOS сейчас не работают.
 
 ## Кратко
 
@@ -60,13 +59,25 @@
 Нужен Node.js 22.22.2+ (22.x), 24.15+ (24.x) или 26+.
 
 ```bash
-npm install
+npm ci
 npm run dev
 npm run dist
 ```
 
-На macOS используйте `npm run dev:mac` и `npm run dist:mac`.
+Версия исходников и локально проверенной сборки Windows — **2.4.3**. Скрипты сборки `mac/` удалены; оставшиеся команды npm и задания CI для macOS сейчас не работают.
 
 ## Лицензия
 
 MIT — [LICENSE](LICENSE)
+
+## Проверка интерфейса
+
+```powershell
+npm run version:check
+npm run test:e2e:prepare
+npm run test:e2e
+npm run tools:msedgedriver
+npm run test:e2e:desktop
+```
+
+[Подготовка Chrome и tauri-driver](tests/e2e/README.md).

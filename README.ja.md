@@ -5,7 +5,7 @@
 <h1 align="center">Vellora</h1>
 
 <p align="center">
-  Windows / macOS 対応のローカル優先・軽量 Markdown ビューア / ソースエディタです。
+  Windows で検証したローカル優先・軽量 Markdown ビューア / ソースエディタです。
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
   <img src="docs/assets/vellora-preview.png" width="960" alt="Windows で Markdown をプレビューする Vellora">
 </p>
 
-現在のソースバージョンは **2.4.2**（公開版はダウンロード欄を参照）。**Tauri 2 + React + TypeScript + Vite** で構築されています。ドキュメントはローカルで処理し、サーバーへアップロードしません。
+現在のソースバージョンは **2.4.3**（公開版はダウンロード欄を参照）。**Tauri 2 + React + TypeScript + Vite** で構築されています。ドキュメントはローカルで処理し、サーバーへアップロードしません。
 
 リポジトリ：[`mirad-tech/vellora`](https://github.com/mirad-tech/vellora)。製品名は **Vellora** です。
 
@@ -32,21 +32,20 @@
 
 | プラットフォーム | 対応状況 | 入手方法 |
 |---|---|---|
-| Windows 10/11 x64 | 現在の公開版は 2.2.5 | NSIS インストーラをダウンロード |
-| macOS 12+（Apple Silicon / Intel） | ソースと Universal DMG ビルドを両アーキテクチャの CI で検証済み。正式な macOS Release アセットは未提供 | ソースから ad-hoc テスト版をビルド |
+| Windows 10/11 x64 | ソース 2.4.3。公開版は Releases を参照 | NSIS インストーラをダウンロード |
+| macOS | Windows のソースとローカル検証版は **2.4.3** です。`mac/` ビルドスクリプトは削除されており、残っている macOS npm/CI エントリは現在利用できません。 | — |
 
 ### Windows 10/11 x64
 
-[**Vellora 2.2.5 インストーラ**](https://github.com/mirad-tech/vellora/releases/download/v2.2.5/Vellora_2.2.5_x64-setup.exe)
+[**公開版 Vellora インストーラ**](https://github.com/mirad-tech/vellora/releases/latest)
 
-- ファイル名：`Vellora_2.2.5_x64-setup.exe`
 - 全リリース：[Releases](https://github.com/mirad-tech/vellora/releases)
 - **WebView2** が必要（通常は OS に同梱。インストールパッケージには埋め込みません）
 - 1.x（Electron）から：先に 1.x をアンインストールしてから最新版を入れてください
 
-### macOS 12+
+### macOS
 
-ソースは引き続き `arm64` / `x86_64` を含む Universal アプリと DMG に対応しています。正式な GitHub Release は Windows NSIS のみを公開し、macOS DMG はローカル / CI 用の ad-hoc 検証成果物で、正式な Release アセットではありません。テスト版は [macOS ビルド・検証手順](mac/README.md) を参照してください。
+Windows のソースとローカル検証版は **2.4.3** です。`mac/` ビルドスクリプトは削除されており、残っている macOS npm/CI エントリは現在利用できません。
 
 ## 概要
 
@@ -60,13 +59,25 @@
 Node.js 22.22.2+（22.x）、24.15+（24.x）または 26+ が必要です。
 
 ```bash
-npm install
+npm ci
 npm run dev
 npm run dist
 ```
 
-macOS では `npm run dev:mac`、`npm run dist:mac` を使用します。
+Windows のソースとローカル検証版は **2.4.3** です。`mac/` ビルドスクリプトは削除されており、残っている macOS npm/CI エントリは現在利用できません。
 
 ## ライセンス
 
 MIT — [LICENSE](LICENSE)
+
+## UI 回帰テスト
+
+```powershell
+npm run version:check
+npm run test:e2e:prepare
+npm run test:e2e
+npm run tools:msedgedriver
+npm run test:e2e:desktop
+```
+
+[Chrome と tauri-driver の準備手順](tests/e2e/README.md)。
