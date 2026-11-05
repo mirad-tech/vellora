@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/vellora-preview.png" width="960" alt="Windows で Markdown をプレビューする Vellora">
+  <img src="docs/assets/vellora-2.4.3.png" width="960" alt="Windows で Markdown をプレビューする Vellora">
 </p>
 
 現在のソースバージョンは **2.4.3**（公開版はダウンロード欄を参照）。**Tauri 2 + React + TypeScript + Vite** で構築されています。ドキュメントはローカルで処理し、サーバーへアップロードしません。
@@ -32,12 +32,12 @@
 
 | プラットフォーム | 対応状況 | 入手方法 |
 |---|---|---|
-| Windows 10/11 x64 | ソース 2.4.3。公開版は Releases を参照 | NSIS インストーラをダウンロード |
+| Windows 10/11 x64 | 現在のバージョン: 2.4.3 | NSIS インストーラをダウンロード |
 | macOS | Windows のソースとローカル検証版は **2.4.3** です。`mac/` ビルドスクリプトは削除されており、残っている macOS npm/CI エントリは現在利用できません。 | — |
 
 ### Windows 10/11 x64
 
-[**公開版 Vellora インストーラ**](https://github.com/mirad-tech/vellora/releases/latest)
+[**Vellora 2.4.3 インストーラ**](https://github.com/mirad-tech/vellora/releases/download/v2.4.3/Vellora_2.4.3_x64-setup.exe)
 
 - 全リリース：[Releases](https://github.com/mirad-tech/vellora/releases)
 - **WebView2** が必要（通常は OS に同梱。インストールパッケージには埋め込みません）

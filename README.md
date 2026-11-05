@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/vellora-preview.png" width="960" alt="Vellora 在 Windows 中预览 Markdown 文档">
+  <img src="docs/assets/vellora-2.4.3.png" width="960" alt="Vellora 在 Windows 中预览 Markdown 文档">
 </p>
 
 文档在本机处理，不上传到服务器。Vellora 基于 **Tauri 2 + React + TypeScript + Vite**，专注于打开、阅读、快速修改并保存单个 Markdown 文档。
@@ -30,12 +30,12 @@
 
 | 平台 | 支持状态 | 获取方式 |
 |---|---|---|
-| Windows 10/11 x64 | 源码 2.4.3；公开下载以 Releases 为准 | 下载 NSIS 安装包 |
+| Windows 10/11 x64 | 当前版本 2.4.3 | 下载 NSIS 安装包 |
 | macOS | 当前 Windows 源码与本机验证版本为 **2.4.3**。`mac/` 构建脚本已移除，残留的 macOS npm/CI 入口尚待整理，当前不能按这些入口构建。 | — |
 
 ### Windows 10/11 x64
 
-[**下载公开安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/latest)
+[**下载 Vellora 2.4.3 安装包（NSIS）**](https://github.com/mirad-tech/vellora/releases/download/v2.4.3/Vellora_2.4.3_x64-setup.exe)
 
 - 所有版本：[GitHub Releases](https://github.com/mirad-tech/vellora/releases)
 - 运行环境：Microsoft WebView2；多数 Windows 10/11 已预装，缺失时安装程序会引导下载

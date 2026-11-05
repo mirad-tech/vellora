@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/vellora-preview.png" width="960" alt="Vellora previewing a Markdown document on Windows">
+  <img src="docs/assets/vellora-2.4.3.png" width="960" alt="Vellora previewing a Markdown document on Windows">
 </p>
 
 Documents are processed locally and are not uploaded to a server. Vellora is built with **Tauri 2 + React + TypeScript + Vite** and stays focused on opening, reading, quickly editing, and saving one Markdown document.
@@ -30,12 +30,12 @@ Documents are processed locally and are not uploaded to a server. Vellora is bui
 
 | Platform | Support status | How to get it |
 |---|---|---|
-| Windows 10/11 x64 | Source 2.4.3; public downloads are listed in Releases | Download the NSIS installer |
+| Windows 10/11 x64 | Current version: 2.4.3 | Download the NSIS installer |
 | macOS | The Windows source and locally verified version is **2.4.3**. The `mac/` build scripts have been removed; remaining macOS npm/CI entries are not currently usable. | — |
 
 ### Windows 10/11 x64
 
-[**Download the public installer (NSIS)**](https://github.com/mirad-tech/vellora/releases/latest)
+[**Download Vellora 2.4.3 (NSIS)**](https://github.com/mirad-tech/vellora/releases/download/v2.4.3/Vellora_2.4.3_x64-setup.exe)
 
 - All versions: [GitHub Releases](https://github.com/mirad-tech/vellora/releases)
 - Requires Microsoft WebView2, normally included with Windows 10/11; the installer can bootstrap it if missing
