@@ -1,6 +1,6 @@
 # Vellora
 
-本地优先的 Windows Markdown 阅读与编辑器。
+Windows Markdown 阅读与编辑器。
 
 ## 功能
 
