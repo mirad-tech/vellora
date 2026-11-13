@@ -1,0 +1,17 @@
+[package]
+name = "vellora-md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Vellora native Markdown document model with byte-preserving round trips"
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["simd", "html"] }
+serde.workspace = true
+html5ever = "=0.38.0"
+unicase = "2"
+
+[dev-dependencies]
+serde_json.workspace = true
+serde.workspace = true

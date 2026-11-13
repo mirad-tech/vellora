@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Merge through /MANIFESTINPUT. Do not replace the linker/Qt manifest:
+     its execution level, common controls, compatibility and DPI declarations
+     must remain intact. SegmentHeap affects only this executable's heaps.
+     Supported by Windows 10 version 2004 (build 19041) and later. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
+  <asmv3:application>
+    <asmv3:windowsSettings xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">
+      <heapType>SegmentHeap</heapType>
+    </asmv3:windowsSettings>
+  </asmv3:application>
+</assembly>

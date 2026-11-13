@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/vellora">
+    <file alias="icon.ico">../installer/assets/vellora.ico</file>
+  </qresource>
+</RCC>

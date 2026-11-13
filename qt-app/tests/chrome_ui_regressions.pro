@@ -1,0 +1,10 @@
+QT += core gui widgets svg testlib
+CONFIG += c++17 testcase console
+CONFIG -= debug_and_release app_bundle
+TEMPLATE = app
+TARGET = vellora-chrome-ui-regressions
+DEFINES += NOMINMAX WIN32_LEAN_AND_MEAN VELLORA_CHROME_UI_TEST_HOOKS
+INCLUDEPATH += $$PWD/../src
+SOURCES += chrome_ui_regressions.cpp ../src/chrome.cpp
+HEADERS += ../src/chrome.h ../src/theme.h
+win32: LIBS += -luser32

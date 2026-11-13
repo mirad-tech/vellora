@@ -1,0 +1,215 @@
+//! Markdown file open/save. The dialog side effect is injected so the core stays
+//! testable and no Tauri/GTK dialog dependency leaks into the native product.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use crate::reliable_save::{atomic_write, ContentDigest, SaveFailure};
+use crate::types::{CommandResult, DocumentPayload, MarkdownDocument};
+
+const SUPPORTED_EXTENSIONS: &[&str] = &["md", "markdown"];
+
+pub fn is_markdown_path(path: &Path) -> bool {
+  path
+    .extension()
+    .and_then(|ext| ext.to_str())
+    .map(|ext| SUPPORTED_EXTENSIONS.iter().any(|s| ext.eq_ignore_ascii_case(s)))
+    .unwrap_or(false)
+}
+
+fn modified_at_ms(metadata: &fs::Metadata) -> f64 {
+  metadata
+    .modified()
+    .ok()
+    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+    .map(|d| d.as_secs_f64() * 1000.0)
+    .unwrap_or(0.0)
+}
+
+pub fn read_markdown_file(file_path: &str) -> CommandResult<DocumentPayload> {
+  let trimmed = file_path.trim();
+  if trimmed.is_empty() {
+    return CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。");
+  }
+
+  let path = PathBuf::from(trimmed);
+  if !is_markdown_path(&path) {
+    return CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能打开 .md 或 .markdown 文件。");
+  }
+
+  let canonical = match fs::canonicalize(&path) {
+    Ok(p) => p,
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+      return CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。");
+    }
+    Err(_) => path.clone(),
+  };
+
+  let metadata = match fs::metadata(&canonical) {
+    Ok(m) => m,
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+      return CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。");
+    }
+    Err(_) => {
+      return CommandResult::failure("READ_FAILED", "无法读取文件，请检查权限或文件状态。");
+    }
+  };
+
+  if !metadata.is_file() {
+    return CommandResult::failure("NOT_A_FILE", "选择的路径不是文件。");
+  }
+
+  let content = match fs::read_to_string(&canonical) {
+    Ok(c) => c,
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+      return CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。");
+    }
+    Err(_) => {
+      return CommandResult::failure("READ_FAILED", "无法读取文件，请检查权限或文件状态。");
+    }
+  };
+
+  let name = canonical
+    .file_name()
+    .map(|n| n.to_string_lossy().into_owned())
+    .unwrap_or_else(|| trimmed.to_string());
+
+  CommandResult::success(DocumentPayload {
+    document: MarkdownDocument {
+      path: canonical.to_string_lossy().into_owned(),
+      name,
+      content,
+      modified_at: modified_at_ms(&metadata),
+      size: metadata.len(),
+    },
+  })
+}
+
+pub fn save_markdown_file(
+  file_path: &str,
+  content: &str,
+  expected: &ContentDigest,
+) -> Result<MarkdownDocument, SaveFailure> {
+  let trimmed = file_path.trim();
+  if trimmed.is_empty() {
+    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "文件路径无效。").into());
+  }
+
+  if !is_markdown_path(Path::new(trimmed)) {
+    return Err(
+      std::io::Error::new(std::io::ErrorKind::InvalidInput, "只能保存 .md 或 .markdown 文件。")
+        .into(),
+    );
+  }
+
+  let path = PathBuf::from(trimmed);
+  let metadata = atomic_write(&path, content.as_bytes(), expected)?;
+  Ok(MarkdownDocument {
+    path: trimmed.to_string(),
+    name: path
+      .file_name()
+      .map(|name| name.to_string_lossy().into_owned())
+      .unwrap_or_default(),
+    content: content.to_string(),
+    modified_at: modified_at_ms(&metadata),
+    size: content.len() as u64,
+  })
+}
+
+/// Open dialog with the picker injected by the platform layer.
+pub fn choose_markdown_file(
+  pick: impl FnOnce() -> Option<PathBuf>,
+) -> CommandResult<DocumentPayload> {
+  match pick() {
+    Some(path) => read_markdown_file(path.to_string_lossy().as_ref()),
+    None => CommandResult::failure("CANCELED", "已取消。"),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::io::Write;
+  use tempfile::tempdir;
+
+  #[test]
+  fn detects_markdown_extensions() {
+    assert!(is_markdown_path(Path::new("a.md")));
+    assert!(is_markdown_path(Path::new("a.markdown")));
+    assert!(is_markdown_path(Path::new("A.MD")));
+    assert!(!is_markdown_path(Path::new("a.txt")));
+    assert!(!is_markdown_path(Path::new("a")));
+  }
+
+  #[test]
+  fn reads_and_saves_markdown() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    {
+      let mut f = fs::File::create(&path).unwrap();
+      write!(f, "# hello").unwrap();
+    }
+
+    let open = read_markdown_file(path.to_str().unwrap());
+    match open {
+      CommandResult::Ok { data, .. } => {
+        assert_eq!(data.document.content, "# hello");
+        assert_eq!(data.document.name, "note.md");
+      }
+      CommandResult::Err { code, message, .. } => panic!("{code}: {message}"),
+    }
+
+    let saved = save_markdown_file(
+      path.to_str().unwrap(),
+      "# saved",
+      &crate::reliable_save::content_digest(b"# hello"),
+    )
+    .unwrap();
+    assert_eq!(saved.content, "# saved");
+  }
+
+  #[test]
+  fn saving_replaces_the_target_without_truncating_its_previous_file() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let previous = dir.path().join("previous.md");
+    fs::write(&path, "original bytes").unwrap();
+    fs::hard_link(&path, &previous).unwrap();
+    let result = save_markdown_file(
+      path.to_str().unwrap(),
+      "saved bytes",
+      &crate::reliable_save::content_digest(b"original bytes"),
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "saved bytes");
+    assert_eq!(fs::read_to_string(&previous).unwrap(), "original bytes");
+  }
+
+  #[test]
+  fn rejects_non_markdown() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.txt");
+    fs::write(&path, "x").unwrap();
+    match read_markdown_file(path.to_str().unwrap()) {
+      CommandResult::Err { code, .. } => assert_eq!(code, "UNSUPPORTED_FILE_TYPE"),
+      _ => panic!("expected failure"),
+    }
+  }
+
+  #[test]
+  fn missing_file_not_found() {
+    match read_markdown_file(r"C:\definitely-missing-vellora-file-xyz.md") {
+      CommandResult::Err { code, .. } => assert_eq!(code, "NOT_FOUND"),
+      _ => panic!("expected failure"),
+    }
+  }
+
+  #[test]
+  fn canceled_dialog_reports_canceled_without_touching_session() {
+    match choose_markdown_file(|| None) {
+      CommandResult::Err { code, .. } => assert_eq!(code, "CANCELED"),
+      other => panic!("expected canceled, got {other:?}"),
+    }
+  }
+}

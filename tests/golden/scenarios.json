@@ -1,0 +1,155 @@
+[
+  {
+    "id": "paragraph-append",
+    "source": "hello\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "hello!"
+  },
+  {
+    "id": "heading-body-append",
+    "source": "# Title\n\nbody text\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "# Title\n\nbody text!"
+  },
+  {
+    "id": "list-append",
+    "source": "- alpha\n- beta\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "- alpha\n- beta!"
+  },
+  {
+    "id": "ordered-list-append",
+    "source": "1. first\n2. second\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "1. first\n2. second!"
+  },
+  {
+    "id": "nested-list-append",
+    "source": "- alpha\n  - nested\n- beta\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "- alpha\n  - nested\n- beta!"
+  },
+  {
+    "id": "table-append",
+    "source": "| a | b |\n| --- | --- |\n| 1 | 2 |\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "\n| a | b |\n| --- | --- |\n| 1 | 2! |\n"
+  },
+  {
+    "id": "code-append",
+    "source": "```js\nconst value = 1;\n```\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "```js\nconst value = 1;!\n```"
+  },
+  {
+    "id": "quote-append",
+    "source": "> quoted line\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "> quoted line!"
+  },
+  {
+    "id": "frontmatter-append",
+    "source": "---\ntitle: \"Report\"\ntags: [one, two]\n---\n\nbody\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "---\ntitle: \"Report\"\ntags: [one, two]\n---\n\nbody!"
+  },
+  {
+    "id": "crlf-append",
+    "source": "# Title\r\n\r\nbody\r\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "# Title\r\n\r\nbody!"
+  },
+  {
+    "id": "cjk-emoji-append",
+    "source": "# 标题\n\n中文正文 😀 mix\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "好"
+    },
+    "expected": "# 标题\n\n中文正文 😀 mix好"
+  },
+  {
+    "id": "raw-html-append",
+    "source": "<div class=\"note\">raw</div>\n\nbody\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "<div class=\"note\">raw</div>\n\nbody!"
+  },
+  {
+    "id": "task-list-append",
+    "source": "- [ ] todo\n- [x] done\n\nbody\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "- [ ] todo\n- [x] done\n\n\nbody!"
+  },
+  {
+    "id": "reference-link-append",
+    "source": "[link][doc]\n\n[doc]: ./old.md \"Title\"\n\nbody\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "[link][doc]\n\n\n[doc]: ./old.md \"Title\"\n\n\nbody!"
+  },
+  {
+    "id": "inline-format-append",
+    "source": "**bold** and *italic* and `code` and ~~gone~~\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "**bold** and *italic* and `code` and ~~gone!~~"
+  },
+  {
+    "id": "image-append",
+    "source": "![alt](./pic.png)\n",
+    "operation": {
+      "kind": "appendAtEnd",
+      "text": "!"
+    },
+    "expected": "![alt](./pic.png)!"
+  },
+  {
+    "id": "start-insert",
+    "source": "body\n",
+    "operation": {
+      "kind": "insertAtStart",
+      "text": "X"
+    },
+    "expected": "Xbody"
+  }
+]

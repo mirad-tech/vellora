@@ -1,0 +1,10 @@
+QT += core gui widgets svg testlib
+CONFIG += c++17 testcase console
+CONFIG -= debug_and_release app_bundle
+TEMPLATE = app
+TARGET = vellora-focused-ui-feedback
+DEFINES += NOMINMAX WIN32_LEAN_AND_MEAN
+INCLUDEPATH += $$PWD/../src
+SOURCES += focused_ui_feedback.cpp ../src/chrome.cpp ../src/source_view.cpp
+HEADERS += ../src/chrome.h ../src/source_view.h ../src/theme.h
+win32: LIBS += -luser32

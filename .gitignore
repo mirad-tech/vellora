@@ -1,0 +1,28 @@
+# Build output
+target/
+spikes/*/target/
+
+# Installer output
+installer/out/
+
+# Local logs
+*.log
+
+# Qt SDK (installed into the project for reproducibility, never committed)
+qt/
+
+# Qt build artifacts
+qt-app/Makefile
+qt-app/.qmake.stash
+qt-app/*.obj
+qt-app/moc_*.cpp
+qt-app/moc_*.h
+qt-app/moc_predefs.h
+qt-app/qrc_*.cpp
+qt-app/vellora.exe
+qt-app/dist/
+qt-app/release/
+qt-app/debug/
+
+# Local Python tooling (aqtinstall)
+tools/py/
