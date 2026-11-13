@@ -647,7 +647,7 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "vellora-bridge"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "vellora-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "serde",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "vellora-md"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "html5ever",
  "pulldown-cmark",
