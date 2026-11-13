@@ -18,9 +18,9 @@ inline QColor faint() { return QColor("#898781"); }
 inline QColor accent() { return QColor("#184f95"); }
 inline QColor focusRing() { return QColor("#2a78d6"); }
 inline QColor codeBg() { return QColor("#f3f3f0"); }
-// Vellora-specific soft selection, not a website brand token. Search hits
-// deliberately retain their separate hit()/accent() colours.
-inline QColor selectionBg() { return QColor("#d6e6f5"); }
+// Vellora-specific warm selection, not an official Claude brand token. Search hits
+// deliberately retain their separate hit()/searchCurrentBg() colours.
+inline QColor selectionBg() { return QColor("#e8d8c8"); }
 inline QColor selectionText() { return text(); }
 inline QPalette selectionPalette(QPalette palette) {
   for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
@@ -29,7 +29,9 @@ inline QPalette selectionPalette(QPalette palette) {
   }
   return palette;
 }
-inline QColor hit() { return QColor("#e4effb"); }
+inline QColor searchCurrentBg() { return QColor("#9a4f35"); }
+inline QColor searchCurrentText() { return QColor("#ffffff"); }
+inline QColor hit() { return QColor("#f3e6bd"); }
 inline QColor danger() { return QColor("#bd503f"); }
 inline QColor dangerBg() { return QColor("#faeeeb"); }
 

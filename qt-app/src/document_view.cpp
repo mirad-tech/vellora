@@ -716,7 +716,12 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
     } else {
       cursor.insertBlock(format);
     }
-    cursor.setCharFormat(QTextCharFormat());
+    // The block's own character format is used when its last character is
+    // removed. Reset it explicitly: insertBlock(format) otherwise inherits the
+    // preceding heading/code/hidden spacer, even though inserted runs look right.
+    const auto base = quoteDepth > 0 ? mutedFormat() : bodyFormat();
+    cursor.setBlockCharFormat(base);
+    cursor.setCharFormat(base);
     firstContent = false;
   };
 
@@ -955,6 +960,7 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
         QTextCharFormat heading;
         heading.setFont(theme::uiFont(size, QFont::DemiBold));
         heading.setForeground(theme::text());
+        cursor.setBlockCharFormat(heading);
         insertRuns(cursor, block.value("runs").toArray(), heading);
         continue;
       }
@@ -978,6 +984,7 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
         QTextCharFormat code;
         code.setFont(theme::monoFont(raw ? 13 : kCode));
         code.setForeground(raw ? theme::muted() : theme::text());
+        cursor.setBlockCharFormat(code);
         if (raw && !previewMode_ && !block.value("preview").toObject().value("blocks").toArray().isEmpty()) {
           RawSurface surface; surface.node = currentNode;
           surface.preview = new DocumentView(viewport());
@@ -1265,6 +1272,7 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
           QTextCharFormat base;
           base.setFont(theme::uiFont(kBody, headerCell ? QFont::Bold : QFont::Normal));
           base.setForeground(theme::text());
+          cellCursor.setBlockCharFormat(base);
           cellCursor.setCharFormat(base);
           const int authoredStart = cellCursor.position();
           insertRuns(cellCursor, runs, base);
@@ -1935,14 +1943,14 @@ void DocumentView::paintEvent(QPaintEvent*) {
   for (int index = 0; index < matches_.size() && index < 1000; ++index) {
     QAbstractTextDocumentLayout::Selection selection;
     selection.cursor = matches_.at(index);
-    selection.format.setBackground(index == activeMatch_ ? theme::accent() : theme::hit());
-    if (index == activeMatch_) selection.format.setForeground(theme::surface());
+    selection.format.setBackground(index == activeMatch_ ? theme::searchCurrentBg() : theme::hit());
+    selection.format.setForeground(index == activeMatch_ ? theme::searchCurrentText() : theme::text());
     context.selections.append(selection);
   }
   if (activeMatch_ >= 1000 && activeMatch_ < matches_.size()) {
     QAbstractTextDocumentLayout::Selection selection;
     selection.cursor = matches_.at(activeMatch_);
-    selection.format.setBackground(theme::accent()); selection.format.setForeground(theme::surface());
+    selection.format.setBackground(theme::searchCurrentBg()); selection.format.setForeground(theme::searchCurrentText());
     context.selections.append(selection);
   }
   const bool searchOwnedSelection = searchSelection_ && activeMatch_ >= 0 && activeMatch_ < matches_.size()

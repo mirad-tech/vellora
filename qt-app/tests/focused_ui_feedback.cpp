@@ -48,12 +48,13 @@ class FocusedUiFeedback : public QObject {
   }
  private slots:
   void softSelectionIsConsistentWithoutChangingSearchColours() {
-    QCOMPARE(theme::selectionBg(), QColor("#d6e6f5"));
+    QCOMPARE(theme::selectionBg(), QColor("#e8d8c8"));
     QCOMPARE(theme::selectionText(), QColor("#0b0b0b"));
     QVERIFY(theme::selectionBg() != theme::hit());
-    QVERIFY(theme::selectionBg() != theme::accent());
-    QCOMPARE(theme::hit(), QColor("#e4effb"));
-    QCOMPARE(theme::accent(), QColor("#184f95"));
+    QVERIFY(theme::selectionBg() != theme::searchCurrentBg());
+    QCOMPARE(theme::hit(), QColor("#f3e6bd"));
+    QCOMPARE(theme::searchCurrentBg(), QColor("#9a4f35"));
+    QCOMPARE(theme::accent(), QColor("#184f95")); // Links/buttons retain their existing accent.
     SourceView source; source.setMarkdown("Selected text"); source.ensurePolished();
     source.selectAll();
     QCOMPARE(source.textCursor().selectedText(), QString("Selected text"));
@@ -85,8 +86,8 @@ class FocusedUiFeedback : public QObject {
       QList<QTextEdit::ExtraSelection> selections;
       for (int i = 0; i < 2; ++i) {
         QTextEdit::ExtraSelection hit; hit.cursor = range(i * 5, i * 5 + 4);
-        hit.format.setBackground(i == int(second) ? theme::accent() : theme::hit());
-        if (i == int(second)) hit.format.setForeground(theme::surface());
+        hit.format.setBackground(i == int(second) ? theme::searchCurrentBg() : theme::hit());
+        if (i == int(second)) hit.format.setForeground(theme::searchCurrentText());
         selections.append(hit);
       }
       source.setExtraSelections(selections);
@@ -94,14 +95,14 @@ class FocusedUiFeedback : public QObject {
     auto verifyActive = [&] {
       QCoreApplication::processEvents();
       for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
-        QCOMPARE(source.palette().color(group, QPalette::Highlight), theme::accent());
-        QCOMPARE(source.palette().color(group, QPalette::HighlightedText), theme::surface());
+        QCOMPARE(source.palette().color(group, QPalette::Highlight), theme::searchCurrentBg());
+        QCOMPARE(source.palette().color(group, QPalette::HighlightedText), theme::searchCurrentText());
       }
       const QImage image = source.viewport()->grab().toImage();
       int active = 0, passive = 0;
       for (int y = 0; y < image.height(); ++y)
         for (int x = 0; x < image.width(); ++x) {
-          active += image.pixelColor(x, y) == theme::accent();
+          active += image.pixelColor(x, y) == theme::searchCurrentBg();
           passive += image.pixelColor(x, y) == theme::hit();
         }
       QVERIFY(active > 50); QVERIFY(passive > 50);

@@ -641,8 +641,8 @@ void MainWindow::refreshSearch(bool resetIndex) {
     for(int i=0;i<sourceMatches_.size();++i) {
       if (i >= 1000 && i != sourceSearchIndex_) continue;
       QTextEdit::ExtraSelection selected;selected.cursor=sourceMatches_[i];
-      selected.format.setBackground(i==sourceSearchIndex_?theme::accent():theme::hit());
-      if(i==sourceSearchIndex_)selected.format.setForeground(theme::surface());
+      selected.format.setBackground(i==sourceSearchIndex_?theme::searchCurrentBg():theme::hit());
+      selected.format.setForeground(i==sourceSearchIndex_?theme::searchCurrentText():theme::text());
       selections.append(selected);
     }
     sourceView_->setExtraSelections(selections);

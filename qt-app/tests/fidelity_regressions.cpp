@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "bridge.h"
 #include "document_view.h"
+#include "theme.h"
 
 class FidelityRegressions : public QObject {
   Q_OBJECT
@@ -30,6 +31,119 @@ class FidelityRegressions : public QObject {
     v.relayout(); QList<qreal> values; for(const auto& q:v.quoteBars_)if(std::none_of(values.cbegin(),values.cend(),[&](qreal x){return qAbs(x-q.rect.x())<0.1;}))values.append(q.rect.x());std::sort(values.begin(),values.end());return values;
   }
  private slots:
+  void wholeParagraphReplacementKeepsOwnFont_data() {
+    QTest::addColumn<QString>("source");
+    QTest::newRow("after-h1") << QString("# Heading\n\nOriginal paragraph.\n\n| A | B |\n| --- | --- |\n| one | two |\n");
+    QTest::newRow("after-bold") << QString("**Bold preceding paragraph**\n\nOriginal paragraph.\n");
+    QTest::newRow("first-paragraph") << QString("Original paragraph.\n\nFollowing text.\n");
+    QTest::newRow("quote") << QString("# Heading\n\n> Original paragraph.\n");
+    QTest::newRow("heading") << QString("Plain body.\n\n## Original paragraph.\n");
+    QTest::newRow("code") << QString("# Heading\n\n```text\nOriginal paragraph.\n```\n");
+    QTest::newRow("table-body") << QString("# Heading\n\n| A | B |\n| --- | --- |\n| Original paragraph. | two |\n");
+    QTest::newRow("table-header") << QString("# Heading\n\n| Original paragraph. | B |\n| --- | --- |\n| one | two |\n");
+  }
+  void wholeParagraphReplacementKeepsOwnFont() {
+    QFETCH(QString,source); DocumentView v; load(v,source);
+    auto found=v.document()->find("Original paragraph."); QVERIFY(!found.isNull());
+    const auto expected=found.charFormat(); const auto blockFormat=found.blockFormat();
+    v.restoreSelectionState({found.selectionEnd(),found.selectionEnd()});
+    QTest::keyClick(&v,Qt::Key_Home,Qt::ShiftModifier);
+    QCOMPARE(v.selectedText(),QString("Original paragraph."));
+    commit(v,"Replacement paragraph.");
+    auto changed=v.document()->find("Replacement paragraph."); QVERIFY(!changed.isNull());
+    QCOMPARE(changed.charFormat().font().pixelSize(),expected.font().pixelSize());
+    QCOMPARE(changed.charFormat().fontWeight(),expected.fontWeight());
+    QCOMPARE(changed.blockFormat().headingLevel(),blockFormat.headingLevel());
+    const QString saved=save(v,source);
+    QCOMPARE(saved,QString(source).replace("Original paragraph.","Replacement paragraph."));
+    DocumentView reopened; load(reopened,saved);
+    auto again=reopened.document()->find("Replacement paragraph.");
+    QCOMPARE(again.charFormat().font().pixelSize(),expected.font().pixelSize());
+    QTest::keyClick(&v,Qt::Key_Z,Qt::ControlModifier); QCOMPARE(save(v,source),source);
+    QTest::keyClick(&v,Qt::Key_Y,Qt::ControlModifier); QCOMPARE(save(v,source),saved);
+  }
+  void wholeParagraphPreeditCancelCommitAndSeparateDelete() {
+    const QString source=QStringLiteral("# 标题\n\n原来的中文段落。\n\n后面的段落。\n");
+    DocumentView v; load(v,source);
+    auto select=[&]{auto c=v.document()->find(QStringLiteral("原来的中文段落。"));QVERIFY(!c.isNull());v.restoreSelectionState({c.selectionEnd(),c.selectionEnd()});QTest::keyClick(&v,Qt::Key_Home,Qt::ShiftModifier);};
+    select();
+    QInputMethodEvent preedit(QStringLiteral("zhongwen"),{}); QApplication::sendEvent(&v,&preedit); QCoreApplication::processEvents();
+    QVERIFY(v.isComposing()); QCOMPARE(save(v,source),source);
+    QInputMethodEvent cancel; QApplication::sendEvent(&v,&cancel); QCoreApplication::processEvents();
+    QVERIFY(!v.isComposing()); QCOMPARE(save(v,source),source);
+    select(); QApplication::sendEvent(&v,&preedit); commit(v,QStringLiteral("新的中文段落。"));
+    auto changed=v.document()->find(QStringLiteral("新的中文段落。"));QVERIFY(!changed.isNull());
+    QCOMPARE(changed.charFormat().font().pixelSize(),16); QCOMPARE(changed.charFormat().fontWeight(),int(QFont::Normal));
+    QCOMPARE(save(v,source),QString(source).replace(QStringLiteral("原来的中文段落。"),QStringLiteral("新的中文段落。")));
+    QTest::keyClick(&v,Qt::Key_Z,Qt::ControlModifier); QCOMPARE(save(v,source),source);
+    select(); QTest::keyClick(&v,Qt::Key_Backspace); commit(v,QStringLiteral("删除后再输入。"));
+    changed=v.document()->find(QStringLiteral("删除后再输入。"));QVERIFY(!changed.isNull());
+    QCOMPARE(changed.charFormat().font().pixelSize(),16); QCOMPARE(changed.charFormat().fontWeight(),int(QFont::Normal));
+  }
+  void wholeParagraphKeyboardTypingDoesNotMoveFollowingTable() {
+    const QString source="# Heading\n\nOriginal paragraph.\n\n| A | B |\n| --- | --- |\n| one | two |\n";
+    DocumentView v; load(v,source);
+    auto table=v.document()->find("one"); const qreal top=v.document()->documentLayout()->blockBoundingRect(table.block()).top();
+    auto text=v.document()->find("Original paragraph.");v.restoreSelectionState({text.selectionEnd(),text.selectionEnd()});
+    QTest::keyClick(&v,Qt::Key_Home,Qt::ShiftModifier);QTest::keyClicks(&v,"Replacement paragraph.");QCoreApplication::processEvents();
+    QCOMPARE(v.document()->find("Replacement paragraph.").charFormat().font().pixelSize(),16);
+    table=v.document()->find("one");
+    QCOMPARE(v.document()->documentLayout()->blockBoundingRect(table.block()).top(),top);
+    QCOMPARE(save(v,source),QString(source).replace("Original paragraph.","Replacement paragraph."));
+    QTest::keyClick(&v,Qt::Key_Z,Qt::ControlModifier);QCOMPARE(save(v,source),source);
+  }
+  void replacedChineseParagraphRetainsIndent_data() {
+    QTest::addColumn<QString>("leading"); QTest::newRow("automatic")<<QString();QTest::newRow("authored-fullwidth")<<QStringLiteral("　　");
+  }
+  void replacedChineseParagraphRetainsIndent() {
+    QFETCH(QString,leading);const QString old=leading+QStringLiteral("原来的中文段落。");
+    const QString replacement=leading+QStringLiteral("替换后的中文长段落，保持正常字号和首行缩进，后续内容自然换行，不向原文加入额外空格。");
+    const QString source=QStringLiteral("# 标题\n\n")+old+"\n";DocumentView v;load(v,source);
+    auto c=v.document()->find(old);QVERIFY(!c.isNull());const qreal indent=c.blockFormat().textIndent();const qreal height=c.blockFormat().lineHeight();
+    v.restoreSelectionState({c.selectionEnd(),c.selectionEnd()});QTest::keyClick(&v,Qt::Key_Home,Qt::ShiftModifier);commit(v,replacement);
+    c=v.document()->find(replacement);QVERIFY(!c.isNull());QCOMPARE(c.charFormat().font().pixelSize(),16);
+    QCOMPARE(c.blockFormat().textIndent(),indent);QCOMPARE(c.blockFormat().lineHeight(),height);
+    QCOMPARE(save(v,source),QString(source).replace(old,replacement));
+    QTest::keyClick(&v,Qt::Key_Z,Qt::ControlModifier);QCOMPARE(save(v,source),source);
+  }
+  void multilineReplacementKeepsBodyStyleAndUndo() {
+    const QString source="# Heading\n\nOriginal paragraph.\n\nFollowing paragraph.\n";
+    DocumentView v;load(v,source);auto c=v.document()->find("Original paragraph.");
+    v.restoreSelectionState({c.selectionEnd(),c.selectionEnd()});QTest::keyClick(&v,Qt::Key_Home,Qt::ShiftModifier);
+    commit(v,"First replacement.\nSecond replacement.");
+    for(const QString& text:{QString("First replacement."),QString("Second replacement."),QString("Following paragraph.")}) {
+      auto f=v.document()->find(text);QVERIFY(!f.isNull());QCOMPARE(f.charFormat().font().pixelSize(),16);QCOMPARE(f.charFormat().fontWeight(),int(QFont::Normal));
+    }
+    const auto saved=save(v,source);QVERIFY(saved.startsWith("# Heading\n\n"));QVERIFY(saved.contains("First replacement."));QVERIFY(saved.contains("Second replacement."));
+    const auto parsed=blocks(saved);int headings=0;for(const auto& b:parsed)headings+=b.toObject().value("type")=="heading";QCOMPARE(headings,1);
+    DocumentView reopened;load(reopened,saved);QCOMPARE(save(reopened,saved),saved);
+    QTest::keyClick(&v,Qt::Key_Z,Qt::ControlModifier);QCOMPARE(save(v,source),source);
+  }
+  void warmSelectionAndSearchRemainDistinctAndReadOnly() {
+    const QString original = "FIND FIND ordinary text\n";
+    DocumentView view; load(view, original);
+    auto pixels = [&](QColor colour) {
+      const auto image = view.viewport()->grab().toImage(); int count = 0;
+      for (int y=0;y<image.height();++y) for(int x=0;x<image.width();++x)
+        if(image.pixelColor(x,y)==colour) ++count;
+      return count;
+    };
+    const auto text=view.document()->find("ordinary"); QVERIFY(!text.isNull());
+    view.restoreSelectionState({text.selectionStart(),text.selectionEnd()});
+    for(auto group:{QPalette::Active,QPalette::Inactive,QPalette::Disabled}) {
+      QCOMPARE(view.palette().color(group,QPalette::Highlight),theme::selectionBg());
+      QCOMPARE(view.palette().color(group,QPalette::HighlightedText),theme::selectionText());
+    }
+    QVERIFY(pixels(theme::selectionBg())>50);
+    view.clearFocus(); QCoreApplication::processEvents();
+    QVERIFY(pixels(theme::selectionBg())>50);
+    view.restoreSelectionState({0,0}); view.setSearchQuery("FIND",true);
+    QCOMPARE(view.searchMatchCount(),2);
+    QVERIFY(pixels(theme::searchCurrentBg())>50);
+    QVERIFY(pixels(theme::hit())>50);
+    QCOMPARE(save(view,original),original);
+    QVERIFY(view.pendingEdits().isEmpty()); QVERIFY(!view.document()->isUndoAvailable());
+  }
   void emptyItemSiblingEdit_data() {
     QTest::addColumn<QString>("source");
     QTest::newRow("ordered")<<QString("1. alpha\n2.\n3. gamma\n");

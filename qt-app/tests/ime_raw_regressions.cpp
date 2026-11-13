@@ -97,7 +97,7 @@ class ImeRawRegressions : public QObject {
   void searchOriginSelectionUsesCurrentHitColour() {
     const QString source="TOKEN TOKEN\n";DocumentView v;load(v,source);v.setSearchQuery("TOKEN",true);v.focusSearchResult(0);QApplication::processEvents();
     auto countColour=[&](QColor c){const QImage im=v.viewport()->grab().toImage();int n=0;for(int y=0;y<im.height();++y)for(int x=0;x<im.width();++x)if(im.pixelColor(x,y)==c)++n;return n;};
-    QVERIFY(countColour(theme::accent())>20);const auto selection=v.selectionState();v.restoreSelectionState(selection);QApplication::processEvents();QVERIFY(countColour(theme::selectionBg())>20);
+    QVERIFY(countColour(theme::searchCurrentBg())>20);const auto selection=v.selectionState();v.restoreSelectionState(selection);QApplication::processEvents();QVERIFY(countColour(theme::selectionBg())>20);
     v.focusSearchResult(0);v.setSearchQuery(QString(),false);QApplication::processEvents();QVERIFY(countColour(theme::selectionBg())>20);QCOMPARE(draft(v,source),source);
   }
 

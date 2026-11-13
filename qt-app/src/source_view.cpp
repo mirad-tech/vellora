@@ -74,8 +74,8 @@ SourceView::SourceView(QWidget* parent) : QPlainTextEdit(parent) {
 void SourceView::setExtraSelections(const QList<QTextEdit::ExtraSelection>& selections) {
   currentSearchMatch_ = QTextCursor();
   for (const auto& selection : selections) {
-    if (selection.format.background().color() == theme::accent() &&
-        selection.format.foreground().color() == theme::surface()) {
+    if (selection.format.background().color() == theme::searchCurrentBg() &&
+        selection.format.foreground().color() == theme::searchCurrentText()) {
       currentSearchMatch_ = selection.cursor;
       break;
     }
@@ -86,7 +86,7 @@ void SourceView::setExtraSelections(const QList<QTextEdit::ExtraSelection>& sele
 
 void SourceView::updateSelectionPalette() {
   // Native selection paints over ExtraSelections. Preserve the active search
-  // colour only for its exact range; unrelated user selections stay soft blue.
+  // colour only for its exact range; unrelated user selections stay warm neutral.
   const QTextCursor selected = textCursor();
   const bool active = selected.hasSelection() && !currentSearchMatch_.isNull() &&
       selected.document() == currentSearchMatch_.document() &&
@@ -95,8 +95,8 @@ void SourceView::updateSelectionPalette() {
   QPalette colours = theme::selectionPalette(palette());
   if (active) {
     for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
-      colours.setColor(group, QPalette::Highlight, theme::accent());
-      colours.setColor(group, QPalette::HighlightedText, theme::surface());
+      colours.setColor(group, QPalette::Highlight, theme::searchCurrentBg());
+      colours.setColor(group, QPalette::HighlightedText, theme::searchCurrentText());
     }
   }
   if (colours != palette()) setPalette(colours);
