@@ -37,6 +37,12 @@ fn error_json(code: &str, message: &str) -> Value {
   json!({ "ok": false, "code": code, "message": message })
 }
 
+fn guarded(f: impl FnOnce() -> Value) -> *mut c_char {
+  let result = catch_unwind(AssertUnwindSafe(f))
+    .unwrap_or_else(|_| error_json("PANIC", "native bridge failed"));
+  into_c_string(result)
+}
+
 fn command_error(result: &CommandResult<impl serde::Serialize>) -> Value {
   match result {
     CommandResult::Err { code, message, .. } => error_json(code, message),
@@ -254,8 +260,8 @@ pub extern "C" fn vellora_free(pointer: *mut c_char) {
 /// Opens a Markdown file and returns `{ok, document, plan, lineEnding}`.
 #[no_mangle]
 pub extern "C" fn vellora_open(path: *const c_char) -> *mut c_char {
-  let path = unsafe { from_c(path) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
     match file_access::read_markdown_file(&path) {
       CommandResult::Ok { data, .. } => {
         session::remember_opened(state(), &CommandResult::success(data.clone()));
@@ -270,8 +276,7 @@ pub extern "C" fn vellora_open(path: *const c_char) -> *mut c_char {
       }
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 fn document_line_ending(source: &str) -> &'static str {
@@ -284,12 +289,11 @@ fn document_line_ending(source: &str) -> &'static str {
 /// Renders Markdown bytes into the neutral plan without touching the session.
 #[no_mangle]
 pub extern "C" fn vellora_plan(content: *const c_char) -> *mut c_char {
-  let content = unsafe { from_c(content) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let content = unsafe { from_c(content) };
     let preserved = PreservedMarkdown::new(&content);
     json!({ "ok": true, "plan": plan_json(preserved.document()) })
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 /// Saves through the session; `token` may be empty for a first attempt.
@@ -299,11 +303,11 @@ pub extern "C" fn vellora_save(
   content: *const c_char,
   token: *const c_char,
 ) -> *mut c_char {
-  let path = unsafe { from_c(path) };
-  let content = unsafe { from_c(content) };
-  let token = unsafe { from_c(token) };
-  let token = if token.is_empty() { None } else { Some(token) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    let content = unsafe { from_c(content) };
+    let token = unsafe { from_c(token) };
+    let token = if token.is_empty() { None } else { Some(token) };
     match session::save_document_session(state(), &path, &content, token.as_deref()) {
       CommandResult::Ok { data, .. } => {
         json!({ "ok": true, "document": data.document })
@@ -315,28 +319,29 @@ pub extern "C" fn vellora_save(
         "conflictToken": conflict_token,
       }),
     }
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 /// Pure splice: indices belong to the explicitly supplied draft, never global
 /// session state. A failed batch has no side effects and a retry is deterministic.
 #[no_mangle]
 pub extern "C" fn vellora_splice(content: *const c_char, edits: *const c_char) -> *mut c_char {
-  let content = unsafe { from_c(content) };
-  let raw = unsafe { from_c(edits) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| splice_json(&content, &raw)));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  guarded(|| {
+    let content = unsafe { from_c(content) };
+    let raw = unsafe { from_c(edits) };
+    splice_json(&content, &raw)
+  })
 }
 
 /// Text-only pure splice for editor draft collection. The validation and source
 /// preservation contract is identical to vellora_splice; no render plan is built.
 #[no_mangle]
 pub extern "C" fn vellora_splice_text(content: *const c_char, edits: *const c_char) -> *mut c_char {
-  let content = unsafe { from_c(content) };
-  let raw = unsafe { from_c(edits) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| splice_json_impl(&content, &raw, false)));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  guarded(|| {
+    let content = unsafe { from_c(content) };
+    let raw = unsafe { from_c(edits) };
+    splice_json_impl(&content, &raw, false)
+  })
 }
 
 fn splice_json(content: &str, raw: &str) -> Value {
@@ -378,9 +383,9 @@ fn splice_json_impl(content: &str, raw: &str, include_plan: bool) -> Value {
 /// Validates and resolves a local image against the open document.
 #[no_mangle]
 pub extern "C" fn vellora_image(document_path: *const c_char, src: *const c_char) -> *mut c_char {
-  let document_path = unsafe { from_c(document_path) };
-  let src = unsafe { from_c(src) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let document_path = unsafe { from_c(document_path) };
+    let src = unsafe { from_c(src) };
     match image_access::read_local_image(&document_path, &src, None) {
       CommandResult::Ok { data, .. } => json!({
         "ok": true,
@@ -390,23 +395,21 @@ pub extern "C" fn vellora_image(document_path: *const c_char, src: *const c_char
       }),
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 /// Reads validated owned image bytes. Decoders must consume dataUrl bytes rather
 /// than reopening a pathname returned by the legacy metadata endpoint.
 #[no_mangle]
 pub extern "C" fn vellora_image_bytes(document_path: *const c_char, src: *const c_char) -> *mut c_char {
-  let document_path = unsafe { from_c(document_path) };
-  let src = unsafe { from_c(src) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let document_path = unsafe { from_c(document_path) };
+    let src = unsafe { from_c(src) };
     match image_access::resolve_local_image(&document_path, &src, None) {
       CommandResult::Ok { data, .. } => json!({ "ok": true, "mime": data.mime, "dataUrl": data.src }),
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 /// Link inspection: relative Markdown or an external http(s) URL.
@@ -415,9 +418,9 @@ pub extern "C" fn vellora_inspect_link(
   document_path: *const c_char,
   href: *const c_char,
 ) -> *mut c_char {
-  let document_path = unsafe { from_c(document_path) };
-  let href = unsafe { from_c(href) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let document_path = unsafe { from_c(document_path) };
+    let href = unsafe { from_c(href) };
     match session::inspect_link_session(state(), &document_path, &href) {
       CommandResult::Ok { data, .. } => match data {
         LinkInspectData::Markdown { document, .. } => json!({
@@ -433,8 +436,7 @@ pub extern "C" fn vellora_inspect_link(
       },
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 /// Opens a local Markdown link, switching the session on success.
@@ -443,9 +445,9 @@ pub extern "C" fn vellora_open_link(
   document_path: *const c_char,
   href: *const c_char,
 ) -> *mut c_char {
-  let document_path = unsafe { from_c(document_path) };
-  let href = unsafe { from_c(href) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let document_path = unsafe { from_c(document_path) };
+    let href = unsafe { from_c(href) };
     match session::open_link_session(state(), &document_path, &href) {
       CommandResult::Ok { data, .. } => {
         let preserved = PreservedMarkdown::new(&data.document.content);
@@ -455,15 +457,14 @@ pub extern "C" fn vellora_open_link(
       }
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 /// Opens an HTTP(S) URL after the caller has confirmed.
 #[no_mangle]
 pub extern "C" fn vellora_open_external(url: *const c_char) -> *mut c_char {
-  let url = unsafe { from_c(url) };
-  let guarded = catch_unwind(AssertUnwindSafe(|| {
+  guarded(|| {
+    let url = unsafe { from_c(url) };
     let result = link_access::open_external_url(&url, |target| {
       std::process::Command::new("rundll32")
         .args(["url.dll,FileProtocolHandler", target])
@@ -474,16 +475,17 @@ pub extern "C" fn vellora_open_external(url: *const c_char) -> *mut c_char {
       CommandResult::Ok { .. } => json!({ "ok": true }),
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
-  }));
-  into_c_string(guarded.unwrap_or_else(|_| error_json("PANIC", "native bridge failed")))
+  })
 }
 
 /// Reports whether the current session still matches `path`.
 #[no_mangle]
 pub extern "C" fn vellora_session_matches(path: *const c_char) -> *mut c_char {
-  let path = unsafe { from_c(path) };
-  let matches = session::require_session_document(state(), &path).is_ok();
-  into_c_string(json!({ "ok": true, "matches": matches }))
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    let matches = session::require_session_document(state(), &path).is_ok();
+    json!({ "ok": true, "matches": matches })
+  })
 }
 
 #[cfg(test)]
@@ -619,8 +621,20 @@ mod tests {
     let src = std::ffi::CString::new("../secret.png").unwrap();
     let raw = vellora_image(path.as_ptr(), src.as_ptr());
     let text = unsafe { CStr::from_ptr(raw).to_string_lossy().into_owned() };
-    unsafe { vellora_free(raw) };
+    vellora_free(raw);
     assert!(text.contains("UNSUPPORTED_IMAGE_SOURCE"), "{text}");
+  }
+
+  #[test]
+  fn guarded_catches_panic_and_returns_panic_error_json() {
+    let raw = guarded(|| panic!("simulated bridge panic"));
+    assert!(!raw.is_null());
+    let text = unsafe { CStr::from_ptr(raw).to_str().unwrap().to_owned() };
+    vellora_free(raw);
+    let parsed: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["code"], "PANIC");
+    assert_eq!(parsed["message"], "native bridge failed");
   }
 }
 
