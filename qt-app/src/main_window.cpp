@@ -277,7 +277,8 @@ void MainWindow::chooseFile() {
               }
               if (payload.value("ok").toBool()) {
                 applyDocument(payload);
-                if (modeAfterOpen >= 0) setMode(modeAfterOpen);
+                const QJsonObject openedPlan = payload.value("plan").toObject();
+                if (modeAfterOpen >= 0) setModeWithPlan(modeAfterOpen, &openedPlan);
               } else {
                 showOpenError(payload.value("message").toString());
               }
@@ -327,7 +328,8 @@ void MainWindow::openPath(const QString& path, bool sourceMode) {
                 return;
               }
               applyDocument(payload);
-              if (modeAfterOpen >= 0) setMode(modeAfterOpen);
+              const QJsonObject openedPlan = payload.value("plan").toObject();
+              if (modeAfterOpen >= 0) setModeWithPlan(modeAfterOpen, &openedPlan);
               notifyIfAsyncIdle();
             });
     watcher->setFuture(QtConcurrent::run([path] { return bridge::openDocument(path); }));
@@ -429,7 +431,9 @@ bool MainWindow::collectDraft(bool showFailure) {
   return true;
 }
 
-void MainWindow::setMode(int mode) {
+void MainWindow::setMode(int mode) { setModeWithPlan(mode, nullptr); }
+
+void MainWindow::setModeWithPlan(int mode, const QJsonObject* precomputedPlan) {
   if (opening_) {
     pendingMode_ = mode;
     return;
@@ -438,7 +442,9 @@ void MainWindow::setMode(int mode) {
   const bool toSource = mode == kModeSource;
   if (toSource == !documentMode_) { toolbar_->setMode(mode); return; }
   toolbar_->setMode(documentMode_ ? kModeDocument : kModeSource);
-  afterComposition([this, toSource] {
+  const bool hasPrecomputed = precomputedPlan != nullptr;
+  const QJsonObject immediatePlan = hasPrecomputed ? *precomputedPlan : QJsonObject();
+  afterComposition([this, toSource, hasPrecomputed, immediatePlan] {
     if (toSource == !documentMode_ || !collectDraft()) return;
     auto finishSwitch = [this](bool nowSource) {
       toolbar_->setMode(nowSource ? kModeSource : kModeDocument);
@@ -482,6 +488,10 @@ void MainWindow::setMode(int mode) {
       };
       if (sourceVisited_) {
         applySourceSwitch(-1);
+        return;
+      }
+      if (hasPrecomputed) {
+        applySourceSwitch(sourceOffsetForReadingAnchor(anchor, immediatePlan));
         return;
       }
       const quint64 expectedSession = session_;

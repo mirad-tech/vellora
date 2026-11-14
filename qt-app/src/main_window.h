@@ -48,6 +48,7 @@ class MainWindow : public QMainWindow {
   bool save(QString conflictToken = QString());
   void applyDocument(const QJsonObject& payload);
   void setMode(int mode);
+  void setModeWithPlan(int mode, const QJsonObject* precomputedPlan);
   void refreshIdentity();
   void markDirtyIfNeeded();
   void refreshOutline(const QJsonObject& plan);
