@@ -148,6 +148,10 @@ void MainWindow::buildUi() {
     savedFeedback_ = false;
     search_->setFeedback(QString());
     draftMarkdown_ = sourceMarkdown();
+    if (!outline_->isVisible() && outlineMarkdown_ != draftMarkdown_) {
+      outlineMarkdown_.clear();
+      outlineSynced_ = false;
+    }
     dirty_ = compositionActive() || draftMarkdown_ != savedMarkdown_;
     refreshIdentity();
     dirtyTimer_.start();
@@ -297,8 +301,8 @@ void MainWindow::applyDocument(const QJsonObject& payload) {
   documentViewMarkdown_ = savedMarkdown_;
   sourceBaselineMarkdown_ = savedMarkdown_;
   lineEnding_ = payload.value("lineEnding").toString(QStringLiteral("\n"));
-  plan_ = payload.value("plan").toObject();
-  documentView_->setPlan(plan_, documentPath_);
+  const QJsonObject plan = payload.value("plan").toObject();
+  documentView_->setPlan(plan, documentPath_);
   documentView_->setPreviewContext(draftMarkdown_);
   sourceView_->setMarkdown(savedMarkdown_);
   dirty_ = false;
@@ -317,7 +321,7 @@ void MainWindow::applyDocument(const QJsonObject& payload) {
   sourceSearchIndex_ = -1;
   outline_->hide();
   toolbar_->setOutlineChecked(false);
-  refreshOutline(plan_);
+  refreshOutline(plan);
   refreshIdentity();
   documentView_->setFocus();
 }
@@ -366,6 +370,10 @@ bool MainWindow::collectDraft(bool showFailure) {
     documentViewMarkdown_ = content;
   } else content = sourceMarkdown();
   draftMarkdown_ = content;
+  if (!outline_->isVisible() && outlineMarkdown_ != draftMarkdown_) {
+    outlineMarkdown_.clear();
+    outlineSynced_ = false;
+  }
   documentView_->setPreviewContext(draftMarkdown_);
   failure_.clear();
   dirty_ = draftMarkdown_ != savedMarkdown_;
@@ -423,10 +431,10 @@ void MainWindow::setMode(int mode) {
         const auto documentSelection = documentView_->selectionState();
         const QJsonObject result = bridge::planFor(draftMarkdown_);
         if (!result.value("ok").toBool()) { showError(result.value("message").toString()); return; }
-        plan_ = result.value("plan").toObject();
+        const QJsonObject plan = result.value("plan").toObject();
         documentBaselineMarkdown_ = draftMarkdown_;
         documentViewMarkdown_ = draftMarkdown_;
-        documentView_->setPlan(plan_, documentPath_);
+        documentView_->setPlan(plan, documentPath_);
         documentView_->setPreviewContext(draftMarkdown_);
         documentView_->restoreSelectionState(documentSelection);
       }
@@ -562,13 +570,16 @@ void MainWindow::openLink(const QString& href) {
 }
 
 void MainWindow::refreshOutlineForDraft(bool force) {
-  if (documentPath_.isEmpty() || (!force && !outline_->isVisible()) || outlineMarkdown_ == draftMarkdown_) return;
+  if (documentPath_.isEmpty() || (!force && !outline_->isVisible()) ||
+      (outlineSynced_ && outlineMarkdown_ == draftMarkdown_))
+    return;
   const QJsonObject result = bridge::planFor(draftMarkdown_);
   if (result.value("ok").toBool()) refreshOutline(result.value("plan").toObject());
 }
 
 void MainWindow::refreshOutline(const QJsonObject& plan) {
   outlineMarkdown_ = draftMarkdown_;
+  outlineSynced_ = true;
   headings_ = QJsonArray();
   sourceHeadingPositions_.clear();
   QHash<QString, int> ids;

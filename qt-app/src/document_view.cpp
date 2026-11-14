@@ -590,7 +590,17 @@ void DocumentView::setPlan(const QJsonObject& plan, const QString& documentPath)
   }
   documentPath_ = documentPath;
   previewContext_.clear();
-  for (const auto& block : plan.value("blocks").toArray()) previewContext_ += block.toObject().value("source").toString();
+  const QJsonArray planBlocks = plan.value("blocks").toArray();
+  bool hasRawBlock = false;
+  for (const auto& block : planBlocks) {
+    if (block.toObject().value("type").toString() == QStringLiteral("raw")) {
+      hasRawBlock = true;
+      break;
+    }
+  }
+  if (hasRawBlock) {
+    for (const auto& block : planBlocks) previewContext_ += block.toObject().value("source").toString();
+  }
   typingContinuation_ = false;
   cachedDocumentHeight_=-1; pendingGeometryBlock_=QTextBlock(); fullGeometryPending_=false;
   horizontalOffsets_.clear();
@@ -4023,9 +4033,9 @@ void DocumentView::contextMenuEvent(QContextMenuEvent* event) {
 }
 
 void DocumentView::setPreviewContext(const QString& markdown) {
-  if (previewContext_ == markdown) return;
+  const bool unchanged = (previewContext_ == markdown);
   previewContext_ = markdown;
-  if (rawSurfaces_.isEmpty()) return;
+  if (unchanged || rawSurfaces_.isEmpty()) return;
   const auto plan = bridge::planFor(markdown).value("plan").toObject();
   const auto blocks = plan.value("blocks").toArray();
   bool changed = false;

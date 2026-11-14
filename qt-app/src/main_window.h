@@ -82,7 +82,6 @@ class MainWindow : public QMainWindow {
   QHBoxLayout* bodyLayout_ = nullptr;
   bool outlineFloating_ = false;
 
-  QJsonObject plan_;
   QString documentPath_;
   QString documentName_;
   QString savedMarkdown_;
@@ -116,6 +115,7 @@ class MainWindow : public QMainWindow {
   int sourceSearchIndex_ = -1;
   QString searchQuery_;
   QString outlineMarkdown_;
+  bool outlineSynced_ = false;
   QVector<QTextCursor> sourceMatches_;
   QVector<int> sourceHeadingPositions_;
   QTimer dirtyTimer_;
