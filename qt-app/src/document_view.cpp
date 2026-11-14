@@ -3075,6 +3075,26 @@ bool DocumentView::blockEditable(const QTextBlock& block) const {
   return segment >= 0 && editableSegments_.contains(segment);
 }
 
+// ---------------------------------------------------------------------------
+// Qt QTextDocument -> Markdown segment serializer
+//
+// Responsibility boundary vs Rust `md/src/export.rs`:
+// - `DocumentView` edits live directly in Qt's `QTextDocument` (blocks, char
+//   format properties, `QTextTable` cells, inline image atoms, and reference
+//   fingerprints) rather than mutating a Rust `vellora_md::Document` AST per
+//   keystroke.
+// - `inlineMarkdown` serializes a single `QTextBlock`'s inline fragments (marks,
+//   soft/hard breaks, code spans, inline/reference links, and image atoms),
+//   reusing authored `textSource` / `altSource` when fingerprints still match.
+// - `serializeNode` / `serializeFlatSegment` / `serializeSegment` reconstruct
+//   Markdown only for segments dirtied in `QTextDocument`. `pendingEdits()`
+//   compares each dirty segment against `baselineSegments_` and sends changed
+//   `(segment, markdown)` pairs to `bridge::spliceSegments` (`vellora_splice_text`
+//   -> `vellora_md::splice_markdown`), which splices those strings directly into
+//   the baseline file's byte ranges without invoking `md/src/export.rs`.
+// - Rust's `md/src/export.rs` instead serializes `vellora_md::Block` ASTs for
+//   `PreservedMarkdown`, Rust-side AST edits, and golden/fidelity verification.
+// ---------------------------------------------------------------------------
 QString DocumentView::inlineMarkdown(const QTextBlock& block) const {
   QString out;
   QVector<QPair<QString,QTextCharFormat>> runs;

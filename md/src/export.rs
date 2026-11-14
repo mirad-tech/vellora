@@ -1,10 +1,23 @@
-//! Markdown exporter.
+//! Markdown AST exporter (`vellora_md::Document` / `Block` -> Markdown).
 //!
-//! Untouched segments are emitted from their retained source bytes, so an edit
-//! in one block cannot rewrite another block's spelling. Only dirty segments go
-//! through `serialize_block`, which follows the baseline's Markdown conventions
-//! (`- ` bullets, `1. ` ordered markers, two-space nesting, pipe tables with an
-//! alignment row, fenced code with an info string).
+//! ## Responsibility boundary vs Qt `DocumentView` (`serializeNode` / `inlineMarkdown`)
+//!
+//! - **This module (`md/src/export.rs`)** serializes Rust `vellora_md::Document` and
+//!   `Block` AST values (used by `PreservedMarkdown::to_markdown`, programmatic AST
+//!   edits via `edit::apply_edits` / `replace_segment`, and golden/fidelity test suites).
+//!   Untouched segments are emitted from their retained `segment.source` bytes, and only
+//!   dirty AST segments go through [`serialize_block`].
+//! - **Qt shell live edits (`qt-app/src/document_view.cpp`: `inlineMarkdown`,
+//!   `serializeNode`, `serializeFlatSegment`, `serializeSegment`)** serialize mutated
+//!   `QTextDocument` blocks/fragments/tables directly into per-segment Markdown strings
+//!   and splice them into the original file bytes via `vellora_splice_text`
+//!   (`edit::splice_markdown`), bypassing this AST exporter so untouched segments and
+//!   original segment boundaries remain byte-exact without re-building a Rust AST on
+//!   every edit.
+//! - Both serializers intentionally follow the same canonical Markdown conventions
+//!   (`- ` bullets, preserved ordered delimiters, two-space list continuation indent,
+//!   pipe tables with alignment rows, backtick-safe code fences, and reference/alt
+//!   source preservation) and must stay aligned when syntax rules evolve.
 
 use crate::model::{Alignment, Block, Document, Inline, List, Marks, Reference, ReferenceKind, Table};
 
