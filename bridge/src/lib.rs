@@ -21,9 +21,7 @@ fn state() -> &'static SessionState {
 }
 
 fn into_c_string(value: Value) -> *mut c_char {
-  let text = value.to_string();
-  let sanitized = text.replace('\0', "");
-  CString::new(sanitized).map(CString::into_raw).unwrap_or(std::ptr::null_mut())
+  CString::new(value.to_string()).map(CString::into_raw).unwrap_or(std::ptr::null_mut())
 }
 
 unsafe fn from_c(value: *const c_char) -> String {
@@ -673,6 +671,23 @@ mod tests {
     let text = unsafe { CStr::from_ptr(raw).to_string_lossy().into_owned() };
     unsafe { vellora_free(raw) };
     assert!(text.contains("UNSUPPORTED_IMAGE_SOURCE"), "{text}");
+  }
+
+  #[test]
+  fn document_with_nul_bytes_round_trips_through_into_c_string() {
+    let original = "before\0middle\0after\n";
+    let preserved = PreservedMarkdown::new(original);
+    let raw = into_c_string(json!({
+      "ok": true,
+      "content": original,
+      "plan": plan_json(preserved.document()),
+    }));
+    assert!(!raw.is_null());
+    let payload: Value = serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
+    unsafe { vellora_free(raw) };
+    assert_eq!(payload["ok"], true, "{payload}");
+    assert_eq!(payload["content"].as_str(), Some(original));
+    assert_eq!(payload["plan"]["blocks"][0]["source"].as_str(), Some(original));
   }
 
   #[test]
