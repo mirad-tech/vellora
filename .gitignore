@@ -34,3 +34,4 @@ tools/py/
 .codex/
 tests/manual-ui/
 tests/fixtures/performance/picture-*.png
+tests/fixtures/performance/large-image-*.png
