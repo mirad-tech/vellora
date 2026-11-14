@@ -417,25 +417,66 @@ pub unsafe extern "C" fn vellora_image(document_path: *const c_char, src: *const
   })
 }
 
-/// Reads validated owned image bytes. Decoders must consume dataUrl bytes rather
-/// than reopening a pathname returned by the legacy metadata endpoint.
+/// Reads validated owned image bytes directly without base64 or JSON string encoding.
+/// Decoders must consume the returned buffer rather than reopening a pathname returned
+/// by the metadata endpoint. The returned JSON status `{ok, code?, message?, mime}`
+/// never includes a filesystem path.
 ///
 /// # Safety
 ///
 /// `document_path` and `src` must each either be null or point to a valid NUL-terminated C string.
+/// When non-null, `data` and `len` must point to writable locations; any non-null `*data`
+/// written on success must be released once with [`vellora_free_bytes`].
 #[no_mangle]
-pub unsafe extern "C" fn vellora_image_bytes(
+pub unsafe extern "C" fn vellora_image_read(
   document_path: *const c_char,
   src: *const c_char,
+  data: *mut *mut u8,
+  len: *mut usize,
 ) -> *mut c_char {
+  if !data.is_null() {
+    unsafe { *data = std::ptr::null_mut() };
+  }
+  if !len.is_null() {
+    unsafe { *len = 0 };
+  }
   guarded(|| {
+    if data.is_null() || len.is_null() {
+      return error_json("INVALID_ARGUMENT", "output buffer pointers must not be null");
+    }
     let document_path = unsafe { from_c(document_path) };
     let src = unsafe { from_c(src) };
-    match image_access::resolve_local_image(&document_path, &src, None) {
-      CommandResult::Ok { data, .. } => json!({ "ok": true, "mime": data.mime, "dataUrl": data.src }),
+    match image_access::read_local_image(&document_path, &src, None) {
+      CommandResult::Ok { data: resolved, .. } => {
+        let boxed = resolved.bytes.into_boxed_slice();
+        if !boxed.is_empty() {
+          let byte_len = boxed.len();
+          let raw = Box::into_raw(boxed) as *mut u8;
+          unsafe {
+            *data = raw;
+            *len = byte_len;
+          }
+        }
+        json!({ "ok": true, "mime": resolved.mime })
+      }
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
   })
+}
+
+/// Releases a raw byte buffer previously allocated by [`vellora_image_read`].
+///
+/// # Safety
+///
+/// Either `data` is null / `len` is zero, or `(data, len)` must exactly match a
+/// non-freed allocation produced by [`vellora_image_read`].
+#[no_mangle]
+pub unsafe extern "C" fn vellora_free_bytes(data: *mut u8, len: usize) {
+  if data.is_null() || len == 0 {
+    return;
+  }
+  let slice = unsafe { std::slice::from_raw_parts_mut(data, len) };
+  drop(unsafe { Box::from_raw(slice) });
 }
 
 /// Link inspection: relative Markdown or an external http(s) URL.
@@ -836,20 +877,38 @@ mod text_splice_tests {
 }
 
 #[cfg(test)]
-mod image_bytes_tests {
+mod image_read_tests {
   use super::*;
-  fn read(path: &str, src: &str) -> Value {
-    let path = CString::new(path).unwrap();
-    let src = CString::new(src).unwrap();
-    let pointer = unsafe { vellora_image_bytes(path.as_ptr(), src.as_ptr()) };
-    let value = serde_json::from_str(unsafe { CStr::from_ptr(pointer) }.to_str().unwrap()).unwrap();
+
+  fn read_raw(path: Option<&str>, src: Option<&str>) -> (Value, Vec<u8>) {
+    let path_c = path.map(|p| CString::new(p).unwrap());
+    let src_c = src.map(|s| CString::new(s).unwrap());
+    let mut data: *mut u8 = std::ptr::null_mut();
+    let mut len: usize = 0;
+    let pointer = unsafe {
+      vellora_image_read(
+        path_c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+        src_c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+        &mut data,
+        &mut len,
+      )
+    };
+    let status: Value = serde_json::from_str(unsafe { CStr::from_ptr(pointer) }.to_str().unwrap()).unwrap();
     unsafe { vellora_free(pointer) };
-    value
+    let bytes = if data.is_null() || len == 0 {
+      assert!(data.is_null() && len == 0);
+      Vec::new()
+    } else {
+      unsafe { std::slice::from_raw_parts(data, len) }.to_vec()
+    };
+    unsafe { vellora_free_bytes(data, len) };
+    (status, bytes)
   }
+
   #[test]
-  fn image_endpoint_returns_owned_bytes_and_revalidates_each_request() {
+  fn image_read_returns_raw_bytes_without_path_and_revalidates_each_request() {
     let root = std::env::temp_dir().join(format!(
-      "vellora-image-bytes-{}-{}",
+      "vellora-image-read-{}-{}",
       std::process::id(),
       std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
@@ -858,23 +917,48 @@ mod image_bytes_tests {
     let image = root.join("pic.gif");
     std::fs::write(&doc, "# doc").unwrap();
     std::fs::write(&image, b"GIF89a").unwrap();
-    let first = read(doc.to_str().unwrap(), "pic.gif");
+
+    let (first, bytes) = read_raw(Some(doc.to_str().unwrap()), Some("pic.gif"));
     assert_eq!(first["ok"], true, "{first}");
     assert_eq!(first["mime"], "image/gif");
-    assert_eq!(first["dataUrl"], "data:image/gif;base64,R0lGODlh");
     assert!(first.get("path").is_none());
+    assert!(first.get("dataUrl").is_none());
+    assert_eq!(bytes, b"GIF89a");
+
     std::fs::File::create(&image)
       .unwrap()
       .set_len(image_access::DEFAULT_MAX_MARKDOWN_IMAGE_BYTES + 1)
       .unwrap();
-    assert_eq!(read(doc.to_str().unwrap(), "pic.gif")["code"], "IMAGE_TOO_LARGE");
-    assert_eq!(read(doc.to_str().unwrap(), "../pic.gif")["code"], "UNSUPPORTED_IMAGE_SOURCE");
+    let (oversized, empty) = read_raw(Some(doc.to_str().unwrap()), Some("pic.gif"));
+    assert_eq!(oversized["code"], "IMAGE_TOO_LARGE");
+    assert!(empty.is_empty());
+
     assert_eq!(
-      read(doc.to_str().unwrap(), "https://example.com/pic.gif")["code"],
+      read_raw(Some(doc.to_str().unwrap()), Some("../pic.gif")).0["code"],
       "UNSUPPORTED_IMAGE_SOURCE"
     );
+    assert_eq!(
+      read_raw(Some(doc.to_str().unwrap()), Some("https://example.com/pic.gif")).0["code"],
+      "UNSUPPORTED_IMAGE_SOURCE"
+    );
+
     std::fs::remove_file(&image).unwrap();
-    assert_eq!(read(doc.to_str().unwrap(), "pic.gif")["code"], "IMAGE_NOT_FOUND");
+    assert_eq!(read_raw(Some(doc.to_str().unwrap()), Some("pic.gif")).0["code"], "IMAGE_NOT_FOUND");
+
+    // Null pointer guards
+    assert_eq!(read_raw(None, Some("pic.gif")).0["code"], "INVALID_ARGUMENT");
+    assert_eq!(read_raw(Some(doc.to_str().unwrap()), None).0["code"], "INVALID_ARGUMENT");
+    let cdoc = CString::new(doc.to_str().unwrap()).unwrap();
+    let csrc = CString::new("pic.gif").unwrap();
+    let mut len = 99usize;
+    let raw_null_data =
+      unsafe { vellora_image_read(cdoc.as_ptr(), csrc.as_ptr(), std::ptr::null_mut(), &mut len) };
+    let err_null_data: Value =
+      serde_json::from_str(unsafe { CStr::from_ptr(raw_null_data) }.to_str().unwrap()).unwrap();
+    unsafe { vellora_free(raw_null_data) };
+    assert_eq!(len, 0);
+    assert_eq!(err_null_data["code"], "INVALID_ARGUMENT");
+
     std::fs::remove_file(&doc).unwrap();
     std::fs::remove_dir(&root).unwrap();
   }

@@ -750,10 +750,10 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
         if (resolved.value("ok").toBool()) {
           const QString path = resolved.value("path").toString();
           const auto data = bridge::readImage(documentPath_, run.value("src").toString());
-          const QByteArray url = data.value("dataUrl").toString().toLatin1();
-          QBuffer buffer; buffer.setData(imageDecode::inputBytes(QByteArray::fromBase64(url.mid(url.indexOf(',')+1)))); buffer.open(QIODevice::ReadOnly);
+          const QByteArray view = imageDecode::inputBytes(data.rawView());
+          QBuffer buffer; buffer.setData(view); buffer.open(QIODevice::ReadOnly);
           QImageReader reader(&buffer);
-          const QSize imageSize = data.value("ok").toBool() ? reader.size() : QSize();
+          const QSize imageSize = data.ok() ? reader.size() : QSize();
           if (imageSize.isValid()) {
             authorizedImages_.insert(normalizedImagePath(path));
             imageSources_.insert(normalizedImagePath(path),run.value("src").toString());
@@ -906,11 +906,14 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
           const QJsonObject run = runs.first().toObject();
           const QJsonObject resolved = bridge::resolveImage(documentPath_, run.value("src").toString());
           const QString path = resolved.value("ok").toBool() ? resolved.value("path").toString() : QString();
-          const auto data = bridge::readImage(documentPath_, run.value("src").toString());
-          const QByteArray url = data.value("dataUrl").toString().toLatin1();
-          QBuffer buffer; buffer.setData(imageDecode::inputBytes(QByteArray::fromBase64(url.mid(url.indexOf(',')+1)))); buffer.open(QIODevice::ReadOnly);
-          QImageReader reader(&buffer);
-          const QSize imageSize = path.isEmpty() || !data.value("ok").toBool() ? QSize() : reader.size();
+          QSize imageSize;
+          if (!path.isEmpty()) {
+            const auto data = bridge::readImage(documentPath_, run.value("src").toString());
+            const QByteArray view = imageDecode::inputBytes(data.rawView());
+            QBuffer buffer; buffer.setData(view); buffer.open(QIODevice::ReadOnly);
+            QImageReader reader(&buffer);
+            if (data.ok()) imageSize = reader.size();
+          }
           if (imageSize.isValid()) {
             authorizedImages_.insert(normalizedImagePath(path));
             imageSources_.insert(normalizedImagePath(path),run.value("src").toString());
@@ -3464,9 +3467,9 @@ void DocumentView::focusInEvent(QFocusEvent* event) {
   bool resized=false;
   for(const auto& key:paintedImages_) {
     const auto data=bridge::readImage(documentPath_,imageSources_.value(key));
-    const QByteArray url=data.value("dataUrl").toString().toLatin1();
-    QBuffer buffer;buffer.setData(imageDecode::inputBytes(QByteArray::fromBase64(url.mid(url.indexOf(',')+1))));buffer.open(QIODevice::ReadOnly);
-    QImageReader reader(&buffer);const QSize size=data.value("ok").toBool()?reader.size():QSize();
+    const QByteArray view=imageDecode::inputBytes(data.rawView());
+    QBuffer buffer;buffer.setData(view);buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer);const QSize size=data.ok()?reader.size():QSize();
     if(size.isValid() && size!=imageSizes_.value(key)) {imageSizes_[key]=size;resized=true;}
     else if (!size.isValid() && key.startsWith(QStringLiteral("missing-image:")) && imageSizes_.remove(key)) resized=true;
   }
@@ -3777,10 +3780,9 @@ QImage DocumentView::decodedImage(const QString& path) {
   if (const auto* animation = animationCache_.object(key)) return animation->movie.currentImage();
   if (const auto* cached = imageCache_.object(key)) return *cached;
   const auto result = bridge::readImage(documentPath_,imageSources_.value(key));
-  if (!result.value("ok").toBool()) { imageCache_.insert(key,new QImage,1); return {}; }
-  const QByteArray url = result.value("dataUrl").toString().toLatin1();
-  const QByteArray bytes = imageDecode::inputBytes(QByteArray::fromBase64(url.mid(url.indexOf(',')+1)));
-  QBuffer buffer; buffer.setData(bytes); buffer.open(QIODevice::ReadOnly);
+  if (!result.ok()) { imageCache_.insert(key,new QImage,1); return {}; }
+  const QByteArray view = imageDecode::inputBytes(result.rawView());
+  QBuffer buffer; buffer.setData(view); buffer.open(QIODevice::ReadOnly);
   QImageReader reader(&buffer);
   const QSize natural = reader.size();
   if (!natural.isValid() || qint64(natural.width()) * natural.height() > 100000000) return {};
@@ -3788,10 +3790,11 @@ QImage DocumentView::decodedImage(const QString& path) {
                                      8192, Qt::KeepAspectRatio);
   if (scaled.width() < natural.width() || scaled.height() < natural.height()) reader.setScaledSize(scaled);
   if (reader.supportsAnimation()) {
-    auto* animation = new AnimatedImage(bytes);
+    const QByteArray owned = imageDecode::inputBytes(result.ownedBytes());
+    auto* animation = new AnimatedImage(owned);
     animation->movie.setCacheMode(QMovie::CacheNone);
     animation->movie.setScaledSize(scaled);
-    const int cost=qMax(1,int((bytes.size()+qint64(scaled.width())*scaled.height()*4)/1024));
+    const int cost=qMax(1,int((owned.size()+qint64(scaled.width())*scaled.height()*4)/1024));
     if (cost <= animationCache_.maxCost()) {
       connect(&animation->movie,&QMovie::frameChanged,this,[this](int){ viewport()->update(); });
       animation->movie.start();

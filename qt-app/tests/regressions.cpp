@@ -173,9 +173,9 @@ class NativeRegressions : public QObject {
   }
   void authorizedImageBytesRevalidateOnRead() {
     const auto path=fixture("# Image\n");const QString imagePath=files_.filePath("checked.png");QImage image(24,24,QImage::Format_RGB32);image.fill(Qt::red);QVERIFY(image.save(imagePath));
-    const QJsonObject valid=bridge::readImage(path,"checked.png");QVERIFY(valid.value("ok").toBool());QVERIFY(!valid.contains("path"));QVERIFY(valid.value("dataUrl").toString().startsWith("data:image/png;base64,"));
+    const auto valid=bridge::readImage(path,"checked.png");QVERIFY(valid.ok());QVERIFY(!valid.status.contains("path"));QCOMPARE(valid.status.value("mime").toString(),QString("image/png"));QVERIFY(valid.rawView().startsWith("\x89PNG\r\n\x1a\n"));
     QFile file(imagePath);QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::Truncate));const QByteArray tooLarge(10*1024*1024+1,'x');QCOMPARE(file.write(tooLarge),qint64(tooLarge.size()));file.close();
-    QVERIFY(!bridge::readImage(path,"checked.png").value("ok").toBool());QVERIFY(QFile::remove(imagePath));QVERIFY(!bridge::readImage(path,"checked.png").value("ok").toBool());
+    QVERIFY(!bridge::readImage(path,"checked.png").ok());QVERIFY(QFile::remove(imagePath));QVERIFY(!bridge::readImage(path,"checked.png").ok());
   }
   void emptyStateDisablesDocumentActionsAndRetriesFailedOpen() {
     MainWindow w;w.show();QTest::qWait(10);auto* toolbar=w.findChild<Toolbar*>();auto* modes=toolbar->findChild<SegmentedControl*>();QVERIFY(modes);QVERIFY(!modes->isEnabled());
@@ -783,7 +783,7 @@ class NativeRegressions : public QObject {
     QByteArray badPayload=bytes;badPayload[20]=0;
     for(const QByteArray& invalid:{truncated,badSignature,badPayload}) {QBuffer bad;bad.setData(imageDecode::inputBytes(invalid));QVERIFY(bad.open(QIODevice::ReadOnly));QImageReader badReader(&bad,"webp");QVERIFY(badReader.read().isNull());}
     QFile imageFile(files_.filePath("authorized.webp"));QVERIFY(imageFile.open(QIODevice::WriteOnly));QCOMPARE(imageFile.write(bytes),qint64(bytes.size()));imageFile.close();const auto path=fixture("![webp](authorized.webp)\n\nBody\n");
-    const auto payload=bridge::readImage(path,"authorized.webp");QVERIFY(payload.value("ok").toBool());QCOMPARE(payload.value("mime").toString(),QString("image/webp"));QVERIFY(!payload.contains("path"));
+    const auto payload=bridge::readImage(path,"authorized.webp");QVERIFY(payload.ok());QCOMPARE(payload.status.value("mime").toString(),QString("image/webp"));QVERIFY(!payload.status.contains("path"));QCOMPARE(payload.rawView(),original);
     DocumentView view;view.resize(820,900);view.show();view.setPlan(bridge::planFor("![webp](authorized.webp)\n\nBody\n").value("plan").toObject(),path);QCoreApplication::processEvents();const QImage shot=view.viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);int red=0;for(int y=0;y<shot.height();++y){const QRgb* row=reinterpret_cast<const QRgb*>(shot.constScanLine(y));for(int x=0;x<shot.width();++x)if(qRed(row[x])>200&&qGreen(row[x])<50&&qBlue(row[x])<50)++red;}QVERIFY(red>=100);QVERIFY(!view.hasPendingEdits());QCOMPARE(read(imageFile.fileName()),original);QCOMPARE(read(path),QByteArray("![webp](authorized.webp)\n\nBody\n"));
   }
   void documentLifecycleDropsOldContentAndUndo() {
