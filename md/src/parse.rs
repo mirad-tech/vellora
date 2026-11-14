@@ -7,7 +7,10 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::model::{push_text, Alignment, Block, Document, ImageAltSource, Inline, Link, List, Marks, Reference, ReferenceKind, Segment, Table};
+use crate::model::{
+  push_text, Alignment, Block, Document, ImageAltSource, Inline, Link, List, Marks, Reference, ReferenceKind,
+  Segment, Table,
+};
 
 pub fn parse(source: &str) -> Document {
   let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
@@ -80,10 +83,7 @@ pub fn parse(source: &str) -> Document {
   let offsets = line_offsets(source);
   for index in 0..entries.len() {
     let (start_line, ref block) = entries[index];
-    let end_line = entries
-      .get(index + 1)
-      .map(|(next, _)| *next)
-      .unwrap_or(lines.len());
+    let end_line = entries.get(index + 1).map(|(next, _)| *next).unwrap_or(lines.len());
     let from = if index == 0 { 0 } else { offsets[start_line.min(lines.len())] };
     let to = offsets[end_line.min(lines.len())];
     let source = source[from..to].to_string();
@@ -133,7 +133,9 @@ fn byte_lines(body: &str, range: std::ops::Range<usize>, offsets: &[usize]) -> (
   let end_byte = range.end.min(body.len());
   let start = starts.partition_point(|offset| *offset <= start_byte).saturating_sub(1);
   let mut end = starts.partition_point(|offset| *offset <= end_byte).saturating_sub(1);
-  if end_byte == 0 || body.as_bytes()[end_byte - 1] != b'\n' { end += 1; }
+  if end_byte == 0 || body.as_bytes()[end_byte - 1] != b'\n' {
+    end += 1;
+  }
   (start, end.max(start + 1))
 }
 
@@ -172,15 +174,36 @@ enum Frame {
   BlockQuote(Vec<Block>),
   List(List),
   Item(Vec<Block>, Option<bool>),
-  Paragraph { inlines: Vec<Inline>, implicit: bool },
-  Heading { level: u8, content: Vec<Inline> },
-  Table { align: Vec<Alignment>, header: Vec<Vec<Inline>>, rows: Vec<Vec<Vec<Inline>>>, in_header: bool },
+  Paragraph {
+    inlines: Vec<Inline>,
+    implicit: bool,
+  },
+  Heading {
+    level: u8,
+    content: Vec<Inline>,
+  },
+  Table {
+    align: Vec<Alignment>,
+    header: Vec<Vec<Inline>>,
+    rows: Vec<Vec<Vec<Inline>>>,
+    in_header: bool,
+  },
   Cell(Vec<Inline>),
-  CodeBlock { language: Option<String>, text: String },
+  CodeBlock {
+    language: Option<String>,
+    text: String,
+  },
   Mark(Marks),
   LinkMark(Link),
-  ImageAlt { src: String, title: Option<String>, text: String, marks: Marks,
-             source: Option<String>, reference: Option<Reference>, nested_images: usize },
+  ImageAlt {
+    src: String,
+    title: Option<String>,
+    text: String,
+    marks: Marks,
+    source: Option<String>,
+    reference: Option<Reference>,
+    nested_images: usize,
+  },
 }
 
 struct Builder {
@@ -199,7 +222,9 @@ fn convert_block(events: &[(Event, std::ops::Range<usize>)], source: &str) -> Op
         }
       }
       Event::Start(Tag::Image { link_type, id, .. }) => {
-        if let Some(Frame::ImageAlt { source: alt, reference, nested_images: 0, .. }) = builder.stack.last_mut() {
+        if let Some(Frame::ImageAlt { source: alt, reference, nested_images: 0, .. }) =
+          builder.stack.last_mut()
+        {
           *alt = bracket_text(authored).map(|(text, _)| text.to_string());
           *reference = reference_metadata(*link_type, id, authored, range.start);
         }
@@ -227,7 +252,9 @@ impl Builder {
     // text beneath emphasis/link frames, code spans and nested images as text.
     if let Some(Frame::ImageAlt { text, nested_images, .. }) = self.stack.last_mut() {
       match event {
-        Event::Text(value) | Event::Code(value) | Event::InlineHtml(value) | Event::Html(value) => text.push_str(value),
+        Event::Text(value) | Event::Code(value) | Event::InlineHtml(value) | Event::Html(value) => {
+          text.push_str(value)
+        }
         Event::SoftBreak | Event::HardBreak => text.push(' '),
         Event::Start(Tag::Image { .. }) => *nested_images += 1,
         Event::End(TagEnd::Image) if *nested_images > 0 => *nested_images -= 1,
@@ -284,14 +311,13 @@ impl Builder {
       }
       Event::TaskListMarker(checked) => {
         let task = self.stack.iter_mut().rev().find_map(|frame| match frame {
-          Frame::Item(_, task) => Some(task), _ => None,
+          Frame::Item(_, task) => Some(task),
+          _ => None,
         })?;
         *task = Some(*checked);
         Some(())
       }
-      Event::FootnoteReference(_)
-      | Event::InlineMath(_)
-      | Event::DisplayMath(_) => None,
+      Event::FootnoteReference(_) | Event::InlineMath(_) | Event::DisplayMath(_) => None,
     }
   }
 
@@ -299,15 +325,19 @@ impl Builder {
     match tag {
       Tag::Paragraph => {
         if matches!(self.stack.last(), Some(Frame::Item(_, _))) {
-          if let Some(list) = self.stack.iter_mut().rev().find_map(|frame| match frame { Frame::List(list) => Some(list), _ => None }) { list.loose = true; }
+          if let Some(list) = self.stack.iter_mut().rev().find_map(|frame| match frame {
+            Frame::List(list) => Some(list),
+            _ => None,
+          }) {
+            list.loose = true;
+          }
         }
         self.close_implicit_paragraph();
         self.stack.push(Frame::Paragraph { inlines: Vec::new(), implicit: false })
       }
-      Tag::Heading { level, .. } => self.stack.push(Frame::Heading {
-        level: heading_level(*level),
-        content: Vec::new(),
-      }),
+      Tag::Heading { level, .. } => {
+        self.stack.push(Frame::Heading { level: heading_level(*level), content: Vec::new() })
+      }
       Tag::BlockQuote(_) => {
         self.close_implicit_paragraph();
         self.stack.push(Frame::BlockQuote(Vec::new()))
@@ -317,7 +347,11 @@ impl Builder {
         let language = match kind {
           CodeBlockKind::Fenced(info) => {
             let value = info.trim();
-            if value.is_empty() { None } else { Some(value.to_string()) }
+            if value.is_empty() {
+              None
+            } else {
+              Some(value.to_string())
+            }
           }
           CodeBlockKind::Indented => None,
         };
@@ -384,7 +418,9 @@ impl Builder {
           title: if title.is_empty() { None } else { Some(title.to_string()) },
           text: String::new(),
           marks,
-          source: None, reference: None, nested_images: 0,
+          source: None,
+          reference: None,
+          nested_images: 0,
         });
       }
       _ => return None,
@@ -435,7 +471,14 @@ impl Builder {
       TagEnd::Table => {
         self.close_implicit_paragraph();
         if let Some(Frame::Table { align, header, rows, .. }) = self.stack.pop() {
-          self.push_block(Block::Table(Table { align, header, rows, spans: Vec::new(), cell_headers: Vec::new(), header_is_body: false }));
+          self.push_block(Block::Table(Table {
+            align,
+            header,
+            rows,
+            spans: Vec::new(),
+            cell_headers: Vec::new(),
+            header_is_body: false,
+          }));
         }
       }
       TagEnd::TableHead => {
@@ -492,9 +535,9 @@ impl Builder {
   fn current_inlines(&mut self) -> Option<&mut Vec<Inline>> {
     for frame in self.stack.iter_mut().rev() {
       match frame {
-        Frame::Paragraph { inlines, .. }
-        | Frame::Heading { content: inlines, .. }
-        | Frame::Cell(inlines) => return Some(inlines),
+        Frame::Paragraph { inlines, .. } | Frame::Heading { content: inlines, .. } | Frame::Cell(inlines) => {
+          return Some(inlines)
+        }
         Frame::Mark(_) | Frame::LinkMark(_) => continue,
         _ => return None,
       }
@@ -568,7 +611,12 @@ impl Builder {
   }
 }
 
-fn reference_metadata(link_type: pulldown_cmark::LinkType, id: &str, authored: &str, source_id: usize) -> Option<Reference> {
+fn reference_metadata(
+  link_type: pulldown_cmark::LinkType,
+  id: &str,
+  authored: &str,
+  source_id: usize,
+) -> Option<Reference> {
   use pulldown_cmark::LinkType::*;
   let kind = match link_type {
     Reference | ReferenceUnknown => ReferenceKind::Full,
@@ -579,7 +627,9 @@ fn reference_metadata(link_type: pulldown_cmark::LinkType, id: &str, authored: &
   let (text_source, after) = bracket_text(authored)?;
   let label = if kind == ReferenceKind::Full {
     bracket_text(authored[after..].trim_start()).map(|(label, _)| label).unwrap_or(id)
-  } else { text_source };
+  } else {
+    text_source
+  };
   Some(crate::model::Reference { kind, label: label.into(), text_source: text_source.into(), source_id })
 }
 
@@ -587,29 +637,46 @@ fn reference_metadata(link_type: pulldown_cmark::LinkType, id: &str, authored: &
 fn bracket_text(source: &str) -> Option<(&str, usize)> {
   let bytes = source.as_bytes();
   let open = usize::from(bytes.first() == Some(&b'!'));
-  if bytes.get(open) != Some(&b'[') { return None; }
+  if bytes.get(open) != Some(&b'[') {
+    return None;
+  }
   let mut depth = 1usize;
   let mut i = open + 1;
   while i < bytes.len() {
     match bytes[i] {
-      b'\\' => { i += 2; continue; }
+      b'\\' => {
+        i += 2;
+        continue;
+      }
       b'`' => {
         let start = i;
-        while bytes.get(i) == Some(&b'`') { i += 1; }
+        while bytes.get(i) == Some(&b'`') {
+          i += 1;
+        }
         let count = i - start;
         let mut j = i;
         while j < bytes.len() {
-          if bytes[j] != b'`' { j += 1; continue; }
+          if bytes[j] != b'`' {
+            j += 1;
+            continue;
+          }
           let end_start = j;
-          while bytes.get(j) == Some(&b'`') { j += 1; }
-          if j - end_start == count { i = j; break; }
+          while bytes.get(j) == Some(&b'`') {
+            j += 1;
+          }
+          if j - end_start == count {
+            i = j;
+            break;
+          }
         }
         continue;
       }
       b'[' => depth += 1,
       b']' => {
         depth -= 1;
-        if depth == 0 { return Some((&source[open + 1..i], i + 1)); }
+        if depth == 0 {
+          return Some((&source[open + 1..i], i + 1));
+        }
       }
       _ => {}
     }
@@ -626,14 +693,16 @@ pub fn is_nonvisual_source(source: &str) -> bool {
   let mut html = String::new();
   for event in Parser::new(source) {
     match event {
-      Event::Start(Tag::HtmlBlock) | Event::End(TagEnd::HtmlBlock) => {},
+      Event::Start(Tag::HtmlBlock) | Event::End(TagEnd::HtmlBlock) => {}
       Event::Html(value) | Event::InlineHtml(value) => html.push_str(&value),
       _ => return false,
     }
   }
   let mut rest = html.trim();
   while let Some(comment) = rest.strip_prefix("<!--") {
-    let Some(end) = comment.find("-->") else { return false; };
+    let Some(end) = comment.find("-->") else {
+      return false;
+    };
     rest = comment[end + 3..].trim_start();
   }
   rest.is_empty()
@@ -692,12 +761,18 @@ mod offset_tests {
     for body in ["", "a", "a\n", "\n\n", "a\n\nb", "😀你好\nnext\n", "\n# title\n\nbody"] {
       let offsets = line_offsets(body);
       let boundaries: Vec<_> = (0..=body.len()).filter(|index| body.is_char_boundary(*index)).collect();
-      for start in &boundaries { for end in boundaries.iter().filter(|end| *end >= start) {
-        let old_start = body[..*start].matches('\n').count();
-        let prefix = &body[..*end];
-        let old_end = prefix.matches('\n').count() + usize::from(!prefix.ends_with('\n'));
-        assert_eq!(byte_lines(body, *start..*end, &offsets), (old_start, old_end.max(old_start + 1)), "{body:?} {start}..{end}");
-      } }
+      for start in &boundaries {
+        for end in boundaries.iter().filter(|end| *end >= start) {
+          let old_start = body[..*start].matches('\n').count();
+          let prefix = &body[..*end];
+          let old_end = prefix.matches('\n').count() + usize::from(!prefix.ends_with('\n'));
+          assert_eq!(
+            byte_lines(body, *start..*end, &offsets),
+            (old_start, old_end.max(old_start + 1)),
+            "{body:?} {start}..{end}"
+          );
+        }
+      }
     }
   }
 }

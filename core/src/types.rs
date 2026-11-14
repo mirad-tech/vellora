@@ -39,12 +39,7 @@ impl<T> CommandResult<T> {
   }
 
   pub fn failure(code: impl Into<String>, message: impl Into<String>) -> Self {
-    Self::Err {
-      ok: false,
-      code: code.into(),
-      message: message.into(),
-      conflict_token: None,
-    }
+    Self::Err { ok: false, code: code.into(), message: message.into(), conflict_token: None }
   }
 
   pub fn file_changed(token: String) -> Self {
@@ -59,28 +54,16 @@ impl<T> CommandResult<T> {
   pub fn into_result(self) -> Result<T, CommandError> {
     match self {
       Self::Ok { data, .. } => Ok(data),
-      Self::Err {
-        ok: _,
-        code,
-        message,
-        conflict_token,
-      } => Err(CommandError {
-        code,
-        message,
-        conflict_token,
-      }),
+      Self::Err { ok: _, code, message, conflict_token } => {
+        Err(CommandError { code, message, conflict_token })
+      }
     }
   }
 
   pub fn as_err(&self) -> Option<CommandError> {
     match self {
       Self::Ok { .. } => None,
-      Self::Err {
-        ok: _,
-        code,
-        message,
-        conflict_token,
-      } => Some(CommandError {
+      Self::Err { ok: _, code, message, conflict_token } => Some(CommandError {
         code: code.clone(),
         message: message.clone(),
         conflict_token: conflict_token.clone(),
@@ -121,14 +104,8 @@ pub struct ImagePayload {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum LinkInspectData {
-  Markdown {
-    action: String,
-    document: MarkdownDocument,
-  },
-  External {
-    action: String,
-    url: String,
-  },
+  Markdown { action: String, document: MarkdownDocument },
+  External { action: String, url: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -146,11 +123,8 @@ mod tests {
     assert_eq!(value["code"], "FILE_CHANGED");
     assert_eq!(value["ok"], false);
     assert!(value.get("conflict_token").is_none());
-    let other = serde_json::to_value(CommandResult::<DocumentPayload>::failure(
-      "NOT_FOUND",
-      "missing",
-    ))
-    .unwrap();
+    let other =
+      serde_json::to_value(CommandResult::<DocumentPayload>::failure("NOT_FOUND", "missing")).unwrap();
     assert_eq!(other.as_object().unwrap().len(), 3);
   }
 

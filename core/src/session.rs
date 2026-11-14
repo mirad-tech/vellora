@@ -81,18 +81,12 @@ pub fn require_session_document(
 ) -> Result<PathBuf, CommandResult<EmptyPayload>> {
   let current = lock_mutex(&state.current_document);
   let Some(ref session) = *current else {
-    return Err(CommandResult::failure(
-      "NO_DOCUMENT",
-      "当前没有已打开的文档。",
-    ));
+    return Err(CommandResult::failure("NO_DOCUMENT", "当前没有已打开的文档。"));
   };
 
   let claimed = PathBuf::from(claimed_path.trim());
   if claimed_path.trim().is_empty() || !path_policy::paths_equal(session, &claimed) {
-    return Err(CommandResult::failure(
-      "SESSION_MISMATCH",
-      "文档会话不匹配，请重新打开文件。",
-    ));
+    return Err(CommandResult::failure("SESSION_MISMATCH", "文档会话不匹配，请重新打开文件。"));
   }
 
   Ok(session.clone())
@@ -100,17 +94,9 @@ pub fn require_session_document(
 
 fn map_empty_err<T>(err: CommandResult<EmptyPayload>) -> CommandResult<T> {
   match err {
-    CommandResult::Err {
-      ok: _,
-      code,
-      message,
-      conflict_token,
-    } => CommandResult::Err {
-      ok: false,
-      code,
-      message,
-      conflict_token,
-    },
+    CommandResult::Err { ok: _, code, message, conflict_token } => {
+      CommandResult::Err { ok: false, code, message, conflict_token }
+    }
     CommandResult::Ok { .. } => unreachable!("empty success is not an error"),
   }
 }
@@ -142,22 +128,15 @@ pub fn open_link_session(
   };
 
   match crate::link_access::inspect_markdown_link(session.to_string_lossy().as_ref(), href) {
-    CommandResult::Ok {
-      data: LinkInspectData::Markdown { document, .. },
-      ..
-    } => {
+    CommandResult::Ok { data: LinkInspectData::Markdown { document, .. }, .. } => {
       set_current_document(state, &document);
       *lock_mutex(&state.has_unsaved_changes) = false;
       clear_close_flags_if_idle(state);
       CommandResult::success(DocumentPayload { document })
     }
-    CommandResult::Ok {
-      data: LinkInspectData::External { .. },
-      ..
-    } => CommandResult::failure(
-      "UNSUPPORTED_LINK",
-      "请使用外链确认流程打开 HTTP(S) 链接。",
-    ),
+    CommandResult::Ok { data: LinkInspectData::External { .. }, .. } => {
+      CommandResult::failure("UNSUPPORTED_LINK", "请使用外链确认流程打开 HTTP(S) 链接。")
+    }
     CommandResult::Err { code, message, .. } => CommandResult::failure(code, message),
   }
 }
@@ -280,23 +259,13 @@ mod tests {
     fs::write(&target, "# target").unwrap();
 
     let state = SessionState::default();
-    let session_path = open_session(
-      &state,
-      source.to_str().unwrap(),
-      "# source\n\n[t](target.md)\n",
-    );
+    let session_path = open_session(&state, source.to_str().unwrap(), "# source\n\n[t](target.md)\n");
     *lock_mutex(&state.has_unsaved_changes) = true;
 
     let before = lock_mutex(&state.current_document).clone();
     let result = inspect_link_session(&state, &session_path, "target.md");
     assert!(
-      matches!(
-        result,
-        CommandResult::Ok {
-          data: LinkInspectData::Markdown { .. },
-          ..
-        }
-      ),
+      matches!(result, CommandResult::Ok { data: LinkInspectData::Markdown { .. }, .. }),
       "unexpected: {result:?}"
     );
     assert_eq!(*lock_mutex(&state.current_document), before);
@@ -319,10 +288,7 @@ mod tests {
       CommandResult::Ok { data, .. } => {
         assert_eq!(data.document.content, "# target body");
         let current = lock_mutex(&state.current_document).clone().unwrap();
-        assert!(path_policy::paths_equal(
-          &current,
-          std::path::Path::new(&data.document.path)
-        ));
+        assert!(path_policy::paths_equal(&current, std::path::Path::new(&data.document.path)));
         assert!(!*lock_mutex(&state.has_unsaved_changes));
       }
       CommandResult::Err { code, message, .. } => panic!("{code}: {message}"),
@@ -337,22 +303,12 @@ mod tests {
     fs::write(&target, "# target").unwrap();
 
     let state = SessionState::default();
-    let session_path = open_session(
-      &state,
-      source.to_str().unwrap(),
-      "# source\n\n[t](target.md)\n",
-    );
+    let session_path = open_session(&state, source.to_str().unwrap(), "# source\n\n[t](target.md)\n");
     *lock_mutex(&state.has_unsaved_changes) = true;
     begin_close_request(&state, CloseAction::CloseWindow);
 
     let inspected = inspect_link_session(&state, &session_path, "target.md");
-    assert!(matches!(
-      inspected,
-      CommandResult::Ok {
-        data: LinkInspectData::Markdown { .. },
-        ..
-      }
-    ));
+    assert!(matches!(inspected, CommandResult::Ok { data: LinkInspectData::Markdown { .. }, .. }));
 
     fs::remove_file(&target).unwrap();
 
@@ -363,10 +319,7 @@ mod tests {
     }
 
     let current = lock_mutex(&state.current_document).clone().unwrap();
-    assert!(path_policy::paths_equal(
-      &current,
-      std::path::Path::new(&session_path)
-    ));
+    assert!(path_policy::paths_equal(&current, std::path::Path::new(&session_path)));
     assert!(*lock_mutex(&state.has_unsaved_changes));
     // Failure must not clear close-protection flags
     assert!(lock_mutex(&state.close_state).prompt_pending);
@@ -408,10 +361,7 @@ mod tests {
     let state = SessionState::default();
     assert!(!queue_open_path(&state, "first.md".into()));
     assert!(!queue_open_path(&state, "second.markdown".into()));
-    assert_eq!(
-      take_initial_path_and_mark_ready(&state).as_deref(),
-      Some("second.markdown")
-    );
+    assert_eq!(take_initial_path_and_mark_ready(&state).as_deref(), Some("second.markdown"));
     assert!(queue_open_path(&state, "warm.md".into()));
     assert!(take_initial_path_and_mark_ready(&state).is_none());
   }
@@ -447,10 +397,7 @@ mod tests {
     assert_eq!(fs::read_to_string(&path).unwrap(), "external");
     assert!(*lock_mutex(&state.has_unsaved_changes));
     assert!(lock_mutex(&state.close_state).prompt_pending);
-    assert_eq!(
-      require_session_document(&state, &session).unwrap(),
-      PathBuf::from(session)
-    );
+    assert_eq!(require_session_document(&state, &session).unwrap(), PathBuf::from(session));
   }
 
   #[test]
@@ -463,10 +410,7 @@ mod tests {
     fs::write(&path, "external").unwrap();
     fs::write(&target, "target").unwrap();
     let token = match save_document_session(&state, &source, "draft", None) {
-      CommandResult::Err {
-        conflict_token: Some(token),
-        ..
-      } => token,
+      CommandResult::Err { conflict_token: Some(token), .. } => token,
       other => panic!("{other:?}"),
     };
     let destination = match open_link_session(&state, &source, "target.md") {
@@ -535,10 +479,7 @@ mod tests {
   fn taking_close_action_clears_prompt_but_keeps_selected_action() {
     let state = SessionState::default();
     begin_close_request(&state, CloseAction::CloseWindow);
-    assert_eq!(
-      take_pending_close_action(&state),
-      CloseAction::CloseWindow
-    );
+    assert_eq!(take_pending_close_action(&state), CloseAction::CloseWindow);
 
     let close = lock_mutex(&state.close_state);
     assert!(!close.prompt_pending);

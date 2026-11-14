@@ -68,11 +68,17 @@ pub fn block_digest(block: &Block) -> u64 {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Block {
   Paragraph(Vec<Inline>),
-  Heading { level: u8, content: Vec<Inline> },
+  Heading {
+    level: u8,
+    content: Vec<Inline>,
+  },
   BlockQuote(Vec<Block>),
   List(List),
   Table(Table),
-  CodeBlock { language: Option<String>, text: String },
+  CodeBlock {
+    language: Option<String>,
+    text: String,
+  },
   HorizontalRule,
   /// Verbatim Markdown retained because the model cannot represent it.
   RawSource(String),
@@ -120,13 +126,24 @@ pub struct CellHeader {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum HeaderScope { Auto, Row, Column, RowGroup, ColumnGroup, Unknown }
+pub enum HeaderScope {
+  Auto,
+  Row,
+  Column,
+  RowGroup,
+  ColumnGroup,
+  Unknown,
+}
 
 impl HeaderScope {
   pub fn as_str(self) -> &'static str {
     match self {
-      Self::Auto => "auto", Self::Row => "row", Self::Column => "col",
-      Self::RowGroup => "rowgroup", Self::ColumnGroup => "colgroup", Self::Unknown => "unknown",
+      Self::Auto => "auto",
+      Self::Row => "row",
+      Self::Column => "col",
+      Self::RowGroup => "rowgroup",
+      Self::ColumnGroup => "colgroup",
+      Self::Unknown => "unknown",
     }
   }
 }
@@ -157,11 +174,19 @@ pub struct Reference {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ReferenceKind { Full, Collapsed, Shortcut }
+pub enum ReferenceKind {
+  Full,
+  Collapsed,
+  Shortcut,
+}
 
 impl ReferenceKind {
   pub fn as_str(self) -> &'static str {
-    match self { Self::Full => "full", Self::Collapsed => "collapsed", Self::Shortcut => "shortcut" }
+    match self {
+      Self::Full => "full",
+      Self::Collapsed => "collapsed",
+      Self::Shortcut => "shortcut",
+    }
   }
 }
 
@@ -173,12 +198,28 @@ pub struct ImageAltSource {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Inline {
-  Text { text: String, marks: Marks },
-  Code { text: String, marks: Marks },
-  HardBreak { marks: Marks },
-  SoftBreak { marks: Marks },
-  Image { src: String, alt: String, title: Option<String>, marks: Marks,
-          alt_source: Option<ImageAltSource>, reference: Option<Reference> },
+  Text {
+    text: String,
+    marks: Marks,
+  },
+  Code {
+    text: String,
+    marks: Marks,
+  },
+  HardBreak {
+    marks: Marks,
+  },
+  SoftBreak {
+    marks: Marks,
+  },
+  Image {
+    src: String,
+    alt: String,
+    title: Option<String>,
+    marks: Marks,
+    alt_source: Option<ImageAltSource>,
+    reference: Option<Reference>,
+  },
 }
 
 impl Inline {
@@ -211,9 +252,7 @@ impl Block {
 
   fn push_plain(&self, out: &mut String) {
     match self {
-      Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => {
-        push_inlines(inlines, out)
-      }
+      Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => push_inlines(inlines, out),
       Block::BlockQuote(blocks) => {
         for block in blocks {
           block.push_plain(out);
@@ -296,11 +335,7 @@ impl Document {
     if self.segments.len() != other.segments.len() {
       return false;
     }
-    self
-      .segments
-      .iter()
-      .zip(&other.segments)
-      .all(|(a, b)| blocks_eq(&a.block, &b.block))
+    self.segments.iter().zip(&other.segments).all(|(a, b)| blocks_eq(&a.block, &b.block))
   }
 
   pub fn blocks(&self) -> impl Iterator<Item = &Block> {
@@ -308,17 +343,11 @@ impl Document {
   }
 
   pub fn plain_text(&self) -> String {
-    self
-      .segments
-      .iter()
-      .map(|segment| segment.block.plain_text())
-      .collect::<Vec<_>>()
-      .join("\n")
+    self.segments.iter().map(|segment| segment.block.plain_text()).collect::<Vec<_>>().join("\n")
   }
 
   pub fn is_empty(&self) -> bool {
-    self.segments.is_empty()
-      || (self.segments.len() == 1 && self.segments[0].block.is_empty_paragraph())
+    self.segments.is_empty() || (self.segments.len() == 1 && self.segments[0].block.is_empty_paragraph())
   }
 }
 
@@ -337,9 +366,11 @@ fn blocks_eq(a: &Block, b: &Block) -> bool {
         && x.delimiter == y.delimiter
         && x.tasks == y.tasks
         && x.items.len() == y.items.len()
-        && x.items.iter().zip(&y.items).all(|(a, b)| {
-          a.len() == b.len() && a.iter().zip(b).all(|(a, b)| blocks_eq(a, b))
-        })
+        && x
+          .items
+          .iter()
+          .zip(&y.items)
+          .all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(a, b)| blocks_eq(a, b)))
     }
     (Block::Table(x), Block::Table(y)) => {
       x.align == y.align
@@ -414,7 +445,9 @@ impl<'a> InlineCursor<'a> {
         Inline::Text { text, marks } => {
           self.pending = Some(Atom::Text { text: text.clone(), marks: semantic_marks(marks) });
         }
-        Inline::Code { text, marks } => return Some(Atom::Code { text: text.clone(), marks: semantic_marks(marks) }),
+        Inline::Code { text, marks } => {
+          return Some(Atom::Code { text: text.clone(), marks: semantic_marks(marks) })
+        }
         Inline::HardBreak { marks } => return Some(Atom::HardBreak { marks: semantic_marks(marks) }),
         Inline::SoftBreak { marks } => return Some(Atom::SoftBreak { marks: semantic_marks(marks) }),
         Inline::Image { src, alt, title, marks, .. } => {
@@ -432,6 +465,8 @@ impl<'a> InlineCursor<'a> {
 
 fn semantic_marks(marks: &Marks) -> Marks {
   let mut semantic = marks.clone();
-  if let Some(link) = &mut semantic.link { link.reference = None; }
+  if let Some(link) = &mut semantic.link {
+    link.reference = None;
+  }
   semantic
 }

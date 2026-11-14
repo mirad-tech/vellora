@@ -38,8 +38,8 @@ fn error_json(code: &str, message: &str) -> Value {
 }
 
 fn guarded(f: impl FnOnce() -> Value) -> *mut c_char {
-  let result = catch_unwind(AssertUnwindSafe(f))
-    .unwrap_or_else(|_| error_json("PANIC", "native bridge failed"));
+  let result =
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| error_json("PANIC", "native bridge failed"));
   into_c_string(result)
 }
 
@@ -148,7 +148,10 @@ fn table_json(table: &Table) -> Value {
 fn plan_json(document: &Document) -> Value {
   let source: String = document.segments.iter().map(|s| s.source.as_str()).collect();
   let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
-  let previews = document.segments.iter().any(|s| matches!(s.block, Block::RawSource(_)))
+  let previews = document
+    .segments
+    .iter()
+    .any(|s| matches!(s.block, Block::RawSource(_)))
     .then(|| vellora_md::preview::PreviewContext::new(&source));
   let mut outline_items = Vec::new();
   let mut source_base = 0usize;
@@ -171,12 +174,20 @@ fn plan_json(document: &Document) -> Value {
             map.insert("hidden".to_string(), json!(true));
           }
           let preview = previews.as_ref().expect("raw preview context").render(&segment_source);
-          for block in &preview.blocks { collect_outline_headings(block, &mut headings); }
-          map.insert("preview".to_string(), json!({ "blocks": blocks_json(&preview.blocks), "limited": preview.limited }));
+          for block in &preview.blocks {
+            collect_outline_headings(block, &mut headings);
+          }
+          map.insert(
+            "preview".to_string(),
+            json!({ "blocks": blocks_json(&preview.blocks), "limited": preview.limited }),
+          );
         }
       }
-      if !matches!(segment.block, Block::RawSource(_)) { collect_outline_headings(&segment.block, &mut headings); }
-      let offsets = if headings.is_empty() { Vec::new() } else { vellora_md::outline::heading_offsets(&segment_source) };
+      if !matches!(segment.block, Block::RawSource(_)) {
+        collect_outline_headings(&segment.block, &mut headings);
+      }
+      let offsets =
+        if headings.is_empty() { Vec::new() } else { vellora_md::outline::heading_offsets(&segment_source) };
       let mut offsets = offsets.into_iter();
       for (level, text) in headings {
         if let Some((_, offset)) = offsets.find(|(candidate, _)| *candidate == level) {
@@ -189,20 +200,36 @@ fn plan_json(document: &Document) -> Value {
     .collect();
   let mut previous = 0usize;
   let mut utf16 = 0usize;
-  let outline: Vec<_> = outline_items.into_iter().map(|(level, text, offset)| {
-    if offset >= previous { utf16 += normalized[previous..offset].encode_utf16().count(); }
-    else { utf16 = normalized[..offset].encode_utf16().count(); }
-    previous = offset;
-    json!({ "level": level, "text": text, "sourceOffset": utf16 })
-  }).collect();
+  let outline: Vec<_> = outline_items
+    .into_iter()
+    .map(|(level, text, offset)| {
+      if offset >= previous {
+        utf16 += normalized[previous..offset].encode_utf16().count();
+      } else {
+        utf16 = normalized[..offset].encode_utf16().count();
+      }
+      previous = offset;
+      json!({ "level": level, "text": text, "sourceOffset": utf16 })
+    })
+    .collect();
   json!({ "blocks": blocks, "outline": outline })
 }
 
 fn collect_outline_headings(block: &Block, result: &mut Vec<(u8, String)>) {
   match block {
     Block::Heading { level, .. } => result.push((*level, block.plain_text().trim().to_string())),
-    Block::BlockQuote(children) => { for child in children { collect_outline_headings(child, result); } }
-    Block::List(list) => { for item in &list.items { for child in item { collect_outline_headings(child, result); } } }
+    Block::BlockQuote(children) => {
+      for child in children {
+        collect_outline_headings(child, result);
+      }
+    }
+    Block::List(list) => {
+      for item in &list.items {
+        for child in item {
+          collect_outline_headings(child, result);
+        }
+      }
+    }
     _ => {}
   }
 }
@@ -399,7 +426,10 @@ pub unsafe extern "C" fn vellora_image(document_path: *const c_char, src: *const
 ///
 /// `document_path` and `src` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub unsafe extern "C" fn vellora_image_bytes(document_path: *const c_char, src: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_image_bytes(
+  document_path: *const c_char,
+  src: *const c_char,
+) -> *mut c_char {
   guarded(|| {
     let document_path = unsafe { from_c(document_path) };
     let src = unsafe { from_c(src) };
@@ -447,10 +477,7 @@ pub unsafe extern "C" fn vellora_inspect_link(
 ///
 /// `document_path` and `href` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub unsafe extern "C" fn vellora_open_link(
-  document_path: *const c_char,
-  href: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn vellora_open_link(document_path: *const c_char, href: *const c_char) -> *mut c_char {
   guarded(|| {
     let document_path = unsafe { from_c(document_path) };
     let href = unsafe { from_c(href) };
@@ -476,10 +503,7 @@ pub unsafe extern "C" fn vellora_open_external(url: *const c_char) -> *mut c_cha
   guarded(|| {
     let url = unsafe { from_c(url) };
     let result = link_access::open_external_url(&url, |target| {
-      std::process::Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", target])
-        .spawn()
-        .map(|_| ())
+      std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", target]).spawn().map(|_| ())
     });
     match result {
       CommandResult::Ok { .. } => json!({ "ok": true }),
@@ -541,14 +565,21 @@ mod tests {
 
   #[test]
   fn nonvisual_definitions_and_comments_are_explicit_but_unknown_raw_is_not_hidden() {
-    for source in ["[id]: https://example.com/ \"title\"\n", "<!-- note -->\n", "<!-- first\nsecond -->\n\n[id]: /path\n"] {
+    for source in
+      ["[id]: https://example.com/ \"title\"\n", "<!-- note -->\n", "<!-- first\nsecond -->\n\n[id]: /path\n"]
+    {
       let plan = plan_json(&vellora_md::parse(source));
       for block in plan["blocks"].as_array().unwrap() {
         assert_eq!(block["hidden"], true, "{source}: {plan}");
         assert!(block["source"].as_str().is_some());
       }
     }
-    for source in ["<script>hidden by sanitization</script>\n", "<!-- unclosed", "---\ntitle: metadata\n---\n", "<unknown>content</unknown>\n"] {
+    for source in [
+      "<script>hidden by sanitization</script>\n",
+      "<!-- unclosed",
+      "---\ntitle: metadata\n---\n",
+      "<unknown>content</unknown>\n",
+    ] {
       let plan = plan_json(&vellora_md::parse(source));
       assert!(plan["blocks"].as_array().unwrap().iter().all(|b| b["hidden"] != true), "{source}: {plan}");
     }
@@ -605,7 +636,11 @@ mod tests {
     let plan = plan_json(&vellora_md::parse(source));
     let outline = plan["outline"].as_array().unwrap();
     assert_eq!(outline.len(), 4, "{outline:?}");
-    for (index, (marker, level, title)) in [("# **", 1, "repeated"), ("## [", 2, "nested"), ("<h3>", 3, "HTML😀"), ("<h4>", 4, "last")].iter().enumerate() {
+    for (index, (marker, level, title)) in
+      [("# **", 1, "repeated"), ("## [", 2, "nested"), ("<h3>", 3, "HTML😀"), ("<h4>", 4, "last")]
+        .iter()
+        .enumerate()
+    {
       let offset = normalized[..normalized.find(marker).unwrap()].encode_utf16().count();
       assert_eq!(outline[index]["level"], *level);
       assert_eq!(outline[index]["text"], *title);
@@ -623,7 +658,8 @@ mod tests {
     assert_eq!(heading["source"], "# [Heading][ref]\n");
     assert_eq!(heading["runs"][0]["link"]["href"], "https://example.com");
     assert_eq!(heading["runs"][0]["link"]["reference"]["label"], "ref");
-    let html = blocks.iter().find(|b| b["text"].as_str().is_some_and(|text| text.starts_with("<div>"))).unwrap();
+    let html =
+      blocks.iter().find(|b| b["text"].as_str().is_some_and(|text| text.starts_with("<div>"))).unwrap();
     assert_eq!(html["preview"]["blocks"][0]["level"], 2);
     assert_eq!(html["preview"]["blocks"][1]["text"], "copy me");
     assert!(html["preview"]["blocks"][0].get("source").is_none());
@@ -679,11 +715,16 @@ mod splice_tests {
 
   #[test]
   fn malformed_partial_duplicate_and_stale_batches_fail() {
-    for edits in [json!({}), json!([{}]), json!([{"index":0}]),
-      json!([{"index":-1,"markdown":"x"}]), json!([{"index":0.5,"markdown":"x"}]),
+    for edits in [
+      json!({}),
+      json!([{}]),
+      json!([{"index":0}]),
+      json!([{"index":-1,"markdown":"x"}]),
+      json!([{"index":0.5,"markdown":"x"}]),
       json!([{"index":0,"markdown":null}]),
       json!([{"index":0,"markdown":"x"},{"index":9,"markdown":"y"}]),
-      json!([{"index":0,"markdown":"x"},{"index":0,"markdown":"y"}])] {
+      json!([{"index":0,"markdown":"x"},{"index":0,"markdown":"y"}]),
+    ] {
       let result = splice("original\n", edits);
       assert_eq!(result["ok"], false, "{result}");
       assert_eq!(result["code"], "BAD_EDITS");
@@ -693,7 +734,9 @@ mod splice_tests {
 
   #[test]
   fn empty_edits_and_source_spelling_are_byte_exact() {
-    for source in ["", "\n\n", "\r\na\r\n\r\nb\n", "[ref]: https://example.com\r\n", "<script>alert(1)</script>\n"] {
+    for source in
+      ["", "\n\n", "\r\na\r\n\r\nb\n", "[ref]: https://example.com\r\n", "<script>alert(1)</script>\n"]
+    {
       assert_eq!(splice(source, json!([]))["content"], source);
     }
     assert_eq!(splice("only\n", json!([{"index":0,"markdown":""}]))["content"], "");
@@ -713,8 +756,11 @@ mod session_splice_tests {
 
   #[test]
   fn source_draft_splice_save_reopen_uses_current_bytes() {
-    let filename = format!("vellora-splice-test-{}-{}.md", std::process::id(),
-      std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    let filename = format!(
+      "vellora-splice-test-{}-{}.md",
+      std::process::id(),
+      std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    );
     let path = std::env::temp_dir().join(filename);
     std::fs::write(&path, "original\n\ntail\n").unwrap();
     let cpath = CString::new(path.to_str().unwrap()).unwrap();
@@ -751,11 +797,20 @@ mod text_splice_tests {
   #[test]
   fn text_endpoint_matches_full_endpoint_without_plan() {
     for source in ["", "one\r\n\r\ntwo\r\n", "<h2>raw</h2>\n"] {
-      for edits in ["[]", r#"[{"index":0,"markdown":"changed"}]"#, r#"[{"index":0,"markdown":""}]"#, r#"[{"index":99,"markdown":"x"}]"#, r#"[{"index":0,"markdown":"x"},{"index":0,"markdown":"y"}]"#, "{}", r#"[{"index":-1,"markdown":2}]"#] {
+      for edits in [
+        "[]",
+        r#"[{"index":0,"markdown":"changed"}]"#,
+        r#"[{"index":0,"markdown":""}]"#,
+        r#"[{"index":99,"markdown":"x"}]"#,
+        r#"[{"index":0,"markdown":"x"},{"index":0,"markdown":"y"}]"#,
+        "{}",
+        r#"[{"index":-1,"markdown":2}]"#,
+      ] {
         let source_c = std::ffi::CString::new(source).unwrap();
         let edits_c = std::ffi::CString::new(edits).unwrap();
         let pointer = unsafe { vellora_splice_text(source_c.as_ptr(), edits_c.as_ptr()) };
-        let text: Value = serde_json::from_str(unsafe { std::ffi::CStr::from_ptr(pointer) }.to_str().unwrap()).unwrap();
+        let text: Value =
+          serde_json::from_str(unsafe { std::ffi::CStr::from_ptr(pointer) }.to_str().unwrap()).unwrap();
         unsafe { vellora_free(pointer) };
         let mut full = splice_json(source, edits);
         full.as_object_mut().unwrap().remove("plan");
@@ -778,7 +833,11 @@ mod image_bytes_tests {
   }
   #[test]
   fn image_endpoint_returns_owned_bytes_and_revalidates_each_request() {
-    let root = std::env::temp_dir().join(format!("vellora-image-bytes-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root = std::env::temp_dir().join(format!(
+      "vellora-image-bytes-{}-{}",
+      std::process::id(),
+      std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
     std::fs::create_dir(&root).unwrap();
     let doc = root.join("doc.md");
     let image = root.join("pic.gif");
@@ -789,10 +848,16 @@ mod image_bytes_tests {
     assert_eq!(first["mime"], "image/gif");
     assert_eq!(first["dataUrl"], "data:image/gif;base64,R0lGODlh");
     assert!(first.get("path").is_none());
-    std::fs::File::create(&image).unwrap().set_len(image_access::DEFAULT_MAX_MARKDOWN_IMAGE_BYTES + 1).unwrap();
+    std::fs::File::create(&image)
+      .unwrap()
+      .set_len(image_access::DEFAULT_MAX_MARKDOWN_IMAGE_BYTES + 1)
+      .unwrap();
     assert_eq!(read(doc.to_str().unwrap(), "pic.gif")["code"], "IMAGE_TOO_LARGE");
     assert_eq!(read(doc.to_str().unwrap(), "../pic.gif")["code"], "UNSUPPORTED_IMAGE_SOURCE");
-    assert_eq!(read(doc.to_str().unwrap(), "https://example.com/pic.gif")["code"], "UNSUPPORTED_IMAGE_SOURCE");
+    assert_eq!(
+      read(doc.to_str().unwrap(), "https://example.com/pic.gif")["code"],
+      "UNSUPPORTED_IMAGE_SOURCE"
+    );
     std::fs::remove_file(&image).unwrap();
     assert_eq!(read(doc.to_str().unwrap(), "pic.gif")["code"], "IMAGE_NOT_FOUND");
     std::fs::remove_file(&doc).unwrap();

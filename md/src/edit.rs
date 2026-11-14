@@ -6,7 +6,10 @@
 //! golden bytes.
 
 use crate::model::{Block, Document, Inline, Marks, Segment};
-use std::{ops::Range, sync::{Arc, Mutex}};
+use std::{
+  ops::Range,
+  sync::{Arc, Mutex},
+};
 
 /// Appends `text` at the end of the last editable block, inheriting the marks of
 /// the character it follows (typing at the caret).
@@ -35,9 +38,7 @@ pub fn insert_at_start(document: &mut Document, text: &str) -> bool {
 
 fn append_into_block(block: &mut Block, text: &str) -> bool {
   match block {
-    Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => {
-      append_inline(inlines, text)
-    }
+    Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => append_inline(inlines, text),
     Block::CodeBlock { text: body, .. } => {
       // Fenced code bodies carry a structural trailing newline; typing at the end
       // of the block lands before it.
@@ -78,18 +79,15 @@ fn append_into_block(block: &mut Block, text: &str) -> bool {
 
 fn insert_into_block(block: &mut Block, text: &str) -> bool {
   match block {
-    Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => {
-      prepend_inline(inlines, text)
-    }
+    Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => prepend_inline(inlines, text),
     Block::CodeBlock { text: body, .. } => {
       body.insert_str(0, text);
       true
     }
     Block::BlockQuote(blocks) => blocks.iter_mut().any(|child| insert_into_block(child, text)),
-    Block::List(list) => list
-      .items
-      .iter_mut()
-      .any(|item| item.iter_mut().any(|child| insert_into_block(child, text))),
+    Block::List(list) => {
+      list.items.iter_mut().any(|item| item.iter_mut().any(|child| insert_into_block(child, text)))
+    }
     Block::Table(table) => {
       if let Some(cell) = table.header.first_mut() {
         return prepend_inline(cell, text);
@@ -185,7 +183,10 @@ pub fn apply_edits(document: &mut Document, edits: &[(usize, String)]) -> usize 
 
 /// Validates the complete batch before changing anything. Indices refer to the
 /// same input document, and each segment may occur only once.
-pub fn apply_edits_checked(document: &mut Document, edits: &[(usize, String)]) -> Result<usize, &'static str> {
+pub fn apply_edits_checked(
+  document: &mut Document,
+  edits: &[(usize, String)],
+) -> Result<usize, &'static str> {
   validate_edits(document, edits)?;
   let mut ordered: Vec<_> = edits.iter().collect();
   ordered.sort_by_key(|b| std::cmp::Reverse(b.0));
@@ -223,7 +224,10 @@ struct SpliceSource {
 }
 static SPLICE_SOURCE_CACHE: Mutex<Option<Arc<SpliceSource>>> = Mutex::new(None);
 
-fn splice_source(source: &str, cache: &Mutex<Option<Arc<SpliceSource>>>) -> Result<Arc<SpliceSource>, &'static str> {
+fn splice_source(
+  source: &str,
+  cache: &Mutex<Option<Arc<SpliceSource>>>,
+) -> Result<Arc<SpliceSource>, &'static str> {
   let cacheable_source = source.len() <= SPLICE_CACHE_SOURCE_LIMIT;
   if cacheable_source {
     let guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -244,9 +248,12 @@ fn splice_source(source: &str, cache: &Mutex<Option<Arc<SpliceSource>>>) -> Resu
     ranges.push(offset..end);
     offset = end;
   }
-  if offset != source.len() { return Err("parsed source boundaries do not cover input"); }
+  if offset != source.len() {
+    return Err("parsed source boundaries do not cover input");
+  }
   let entry = Arc::new(SpliceSource { source: source.into(), ranges: ranges.into_boxed_slice() });
-  if cacheable_source && entry.ranges.len() <= SPLICE_CACHE_RANGE_LIMIT / std::mem::size_of::<Range<usize>>() {
+  if cacheable_source && entry.ranges.len() <= SPLICE_CACHE_RANGE_LIMIT / std::mem::size_of::<Range<usize>>()
+  {
     *cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::clone(&entry));
   }
   Ok(entry)
@@ -255,17 +262,25 @@ fn splice_source(source: &str, cache: &Mutex<Option<Arc<SpliceSource>>>) -> Resu
 /// Splices caller-authored Markdown without a lossy AST export. Existing segment
 /// boundaries (including an absent final newline) belong to the original file.
 pub fn splice_markdown(source: &str, edits: &[(usize, String)]) -> Result<String, &'static str> {
-  if edits.is_empty() { return Ok(source.to_string()); }
+  if edits.is_empty() {
+    return Ok(source.to_string());
+  }
   let snapshot = splice_source(source, &SPLICE_SOURCE_CACHE)?;
   validate_indices(snapshot.ranges.len(), edits)?;
-  let replacements: std::collections::HashMap<_, _> = edits.iter().map(|(index, text)| (*index, text)).collect();
+  let replacements: std::collections::HashMap<_, _> =
+    edits.iter().map(|(index, text)| (*index, text)).collect();
   let ending = crate::document_line_ending(source);
   let mut output = String::with_capacity(source.len());
   for (index, range) in snapshot.ranges.iter().enumerate() {
     let original = &snapshot.source[range.clone()];
     if let Some(text) = replacements.get(&index) {
-      if text.is_empty() { continue; }
-      if text.as_str() == original { output.push_str(text); continue; }
+      if text.is_empty() {
+        continue;
+      }
+      if text.as_str() == original {
+        output.push_str(text);
+        continue;
+      }
       let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
       let body = normalized.trim_end_matches('\n');
       output.push_str(&body.replace('\n', ending));
@@ -274,9 +289,12 @@ pub fn splice_markdown(source: &str, edits: &[(usize, String)]) -> Result<String
       if let Some(newline) = suffix.find(['\r', '\n']) {
         output.push_str(&suffix[newline..]);
       } else if index + 1 < snapshot.ranges.len() {
-        output.push_str(ending); output.push_str(ending);
+        output.push_str(ending);
+        output.push_str(ending);
       }
-    } else { output.push_str(original); }
+    } else {
+      output.push_str(original);
+    }
   }
   Ok(output)
 }
@@ -316,12 +334,14 @@ mod splice_cache_tests {
           for _ in 0..20 {
             let edit = vec![(0, "changed😀".to_string())];
             let first = splice_markdown(source, &edit).unwrap();
-            assert!(splice_markdown(source, &[(0,"x".into()),(999,"y".into())]).is_err());
-            assert!(splice_markdown(source, &[(0,"x".into()),(0,"y".into())]).is_err());
+            assert!(splice_markdown(source, &[(0, "x".into()), (999, "y".into())]).is_err());
+            assert!(splice_markdown(source, &[(0, "x".into()), (0, "y".into())]).is_err());
             assert_eq!(splice_markdown(source, &edit).unwrap(), first);
             assert_eq!(splice_markdown(source, &[]).unwrap(), source);
             assert!(first.starts_with("changed😀"));
-            if source.ends_with("\r\n") { assert!(first.ends_with("\r\n")); }
+            if source.ends_with("\r\n") {
+              assert!(first.ends_with("\r\n"));
+            }
           }
         });
       }

@@ -49,15 +49,9 @@ mod tests {
 
   #[test]
   fn finds_markdown_arg() {
-    let args = vec![
-      r"C:\Program Files\Vellora\Vellora.exe".into(),
-      "--flag".into(),
-      r"C:\docs\readme.md".into(),
-    ];
-    assert_eq!(
-      find_markdown_path_in_args(&args).as_deref(),
-      Some(r"C:\docs\readme.md")
-    );
+    let args =
+      vec![r"C:\Program Files\Vellora\Vellora.exe".into(), "--flag".into(), r"C:\docs\readme.md".into()];
+    assert_eq!(find_markdown_path_in_args(&args).as_deref(), Some(r"C:\docs\readme.md"));
   }
 
   #[test]
@@ -87,10 +81,7 @@ mod tests {
 
   #[test]
   fn does_not_treat_session_flag_as_path() {
-    let args = vec![
-      "app.exe".into(),
-      "--vellora-e2e-session=a1b2c3d4-e5f6-4789-a012-3456789abcde".into(),
-    ];
+    let args = vec!["app.exe".into(), "--vellora-e2e-session=a1b2c3d4-e5f6-4789-a012-3456789abcde".into()];
     assert!(find_markdown_path_in_args(&args).is_none());
   }
 }

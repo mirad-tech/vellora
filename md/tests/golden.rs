@@ -26,8 +26,7 @@ enum Operation {
 
 fn scenarios() -> Vec<Scenario> {
   let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/golden/scenarios.json");
-  let raw = std::fs::read_to_string(&path)
-    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+  let raw = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
   serde_json::from_str(&raw).expect("parse scenarios")
 }
 
@@ -50,11 +49,7 @@ fn run(scenario: &Scenario) -> String {
 /// D-02 (table): the baseline's table serializer wraps the table in a leading
 /// and trailing newline; the native exporter emits the table without them.
 /// Both forms parse back to the same document.
-const WHITESPACE_ONLY_DEVIATIONS: &[&str] = &[
-  "task-list-append",
-  "reference-link-append",
-  "table-append",
-];
+const WHITESPACE_ONLY_DEVIATIONS: &[&str] = &["task-list-append", "reference-link-append", "table-append"];
 
 /// Collapses runs of blank lines and drops leading/trailing blank lines.
 fn normalize_blank_lines(text: &str) -> String {
@@ -89,10 +84,7 @@ fn every_scenario_matches_the_baseline_bytes() {
       deviations.push(scenario.id.clone());
       continue;
     }
-    failures.push(format!(
-      "{}:\n  expected {:?}\n  actual   {:?}",
-      scenario.id, scenario.expected, actual
-    ));
+    failures.push(format!("{}:\n  expected {:?}\n  actual   {:?}", scenario.id, scenario.expected, actual));
   }
   assert!(failures.is_empty(), "\n{}", failures.join("\n"));
   assert_eq!(deviations.len(), WHITESPACE_ONLY_DEVIATIONS.len(), "unexpected deviation set: {deviations:?}");

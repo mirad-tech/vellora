@@ -95,10 +95,7 @@ fn is_unsafe_relative_candidate(decoded: &str, candidate: &Path) -> bool {
 
 /// Resolve a document-relative path. Only paths inside the document directory are allowed.
 /// Existing targets are canonicalized so directory symlinks cannot escape.
-pub fn resolve_document_relative_path(
-  document_path: &Path,
-  relative_path: &str,
-) -> Option<PathBuf> {
+pub fn resolve_document_relative_path(document_path: &Path, relative_path: &str) -> Option<PathBuf> {
   if relative_path.trim().is_empty() {
     return None;
   }

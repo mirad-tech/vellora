@@ -38,10 +38,7 @@ fn replacing_with_several_blocks_splits_the_segment() {
 fn edits_apply_from_the_highest_index_down() {
   let source = "a\n\nb\n\nc\n";
   let mut document = parse(source);
-  let applied = apply_edits(
-    &mut document,
-    &[(0, "A".into()), (2, "C".into())],
-  );
+  let applied = apply_edits(&mut document, &[(0, "A".into()), (2, "C".into())]);
   assert_eq!(applied, 2);
   let written = vellora_md::to_markdown(&document, "\n");
   // A dirty final block carries no synthetic trailing newline (golden contract).
@@ -92,7 +89,9 @@ fn editing_neighbor_cannot_remove_reference_definitions() {
 #[test]
 fn task_lists_are_structured_and_ordered_delimiters_survive_editing() {
   let tasks = parse("- [ ] todo\n- [x] done\n");
-  assert!(matches!(&tasks.segments[0].block, vellora_md::Block::List(list) if list.tasks == vec![Some(false), Some(true)]));
+  assert!(
+    matches!(&tasks.segments[0].block, vellora_md::Block::List(list) if list.tasks == vec![Some(false), Some(true)])
+  );
   let mut document = parse("9) first\n10) second\n");
   assert!(replace_segment(&mut document, 0, "9) FIRST\n10) second"));
   assert_eq!(vellora_md::to_markdown(&document, "\n"), "9) FIRST\n10) second");
@@ -100,9 +99,10 @@ fn task_lists_are_structured_and_ordered_delimiters_survive_editing() {
 
 #[test]
 fn pure_splice_preserves_final_boundary_and_inserts_into_empty_document() {
-  for (source, expected) in [("old\n", "new\n"), ("old", "new"), ("old\r\n\r\n", "new\r\n\r\n"), ("", "new")] {
-    assert_eq!(vellora_md::splice_markdown(source, &[(0,"new".into())]).unwrap(), expected);
+  for (source, expected) in [("old\n", "new\n"), ("old", "new"), ("old\r\n\r\n", "new\r\n\r\n"), ("", "new")]
+  {
+    assert_eq!(vellora_md::splice_markdown(source, &[(0, "new".into())]).unwrap(), expected);
   }
-  assert_eq!(vellora_md::splice_markdown("a\n\nb\n", &[(0,"A\n\n".into())]).unwrap(), "A\n\nb\n");
-  assert_eq!(vellora_md::splice_markdown("old\n", &[(0,"9) a\n10) b".into())]).unwrap(), "9) a\n10) b\n");
+  assert_eq!(vellora_md::splice_markdown("a\n\nb\n", &[(0, "A\n\n".into())]).unwrap(), "A\n\nb\n");
+  assert_eq!(vellora_md::splice_markdown("old\n", &[(0, "9) a\n10) b".into())]).unwrap(), "9) a\n10) b\n");
 }

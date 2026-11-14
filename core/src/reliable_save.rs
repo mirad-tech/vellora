@@ -43,10 +43,7 @@ pub struct SaveBaseline {
 
 impl SaveBaseline {
   pub fn new(content: &str) -> Self {
-    Self {
-      digest: content_digest(content.as_bytes()),
-      pending: None,
-    }
+    Self { digest: content_digest(content.as_bytes()), pending: None }
   }
 
   pub fn digest(&self) -> ContentDigest {
@@ -62,12 +59,7 @@ impl SaveBaseline {
     CommandResult::file_changed(token)
   }
 
-  pub fn save(
-    &mut self,
-    path: &str,
-    content: &str,
-    token: Option<&str>,
-  ) -> CommandResult<DocumentPayload> {
+  pub fn save(&mut self, path: &str, content: &str, token: Option<&str>) -> CommandResult<DocumentPayload> {
     let expected = match token {
       None => self.digest,
       Some(token) => match &self.pending {
@@ -89,11 +81,7 @@ impl SaveBaseline {
       Err(SaveFailure::Changed(digest)) => self.conflict(digest),
       Err(SaveFailure::Io(error)) => save_io_error(error),
       #[cfg(windows)]
-      Err(SaveFailure::Recovery {
-        backup_path,
-        replace_error,
-        restore_error,
-      }) => CommandResult::failure(
+      Err(SaveFailure::Recovery { backup_path, replace_error, restore_error }) => CommandResult::failure(
         "SAVE_FAILED",
         format!(
           "保存失败，无法自动恢复原文件。草稿已保留。备份路径：{}。替换错误：{}。恢复错误：{}。",
@@ -109,10 +97,7 @@ impl SaveBaseline {
 fn save_io_error(error: io::Error) -> CommandResult<DocumentPayload> {
   match error.kind() {
     io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。"),
-    _ => CommandResult::failure(
-      "SAVE_FAILED",
-      "保存失败，请检查权限或文件状态。草稿已保留。",
-    ),
+    _ => CommandResult::failure("SAVE_FAILED", "保存失败，请检查权限或文件状态。草稿已保留。"),
   }
 }
 
@@ -123,11 +108,7 @@ enum SaveStage {
   Replace,
 }
 
-pub fn atomic_write(
-  path: &Path,
-  content: &[u8],
-  expected: &ContentDigest,
-) -> Result<Metadata, SaveFailure> {
+pub fn atomic_write(path: &Path, content: &[u8], expected: &ContentDigest) -> Result<Metadata, SaveFailure> {
   atomic_write_with(path, content, expected, |_| Ok(()))
 }
 
@@ -150,20 +131,15 @@ fn atomic_write_with(
     return Err(io::Error::new(io::ErrorKind::PermissionDenied, "target is not writable").into());
   }
   check_disk(path, expected)?;
-  let parent = path
-    .parent()
-    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing directory"))?;
-  let mut temporary = tempfile::Builder::new()
-    .prefix(".vellora-save-")
-    .tempfile_in(parent)?;
+  let parent =
+    path.parent().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing directory"))?;
+  let mut temporary = tempfile::Builder::new().prefix(".vellora-save-").tempfile_in(parent)?;
   before(SaveStage::Write)?;
   temporary.write_all(content)?;
   // Windows ReplaceFileW merges the original file's ACL and attributes. On Unix,
   // rename replaces the inode, so copy its mode before making the new file durable.
   #[cfg(not(windows))]
-  temporary
-    .as_file()
-    .set_permissions(metadata.permissions())?;
+  temporary.as_file().set_permissions(metadata.permissions())?;
   before(SaveStage::Sync)?;
   temporary.as_file().sync_all()?;
   let saved_metadata = temporary.as_file().metadata()?;
@@ -238,11 +214,7 @@ fn recover_failed_replacement(
   let target = wide_path(path);
   if unsafe { MoveFileExW(backup_name.as_ptr(), target.as_ptr(), 0) } == 0 {
     let restore_error = io::Error::last_os_error();
-    return SaveFailure::Recovery {
-      backup_path: backup.to_path_buf(),
-      replace_error,
-      restore_error,
-    };
+    return SaveFailure::Recovery { backup_path: backup.to_path_buf(), replace_error, restore_error };
   }
   replace_error.into()
 }
@@ -259,11 +231,7 @@ mod tests {
 
   fn conflict_token(result: CommandResult<DocumentPayload>) -> String {
     match result {
-      CommandResult::Err {
-        code,
-        conflict_token: Some(token),
-        ..
-      } => {
+      CommandResult::Err { code, conflict_token: Some(token), .. } => {
         assert_eq!(code, "FILE_CHANGED");
         token
       }
@@ -303,8 +271,7 @@ mod tests {
     let mut first = SaveBaseline::new("original");
     let token = conflict_token(first.save(path.to_str().unwrap(), "draft", None));
     let mut reopened = SaveBaseline::new("external");
-    let replacement =
-      conflict_token(reopened.save(path.to_str().unwrap(), "stale draft", Some(&token)));
+    let replacement = conflict_token(reopened.save(path.to_str().unwrap(), "stale draft", Some(&token)));
     assert_ne!(token, replacement);
     assert_eq!(fs::read_to_string(&path).unwrap(), "external");
   }
@@ -338,10 +305,7 @@ mod tests {
           Ok(())
         }
       });
-      assert!(
-        matches!(result, Err(SaveFailure::Io(_))),
-        "{failing_stage:?}"
-      );
+      assert!(matches!(result, Err(SaveFailure::Io(_))), "{failing_stage:?}");
       assert_eq!(fs::read_to_string(&path).unwrap(), "original");
       assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
@@ -383,11 +347,7 @@ mod tests {
     let dir = tempdir().unwrap();
     let path = dir.path().join("occupied.md");
     fs::write(&path, "original").unwrap();
-    let handle = fs::OpenOptions::new()
-      .read(true)
-      .share_mode(1)
-      .open(&path)
-      .unwrap();
+    let handle = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
     let result = atomic_write(&path, b"draft", &content_digest(b"original"));
     assert!(matches!(result, Err(SaveFailure::Io(_))));
     assert_eq!(fs::read(&path).unwrap(), b"original");
@@ -452,10 +412,7 @@ mod tests {
     fs::write(&path, "original").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
     atomic_write(&path, b"draft", &content_digest(b"original")).unwrap();
-    assert_eq!(
-      fs::metadata(path).unwrap().permissions().mode() & 0o777,
-      0o640
-    );
+    assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o640);
   }
 
   #[cfg(windows)]
@@ -470,13 +427,7 @@ mod tests {
     fn dacl(path: &[u16]) -> Vec<u8> {
       let mut needed = 0;
       unsafe {
-        GetFileSecurityW(
-          path.as_ptr(),
-          DACL_SECURITY_INFORMATION,
-          std::ptr::null_mut(),
-          0,
-          &mut needed,
-        );
+        GetFileSecurityW(path.as_ptr(), DACL_SECURITY_INFORMATION, std::ptr::null_mut(), 0, &mut needed);
       }
       assert!(needed > 0);
       let mut descriptor = vec![0u8; needed as usize];
@@ -501,12 +452,7 @@ mod tests {
     let mut defaulted = 0;
     let mut acl = std::ptr::null_mut();
     let ok = unsafe {
-      GetSecurityDescriptorDacl(
-        descriptor.as_mut_ptr().cast(),
-        &mut present,
-        &mut acl,
-        &mut defaulted,
-      )
+      GetSecurityDescriptorDacl(descriptor.as_mut_ptr().cast(), &mut present, &mut acl, &mut defaulted)
     };
     assert_ne!(ok, 0, "{}", io::Error::last_os_error());
     assert_ne!(present, 0);
@@ -523,22 +469,13 @@ mod tests {
     };
     assert_eq!(error, 0);
     let before = dacl(&wide);
-    assert_ne!(
-      u16::from_le_bytes([before[2], before[3]]) & SE_DACL_PROTECTED,
-      0
-    );
+    assert_ne!(u16::from_le_bytes([before[2], before[3]]) & SE_DACL_PROTECTED, 0);
     atomic_write(&path, b"draft", &content_digest(b"original")).unwrap();
     let after = dacl(&wide);
-    assert_ne!(
-      u16::from_le_bytes([after[2], after[3]]) & SE_DACL_PROTECTED,
-      0
-    );
+    assert_ne!(u16::from_le_bytes([after[2], after[3]]) & SE_DACL_PROTECTED, 0);
     // The auto-inherited bookkeeping bit may change; the ACL itself and its
     // protection against parent inheritance must be preserved exactly.
     let acl_offset = |data: &[u8]| u32::from_le_bytes(data[16..20].try_into().unwrap()) as usize;
-    assert!(
-      after[acl_offset(&after)..] == before[acl_offset(&before)..],
-      "target ACL changed"
-    );
+    assert!(after[acl_offset(&after)..] == before[acl_offset(&before)..], "target ACL changed");
   }
 }

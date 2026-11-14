@@ -92,11 +92,8 @@ fn write_list(list: &List, out: &mut String, indent: &str) {
     if index > 0 {
       out.push_str(if list.loose { "\n\n" } else { "\n" });
     }
-    let marker = if list.ordered {
-      format!("{}{}", list.start + index as u64, list.delimiter)
-    } else {
-      "-".to_string()
-    };
+    let marker =
+      if list.ordered { format!("{}{}", list.start + index as u64, list.delimiter) } else { "-".to_string() };
     out.push_str(indent);
     out.push_str(&marker);
     out.push(' ');
@@ -147,10 +144,7 @@ fn push_indented(out: &mut String, body: &str, continuation: &str, already_inden
 }
 
 fn write_table(table: &Table, out: &mut String) {
-  let columns = table
-    .header
-    .len()
-    .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
+  let columns = table.header.len().max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
   if columns == 0 {
     return;
   }
@@ -211,12 +205,17 @@ pub fn serialize_inlines(inlines: &[Inline]) -> String {
     let inline = &inlines[index];
     if let Some(link) = inline.marks().link.as_ref().filter(|link| link.reference.is_some()) {
       let mut end = index + 1;
-      while end < inlines.len() && inlines[end].marks().link.as_ref() == Some(link) { end += 1; }
+      while end < inlines.len() && inlines[end].marks().link.as_ref() == Some(link) {
+        end += 1;
+      }
       let mut children = inlines[index..end].to_vec();
       for child in &mut children {
         match child {
-          Inline::Text { marks, .. } | Inline::Code { marks, .. } | Inline::HardBreak { marks } |
-          Inline::SoftBreak { marks } | Inline::Image { marks, .. } => marks.link = None,
+          Inline::Text { marks, .. }
+          | Inline::Code { marks, .. }
+          | Inline::HardBreak { marks }
+          | Inline::SoftBreak { marks }
+          | Inline::Image { marks, .. } => marks.link = None,
         }
       }
       out.push_str(&reference_link(&serialize_inlines(&children), link.reference.as_ref().unwrap()));
@@ -226,13 +225,27 @@ pub fn serialize_inlines(inlines: &[Inline]) -> String {
     // Keep a shared outer mark open across adjacent differently-marked runs.
     // Closing bold then immediately opening bold+italic creates ambiguous *****.
     let marks = inline.marks();
-    let outer = if marks.bold { 1 } else if marks.italic { 2 } else if marks.strike { 3 } else { 0 };
+    let outer = if marks.bold {
+      1
+    } else if marks.italic {
+      2
+    } else if marks.strike {
+      3
+    } else {
+      0
+    };
     let mut end = index + 1;
     if outer != 0 && marks.link.is_none() {
       while end < inlines.len() {
         let m = inlines[end].marks();
-        let shared = match outer { 1 => m.bold, 2 => m.italic, _ => m.strike };
-        if !shared || m.link.is_some() { break; }
+        let shared = match outer {
+          1 => m.bold,
+          2 => m.italic,
+          _ => m.strike,
+        };
+        if !shared || m.link.is_some() {
+          break;
+        }
         end += 1;
       }
     }
@@ -240,13 +253,23 @@ pub fn serialize_inlines(inlines: &[Inline]) -> String {
       let mut group = inlines[index..end].to_vec();
       for run in &mut group {
         let m = match run {
-          Inline::Text { marks, .. } | Inline::Code { marks, .. } |
-          Inline::HardBreak { marks } | Inline::SoftBreak { marks } |
-          Inline::Image { marks, .. } => marks,
+          Inline::Text { marks, .. }
+          | Inline::Code { marks, .. }
+          | Inline::HardBreak { marks }
+          | Inline::SoftBreak { marks }
+          | Inline::Image { marks, .. } => marks,
         };
-        match outer { 1 => m.bold = false, 2 => m.italic = false, _ => m.strike = false }
+        match outer {
+          1 => m.bold = false,
+          2 => m.italic = false,
+          _ => m.strike = false,
+        }
       }
-      let delimiter = match outer { 1 => "**", 2 => "*", _ => "~~" };
+      let delimiter = match outer {
+        1 => "**",
+        2 => "*",
+        _ => "~~",
+      };
       out.push_str(delimiter);
       out.push_str(&serialize_inlines(&group));
       out.push_str(delimiter);
@@ -263,13 +286,18 @@ pub fn serialize_inlines(inlines: &[Inline]) -> String {
       Inline::HardBreak { marks } => out.push_str(&apply_marks("\\\n", marks)),
       Inline::SoftBreak { marks } => out.push_str(&apply_marks("\n", marks)),
       Inline::Image { src, alt, title, marks, alt_source, reference } => {
-        let label = alt_source.as_ref().filter(|saved| saved.original == *alt)
-          .map(|saved| saved.source.clone()).unwrap_or_else(|| escape_text(alt));
+        let label = alt_source
+          .as_ref()
+          .filter(|saved| saved.original == *alt)
+          .map(|saved| saved.source.clone())
+          .unwrap_or_else(|| escape_text(alt));
         let body = if let Some(reference) = reference {
           format!("!{}", reference_link(&label, reference))
         } else {
           let mut body = format!("![{label}]({src}");
-          if let Some(title) = title { body.push_str(&format!(" \"{title}\"")); }
+          if let Some(title) = title {
+            body.push_str(&format!(" \"{title}\""));
+          }
           body.push(')');
           body
         };

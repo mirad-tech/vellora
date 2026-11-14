@@ -64,25 +64,16 @@ pub fn read_local_image(
   let cleaned = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
 
   if has_protocol(cleaned) || Path::new(cleaned).is_absolute() {
-    return CommandResult::failure(
-      "UNSUPPORTED_IMAGE_SOURCE",
-      "仅支持当前 Markdown 文件旁的相对路径图片。",
-    );
+    return CommandResult::failure("UNSUPPORTED_IMAGE_SOURCE", "仅支持当前 Markdown 文件旁的相对路径图片。");
   }
 
-  let extension = Path::new(cleaned)
-    .extension()
-    .and_then(|e| e.to_str())
-    .unwrap_or("");
+  let extension = Path::new(cleaned).extension().and_then(|e| e.to_str()).unwrap_or("");
   let Some(mime) = mime_for_extension(extension) else {
     return CommandResult::failure("UNSUPPORTED_IMAGE_TYPE", "不支持该图片类型。");
   };
 
   let Some(image_path) = resolve_document_relative_path(Path::new(document_path), cleaned) else {
-    return CommandResult::failure(
-      "UNSUPPORTED_IMAGE_SOURCE",
-      "仅支持当前 Markdown 文件旁的相对路径图片。",
-    );
+    return CommandResult::failure("UNSUPPORTED_IMAGE_SOURCE", "仅支持当前 Markdown 文件旁的相对路径图片。");
   };
 
   let file = match fs::File::open(&image_path) {
@@ -118,7 +109,7 @@ pub fn read_local_image(
   let mut bytes = Vec::new();
   let read_result = file.take(limit.saturating_add(1)).read_to_end(&mut bytes);
   match read_result {
-    Ok(_) => {},
+    Ok(_) => {}
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
       return CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。");
     }
@@ -131,11 +122,7 @@ pub fn read_local_image(
     return CommandResult::failure("IMAGE_TOO_LARGE", "Image exceeds the size limit.");
   }
 
-  CommandResult::success(ResolvedImage {
-    path: image_path,
-    mime,
-    bytes,
-  })
+  CommandResult::success(ResolvedImage { path: image_path, mime, bytes })
 }
 
 // Windows returns the normalized path for this actual open handle. This closes
@@ -147,9 +134,16 @@ fn opened_image_matches(file: &fs::File, expected: &Path) -> bool {
   use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
   let mut buffer = vec![0u16; 512];
   loop {
-    let length = unsafe { GetFinalPathNameByHandleW(file.as_raw_handle() as _, buffer.as_mut_ptr(), buffer.len() as u32, 0) } as usize;
-    if length == 0 || length > 32768 { return false; }
-    if length >= buffer.len() { buffer.resize(length + 1, 0); continue; }
+    let length = unsafe {
+      GetFinalPathNameByHandleW(file.as_raw_handle() as _, buffer.as_mut_ptr(), buffer.len() as u32, 0)
+    } as usize;
+    if length == 0 || length > 32768 {
+      return false;
+    }
+    if length >= buffer.len() {
+      buffer.resize(length + 1, 0);
+      continue;
+    }
     let actual = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length]));
     return actual == expected;
   }
@@ -173,17 +167,9 @@ pub fn resolve_local_image(
       src: format!("data:{};base64,{}", data.mime, BASE64.encode(&data.bytes)),
       mime: data.mime.to_string(),
     }),
-    CommandResult::Err {
-      ok: _,
-      code,
-      message,
-      conflict_token,
-    } => CommandResult::Err {
-      ok: false,
-      code,
-      message,
-      conflict_token,
-    },
+    CommandResult::Err { ok: _, code, message, conflict_token } => {
+      CommandResult::Err { ok: false, code, message, conflict_token }
+    }
   }
 }
 
@@ -292,9 +278,13 @@ mod tests {
     assert_eq!(second.bytes, b"GIF87a");
     assert_eq!(first.bytes, b"GIF89a", "returned snapshot must remain owned");
     fs::write(&img, b"GIF89ax").unwrap();
-    assert!(matches!(read_local_image(doc.to_str().unwrap(), "pic.gif", Some(6)), CommandResult::Err { code, .. } if code == "IMAGE_TOO_LARGE"));
+    assert!(
+      matches!(read_local_image(doc.to_str().unwrap(), "pic.gif", Some(6)), CommandResult::Err { code, .. } if code == "IMAGE_TOO_LARGE")
+    );
     fs::remove_file(&img).unwrap();
-    assert!(matches!(read_local_image(doc.to_str().unwrap(), "pic.gif", None), CommandResult::Err { code, .. } if code == "IMAGE_NOT_FOUND"));
+    assert!(
+      matches!(read_local_image(doc.to_str().unwrap(), "pic.gif", None), CommandResult::Err { code, .. } if code == "IMAGE_NOT_FOUND")
+    );
   }
 
   #[test]
@@ -309,5 +299,4 @@ mod tests {
     assert!(opened_image_matches(&file, &fs::canonicalize(&image).unwrap()));
     assert!(!opened_image_matches(&file, &fs::canonicalize(&other).unwrap()));
   }
-
 }

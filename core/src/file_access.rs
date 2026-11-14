@@ -70,10 +70,8 @@ pub fn read_markdown_file(file_path: &str) -> CommandResult<DocumentPayload> {
     }
   };
 
-  let name = canonical
-    .file_name()
-    .map(|n| n.to_string_lossy().into_owned())
-    .unwrap_or_else(|| trimmed.to_string());
+  let name =
+    canonical.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| trimmed.to_string());
 
   CommandResult::success(DocumentPayload {
     document: MarkdownDocument {
@@ -98,8 +96,7 @@ pub fn save_markdown_file(
 
   if !is_markdown_path(Path::new(trimmed)) {
     return Err(
-      std::io::Error::new(std::io::ErrorKind::InvalidInput, "只能保存 .md 或 .markdown 文件。")
-        .into(),
+      std::io::Error::new(std::io::ErrorKind::InvalidInput, "只能保存 .md 或 .markdown 文件。").into(),
     );
   }
 
@@ -107,10 +104,7 @@ pub fn save_markdown_file(
   let metadata = atomic_write(&path, content.as_bytes(), expected)?;
   Ok(MarkdownDocument {
     path: trimmed.to_string(),
-    name: path
-      .file_name()
-      .map(|name| name.to_string_lossy().into_owned())
-      .unwrap_or_default(),
+    name: path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
     content: content.to_string(),
     modified_at: modified_at_ms(&metadata),
     size: content.len() as u64,
@@ -118,9 +112,7 @@ pub fn save_markdown_file(
 }
 
 /// Open dialog with the picker injected by the platform layer.
-pub fn choose_markdown_file(
-  pick: impl FnOnce() -> Option<PathBuf>,
-) -> CommandResult<DocumentPayload> {
+pub fn choose_markdown_file(pick: impl FnOnce() -> Option<PathBuf>) -> CommandResult<DocumentPayload> {
   match pick() {
     Some(path) => read_markdown_file(path.to_string_lossy().as_ref()),
     None => CommandResult::failure("CANCELED", "已取消。"),

@@ -65,10 +65,7 @@ fn from_hex(byte: u8) -> Option<u8> {
   }
 }
 
-pub fn inspect_markdown_link(
-  document_path: &str,
-  raw_href: &str,
-) -> CommandResult<LinkInspectData> {
+pub fn inspect_markdown_link(document_path: &str, raw_href: &str) -> CommandResult<LinkInspectData> {
   if document_path.trim().is_empty() {
     return CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。");
   }
@@ -107,10 +104,9 @@ pub fn inspect_markdown_link(
   }
 
   match read_markdown_file(local_path.to_string_lossy().as_ref()) {
-    CommandResult::Ok { data, .. } => CommandResult::success(LinkInspectData::Markdown {
-      action: "markdown".into(),
-      document: data.document,
-    }),
+    CommandResult::Ok { data, .. } => {
+      CommandResult::success(LinkInspectData::Markdown { action: "markdown".into(), document: data.document })
+    }
     CommandResult::Err { code, message, .. } => CommandResult::failure(code, message),
   }
 }
@@ -156,12 +152,7 @@ mod tests {
 
   #[test]
   fn blocks_dangerous_protocols() {
-    for href in [
-      "javascript:alert(1)",
-      "data:text/html,hi",
-      "vbscript:msg",
-      "file:///c:/x",
-    ] {
+    for href in ["javascript:alert(1)", "data:text/html,hi", "vbscript:msg", "file:///c:/x"] {
       match inspect_markdown_link(r"C:\notes\a.md", href) {
         CommandResult::Err { code, .. } => assert_eq!(code, "DANGEROUS_PROTOCOL"),
         _ => panic!("expected dangerous for {href}"),
@@ -172,10 +163,7 @@ mod tests {
   #[test]
   fn accepts_https_external() {
     match inspect_markdown_link(r"C:\notes\a.md", "https://example.com/path") {
-      CommandResult::Ok {
-        data: LinkInspectData::External { action, url },
-        ..
-      } => {
+      CommandResult::Ok { data: LinkInspectData::External { action, url }, .. } => {
         assert_eq!(action, "external");
         assert!(url.starts_with("https://example.com/"));
       }
@@ -192,10 +180,7 @@ mod tests {
     fs::write(&b, "# b").unwrap();
 
     match inspect_markdown_link(a.to_str().unwrap(), "b.md") {
-      CommandResult::Ok {
-        data: LinkInspectData::Markdown { action, document },
-        ..
-      } => {
+      CommandResult::Ok { data: LinkInspectData::Markdown { action, document }, .. } => {
         assert_eq!(action, "markdown");
         assert_eq!(document.content, "# b");
       }
@@ -252,9 +237,7 @@ mod tests {
 
   #[test]
   fn launcher_failure_is_reported_as_open_failed() {
-    let result = open_external_url("https://example.com", |_| {
-      Err(std::io::Error::other("no browser"))
-    });
+    let result = open_external_url("https://example.com", |_| Err(std::io::Error::other("no browser")));
     match result {
       CommandResult::Err { code, .. } => assert_eq!(code, "OPEN_FAILED"),
       other => panic!("unexpected: {other:?}"),

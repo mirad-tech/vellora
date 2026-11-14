@@ -14,4 +14,6 @@ pub mod reliable_save;
 pub mod session;
 pub mod types;
 
-pub use types::{CommandError, CommandResult, DocumentPayload, EmptyPayload, ImagePayload, LinkInspectData, MarkdownDocument};
+pub use types::{
+  CommandError, CommandResult, DocumentPayload, EmptyPayload, ImagePayload, LinkInspectData, MarkdownDocument,
+};
