@@ -13,6 +13,13 @@ use crate::types::{CommandResult, ImagePayload};
 pub const DEFAULT_MAX_MARKDOWN_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizedImage {
+  pub path: PathBuf,
+  pub mime: &'static str,
+  pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedImage {
   pub path: PathBuf,
   pub mime: &'static str,
@@ -46,6 +53,99 @@ fn has_protocol(value: &str) -> bool {
   false
 }
 
+struct OpenedLocalImage {
+  file: fs::File,
+  metadata: fs::Metadata,
+  path: PathBuf,
+  mime: &'static str,
+  limit: u64,
+}
+
+fn open_authorized_local_image<T>(
+  document_path: &str,
+  raw_src: &str,
+  max_bytes: Option<u64>,
+) -> Result<OpenedLocalImage, CommandResult<T>> {
+  if document_path.trim().is_empty() {
+    return Err(CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。"));
+  }
+  if raw_src.trim().is_empty() {
+    return Err(CommandResult::failure("INVALID_ARGUMENT", "图片路径无效。"));
+  }
+
+  let trimmed = raw_src.trim();
+  let cleaned = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+
+  if has_protocol(cleaned) || Path::new(cleaned).is_absolute() {
+    return Err(CommandResult::failure(
+      "UNSUPPORTED_IMAGE_SOURCE",
+      "仅支持当前 Markdown 文件旁的相对路径图片。",
+    ));
+  }
+
+  let extension = Path::new(cleaned).extension().and_then(|e| e.to_str()).unwrap_or("");
+  let Some(mime) = mime_for_extension(extension) else {
+    return Err(CommandResult::failure("UNSUPPORTED_IMAGE_TYPE", "不支持该图片类型。"));
+  };
+
+  let Some(image_path) = resolve_document_relative_path(Path::new(document_path), cleaned) else {
+    return Err(CommandResult::failure(
+      "UNSUPPORTED_IMAGE_SOURCE",
+      "仅支持当前 Markdown 文件旁的相对路径图片。",
+    ));
+  };
+
+  let file = match fs::File::open(&image_path) {
+    Ok(file) => file,
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+      return Err(CommandResult::failure("IMAGE_NOT_FOUND", "Image no longer exists."));
+    }
+    Err(_) => return Err(CommandResult::failure("IMAGE_READ_FAILED", "Cannot open image.")),
+  };
+  // Validate the opened object, not just the earlier pathname lookup.
+  if !opened_image_matches(&file, &image_path) {
+    return Err(CommandResult::failure("UNSUPPORTED_IMAGE_SOURCE", "Image path changed while opening."));
+  }
+  let metadata = match file.metadata() {
+    Ok(m) => m,
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+      return Err(CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。"));
+    }
+    Err(_) => {
+      return Err(CommandResult::failure("IMAGE_READ_FAILED", "无法读取图片，请检查权限或文件状态。"));
+    }
+  };
+
+  if !metadata.is_file() {
+    return Err(CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。"));
+  }
+
+  let limit = max_bytes.unwrap_or(DEFAULT_MAX_MARKDOWN_IMAGE_BYTES);
+  if metadata.len() > limit {
+    return Err(CommandResult::failure("IMAGE_TOO_LARGE", "图片过大，已跳过。"));
+  }
+
+  Ok(OpenedLocalImage { file, metadata, path: image_path, mime, limit })
+}
+
+/// Authorize a local image (path boundary, extension, open-handle canonical match,
+/// and metadata size limit) without reading file payload bytes.
+pub fn authorize_local_image(
+  document_path: &str,
+  raw_src: &str,
+  max_bytes: Option<u64>,
+) -> CommandResult<AuthorizedImage> {
+  let opened = match open_authorized_local_image(document_path, raw_src, max_bytes) {
+    Ok(opened) => opened,
+    Err(failure) => return failure,
+  };
+  CommandResult::success(AuthorizedImage {
+    path: opened.path,
+    mime: opened.mime,
+    size: opened.metadata.len(),
+  })
+}
+
 /// Resolve and read a local image. Shared by every image entry point so a new
 /// view cannot bypass the size, type, or directory-boundary rules.
 pub fn read_local_image(
@@ -53,61 +153,14 @@ pub fn read_local_image(
   raw_src: &str,
   max_bytes: Option<u64>,
 ) -> CommandResult<ResolvedImage> {
-  if document_path.trim().is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。");
-  }
-  if raw_src.trim().is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "图片路径无效。");
-  }
-
-  let trimmed = raw_src.trim();
-  let cleaned = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
-
-  if has_protocol(cleaned) || Path::new(cleaned).is_absolute() {
-    return CommandResult::failure("UNSUPPORTED_IMAGE_SOURCE", "仅支持当前 Markdown 文件旁的相对路径图片。");
-  }
-
-  let extension = Path::new(cleaned).extension().and_then(|e| e.to_str()).unwrap_or("");
-  let Some(mime) = mime_for_extension(extension) else {
-    return CommandResult::failure("UNSUPPORTED_IMAGE_TYPE", "不支持该图片类型。");
+  let opened = match open_authorized_local_image(document_path, raw_src, max_bytes) {
+    Ok(opened) => opened,
+    Err(failure) => return failure,
   };
 
-  let Some(image_path) = resolve_document_relative_path(Path::new(document_path), cleaned) else {
-    return CommandResult::failure("UNSUPPORTED_IMAGE_SOURCE", "仅支持当前 Markdown 文件旁的相对路径图片。");
-  };
-
-  let file = match fs::File::open(&image_path) {
-    Ok(file) => file,
-    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return CommandResult::failure("IMAGE_NOT_FOUND", "Image no longer exists.");
-    }
-    Err(_) => return CommandResult::failure("IMAGE_READ_FAILED", "Cannot open image."),
-  };
-  // Validate the opened object, not just the earlier pathname lookup.
-  if !opened_image_matches(&file, &image_path) {
-    return CommandResult::failure("UNSUPPORTED_IMAGE_SOURCE", "Image path changed while opening.");
-  }
-  let metadata = match file.metadata() {
-    Ok(m) => m,
-    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。");
-    }
-    Err(_) => {
-      return CommandResult::failure("IMAGE_READ_FAILED", "无法读取图片，请检查权限或文件状态。");
-    }
-  };
-
-  if !metadata.is_file() {
-    return CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。");
-  }
-
-  let limit = max_bytes.unwrap_or(DEFAULT_MAX_MARKDOWN_IMAGE_BYTES);
-  if metadata.len() > limit {
-    return CommandResult::failure("IMAGE_TOO_LARGE", "图片过大，已跳过。");
-  }
-
-  let mut bytes = Vec::new();
-  let read_result = file.take(limit.saturating_add(1)).read_to_end(&mut bytes);
+  let capacity = usize::try_from(opened.metadata.len()).unwrap_or(0);
+  let mut bytes = Vec::with_capacity(capacity);
+  let read_result = opened.file.take(opened.limit.saturating_add(1)).read_to_end(&mut bytes);
   match read_result {
     Ok(_) => {}
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -118,11 +171,11 @@ pub fn read_local_image(
     }
   };
 
-  if bytes.len() as u64 > limit {
+  if bytes.len() as u64 > opened.limit {
     return CommandResult::failure("IMAGE_TOO_LARGE", "Image exceeds the size limit.");
   }
 
-  CommandResult::success(ResolvedImage { path: image_path, mime, bytes })
+  CommandResult::success(ResolvedImage { path: opened.path, mime: opened.mime, bytes })
 }
 
 // Windows returns the normalized path for this actual open handle. This closes
@@ -285,6 +338,30 @@ mod tests {
     assert!(
       matches!(read_local_image(doc.to_str().unwrap(), "pic.gif", None), CommandResult::Err { code, .. } if code == "IMAGE_NOT_FOUND")
     );
+  }
+
+  #[test]
+  fn authorize_local_image_validates_metadata_without_reading_payload() {
+    let dir = tempdir().unwrap();
+    let doc = dir.path().join("doc.md");
+    let img = dir.path().join("photo.webp");
+    fs::write(&doc, "# doc").unwrap();
+    fs::write(&img, b"RIFF1234WEBP").unwrap();
+
+    let authorized =
+      authorize_local_image(doc.to_str().unwrap(), "photo.webp?v=1", None).into_result().unwrap();
+    assert_eq!(authorized.mime, "image/webp");
+    assert_eq!(authorized.size, 12);
+    assert!(authorized.path.ends_with("photo.webp"));
+
+    assert!(matches!(
+      authorize_local_image(doc.to_str().unwrap(), "photo.webp", Some(8)),
+      CommandResult::Err { code, .. } if code == "IMAGE_TOO_LARGE"
+    ));
+    assert!(matches!(
+      authorize_local_image(doc.to_str().unwrap(), "../photo.webp", None),
+      CommandResult::Err { code, .. } if code == "UNSUPPORTED_IMAGE_SOURCE"
+    ));
   }
 
   #[test]

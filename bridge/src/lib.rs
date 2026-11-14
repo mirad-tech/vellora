@@ -405,12 +405,12 @@ pub unsafe extern "C" fn vellora_image(document_path: *const c_char, src: *const
   guarded(|| {
     let document_path = unsafe { from_c(document_path) };
     let src = unsafe { from_c(src) };
-    match image_access::read_local_image(&document_path, &src, None) {
+    match image_access::authorize_local_image(&document_path, &src, None) {
       CommandResult::Ok { data, .. } => json!({
         "ok": true,
         "path": data.path.to_string_lossy(),
         "mime": data.mime,
-        "bytes": data.bytes.len(),
+        "bytes": data.size,
       }),
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
