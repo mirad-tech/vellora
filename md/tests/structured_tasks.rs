@@ -48,11 +48,10 @@ fn task_state_participates_in_content_equality_and_source_digest() {
 
 #[test]
 fn unsupported_task_children_remain_verbatim_raw() {
-  for source in ["- [ ] <span>HTML</span>\n"] {
-    let doc = parse(source);
-    assert!(matches!(doc.segments[0].block, Block::RawSource(_)));
-    assert_eq!(to_markdown(&doc, "\n"), source);
-  }
+  let source = "- [ ] <span>HTML</span>\n";
+  let doc = parse(source);
+  assert!(matches!(doc.segments[0].block, Block::RawSource(_)));
+  assert_eq!(to_markdown(&doc, "\n"), source);
 }
 
 #[test]

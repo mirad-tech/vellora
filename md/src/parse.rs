@@ -158,10 +158,8 @@ fn top_level_ranges(events: &[(Event, std::ops::Range<usize>)]) -> Vec<(usize, u
           }
         }
       }
-      Event::Rule | Event::Html(_) => {
-        if depth == 0 {
-          ranges.push((index, index));
-        }
+      Event::Rule | Event::Html(_) if depth == 0 => {
+        ranges.push((index, index));
       }
       _ => {}
     }

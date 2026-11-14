@@ -188,7 +188,7 @@ pub fn apply_edits(document: &mut Document, edits: &[(usize, String)]) -> usize 
 pub fn apply_edits_checked(document: &mut Document, edits: &[(usize, String)]) -> Result<usize, &'static str> {
   validate_edits(document, edits)?;
   let mut ordered: Vec<_> = edits.iter().collect();
-  ordered.sort_by(|a, b| b.0.cmp(&a.0));
+  ordered.sort_by_key(|b| std::cmp::Reverse(b.0));
   for (index, markdown) in ordered {
     replace_segment(document, *index, markdown);
   }

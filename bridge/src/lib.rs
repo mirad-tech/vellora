@@ -10,9 +10,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use serde_json::{json, Value};
 use vellora_core::session::{self, SessionState};
-use vellora_core::types::{CommandResult, LinkInspectData, MarkdownDocument};
+use vellora_core::types::{CommandResult, LinkInspectData};
 use vellora_core::{file_access, image_access, link_access};
-use vellora_md::{Alignment, Block, Document, Inline, Marks, PreservedMarkdown, Table};
+use vellora_md::{Alignment, Block, Document, Inline, PreservedMarkdown, Table};
 
 static SESSION: std::sync::OnceLock<SessionState> = std::sync::OnceLock::new();
 
@@ -41,13 +41,6 @@ fn guarded(f: impl FnOnce() -> Value) -> *mut c_char {
   let result = catch_unwind(AssertUnwindSafe(f))
     .unwrap_or_else(|_| error_json("PANIC", "native bridge failed"));
   into_c_string(result)
-}
-
-fn command_error(result: &CommandResult<impl serde::Serialize>) -> Value {
-  match result {
-    CommandResult::Err { code, message, .. } => error_json(code, message),
-    CommandResult::Ok { .. } => error_json("UNEXPECTED", "unexpected success payload"),
-  }
 }
 
 fn runs_json(inlines: &[Inline]) -> Value {
@@ -152,17 +145,6 @@ fn table_json(table: &Table) -> Value {
   })
 }
 
-fn document_json(document: &Document) -> Value {
-  let mut segments = Vec::new();
-  for segment in &document.segments {
-    segments.push(json!({
-      "block": block_json(&segment.block),
-      "dirty": segment.dirty,
-    }));
-  }
-  json!({ "segments": segments })
-}
-
 fn plan_json(document: &Document) -> Value {
   let source: String = document.segments.iter().map(|s| s.source.as_str()).collect();
   let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
@@ -225,41 +207,32 @@ fn collect_outline_headings(block: &Block, result: &mut Vec<(u8, String)>) {
   }
 }
 
-fn document_payload(document: &MarkdownDocument, content: &str) -> Value {
-  let preserved = PreservedMarkdown::new(content);
-  let plan = plan_json(preserved.document());
-  json!({
-    "ok": true,
-    "document": {
-      "path": document.path,
-      "name": document.name,
-      "content": content,
-      "modifiedAt": document.modified_at,
-      "size": document.size,
-    },
-    "plan": plan,
-    "lineEnding": preserved.line_ending(),
-  })
-}
-
 #[no_mangle]
 pub extern "C" fn vellora_version() -> *mut c_char {
   into_c_string(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") }))
 }
 
+/// Releases a heap-allocated C string previously returned by a `vellora_*` bridge function.
+///
+/// # Safety
+///
+/// `pointer` must either be null or be a non-freed pointer originally returned by
+/// this crate's C string bridge functions.
 #[no_mangle]
-pub extern "C" fn vellora_free(pointer: *mut c_char) {
+pub unsafe extern "C" fn vellora_free(pointer: *mut c_char) {
   if pointer.is_null() {
     return;
   }
-  unsafe {
-    drop(CString::from_raw(pointer));
-  }
+  drop(unsafe { CString::from_raw(pointer) });
 }
 
 /// Opens a Markdown file and returns `{ok, document, plan, lineEnding}`.
+///
+/// # Safety
+///
+/// `path` must either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_open(path: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_open(path: *const c_char) -> *mut c_char {
   guarded(|| {
     let path = unsafe { from_c(path) };
     match file_access::read_markdown_file(&path) {
@@ -287,8 +260,12 @@ fn document_line_ending(source: &str) -> &'static str {
 }
 
 /// Renders Markdown bytes into the neutral plan without touching the session.
+///
+/// # Safety
+///
+/// `content` must either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_plan(content: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_plan(content: *const c_char) -> *mut c_char {
   guarded(|| {
     let content = unsafe { from_c(content) };
     let preserved = PreservedMarkdown::new(&content);
@@ -297,8 +274,13 @@ pub extern "C" fn vellora_plan(content: *const c_char) -> *mut c_char {
 }
 
 /// Saves through the session; `token` may be empty for a first attempt.
+///
+/// # Safety
+///
+/// `path`, `content`, and `token` must each either be null or point to a valid
+/// NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_save(
+pub unsafe extern "C" fn vellora_save(
   path: *const c_char,
   content: *const c_char,
   token: *const c_char,
@@ -324,8 +306,12 @@ pub extern "C" fn vellora_save(
 
 /// Pure splice: indices belong to the explicitly supplied draft, never global
 /// session state. A failed batch has no side effects and a retry is deterministic.
+///
+/// # Safety
+///
+/// `content` and `edits` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_splice(content: *const c_char, edits: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_splice(content: *const c_char, edits: *const c_char) -> *mut c_char {
   guarded(|| {
     let content = unsafe { from_c(content) };
     let raw = unsafe { from_c(edits) };
@@ -335,8 +321,12 @@ pub extern "C" fn vellora_splice(content: *const c_char, edits: *const c_char) -
 
 /// Text-only pure splice for editor draft collection. The validation and source
 /// preservation contract is identical to vellora_splice; no render plan is built.
+///
+/// # Safety
+///
+/// `content` and `edits` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_splice_text(content: *const c_char, edits: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_splice_text(content: *const c_char, edits: *const c_char) -> *mut c_char {
   guarded(|| {
     let content = unsafe { from_c(content) };
     let raw = unsafe { from_c(edits) };
@@ -381,8 +371,12 @@ fn splice_json_impl(content: &str, raw: &str, include_plan: bool) -> Value {
 }
 
 /// Validates and resolves a local image against the open document.
+///
+/// # Safety
+///
+/// `document_path` and `src` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_image(document_path: *const c_char, src: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_image(document_path: *const c_char, src: *const c_char) -> *mut c_char {
   guarded(|| {
     let document_path = unsafe { from_c(document_path) };
     let src = unsafe { from_c(src) };
@@ -400,8 +394,12 @@ pub extern "C" fn vellora_image(document_path: *const c_char, src: *const c_char
 
 /// Reads validated owned image bytes. Decoders must consume dataUrl bytes rather
 /// than reopening a pathname returned by the legacy metadata endpoint.
+///
+/// # Safety
+///
+/// `document_path` and `src` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_image_bytes(document_path: *const c_char, src: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_image_bytes(document_path: *const c_char, src: *const c_char) -> *mut c_char {
   guarded(|| {
     let document_path = unsafe { from_c(document_path) };
     let src = unsafe { from_c(src) };
@@ -413,8 +411,12 @@ pub extern "C" fn vellora_image_bytes(document_path: *const c_char, src: *const 
 }
 
 /// Link inspection: relative Markdown or an external http(s) URL.
+///
+/// # Safety
+///
+/// `document_path` and `href` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_inspect_link(
+pub unsafe extern "C" fn vellora_inspect_link(
   document_path: *const c_char,
   href: *const c_char,
 ) -> *mut c_char {
@@ -440,8 +442,12 @@ pub extern "C" fn vellora_inspect_link(
 }
 
 /// Opens a local Markdown link, switching the session on success.
+///
+/// # Safety
+///
+/// `document_path` and `href` must each either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_open_link(
+pub unsafe extern "C" fn vellora_open_link(
   document_path: *const c_char,
   href: *const c_char,
 ) -> *mut c_char {
@@ -461,8 +467,12 @@ pub extern "C" fn vellora_open_link(
 }
 
 /// Opens an HTTP(S) URL after the caller has confirmed.
+///
+/// # Safety
+///
+/// `url` must either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_open_external(url: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_open_external(url: *const c_char) -> *mut c_char {
   guarded(|| {
     let url = unsafe { from_c(url) };
     let result = link_access::open_external_url(&url, |target| {
@@ -479,8 +489,12 @@ pub extern "C" fn vellora_open_external(url: *const c_char) -> *mut c_char {
 }
 
 /// Reports whether the current session still matches `path`.
+///
+/// # Safety
+///
+/// `path` must either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn vellora_session_matches(path: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn vellora_session_matches(path: *const c_char) -> *mut c_char {
   guarded(|| {
     let path = unsafe { from_c(path) };
     let matches = session::require_session_document(state(), &path).is_ok();
@@ -619,9 +633,9 @@ mod tests {
   fn image_resolution_rejects_traversal() {
     let path = std::ffi::CString::new("C:/notes/a.md").unwrap();
     let src = std::ffi::CString::new("../secret.png").unwrap();
-    let raw = vellora_image(path.as_ptr(), src.as_ptr());
+    let raw = unsafe { vellora_image(path.as_ptr(), src.as_ptr()) };
     let text = unsafe { CStr::from_ptr(raw).to_string_lossy().into_owned() };
-    vellora_free(raw);
+    unsafe { vellora_free(raw) };
     assert!(text.contains("UNSUPPORTED_IMAGE_SOURCE"), "{text}");
   }
 
@@ -630,7 +644,7 @@ mod tests {
     let raw = guarded(|| panic!("simulated bridge panic"));
     assert!(!raw.is_null());
     let text = unsafe { CStr::from_ptr(raw).to_str().unwrap().to_owned() };
-    vellora_free(raw);
+    unsafe { vellora_free(raw) };
     let parsed: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["code"], "PANIC");
@@ -645,9 +659,9 @@ mod splice_tests {
   fn splice(source: &str, edits: Value) -> Value {
     let source = CString::new(source).unwrap();
     let edits = CString::new(edits.to_string()).unwrap();
-    let raw = vellora_splice(source.as_ptr(), edits.as_ptr());
+    let raw = unsafe { vellora_splice(source.as_ptr(), edits.as_ptr()) };
     let value = serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
-    vellora_free(raw);
+    unsafe { vellora_free(raw) };
     value
   }
 
@@ -693,7 +707,7 @@ mod session_splice_tests {
 
   fn read_result(raw: *mut c_char) -> Value {
     let result = serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
-    vellora_free(raw);
+    unsafe { vellora_free(raw) };
     result
   }
 
@@ -704,7 +718,7 @@ mod session_splice_tests {
     let path = std::env::temp_dir().join(filename);
     std::fs::write(&path, "original\n\ntail\n").unwrap();
     let cpath = CString::new(path.to_str().unwrap()).unwrap();
-    let opened = read_result(vellora_open(cpath.as_ptr()));
+    let opened = read_result(unsafe { vellora_open(cpath.as_ptr()) });
     assert_eq!(opened["ok"], true);
     let cpath = CString::new(opened["document"]["path"].as_str().unwrap()).unwrap();
     let draft = "source first\r\n\r\ninserted\r\n\r\nsource tail\n";
@@ -713,16 +727,16 @@ mod session_splice_tests {
     assert_eq!(result["content"], expected);
     let content = CString::new(expected).unwrap();
     let empty = CString::new("").unwrap();
-    let saved = read_result(vellora_save(cpath.as_ptr(), content.as_ptr(), empty.as_ptr()));
+    let saved = read_result(unsafe { vellora_save(cpath.as_ptr(), content.as_ptr(), empty.as_ptr()) });
     assert_eq!(saved["ok"], true, "{saved}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
-    let reopened = read_result(vellora_open(cpath.as_ptr()));
+    let reopened = read_result(unsafe { vellora_open(cpath.as_ptr()) });
     assert_eq!(reopened["document"]["content"], expected);
     assert_eq!(reopened["plan"], result["plan"]);
     let linked = path.with_extension("linked.md");
     std::fs::write(&linked, "linked\r\n\r\nbody\r\n").unwrap();
     let href = CString::new(linked.file_name().unwrap().to_str().unwrap()).unwrap();
-    let followed = read_result(vellora_open_link(cpath.as_ptr(), href.as_ptr()));
+    let followed = read_result(unsafe { vellora_open_link(cpath.as_ptr(), href.as_ptr()) });
     assert_eq!(followed["ok"], true, "{followed}");
     assert_eq!(followed["lineEnding"], "\r\n");
     assert_eq!(followed["document"]["content"], "linked\r\n\r\nbody\r\n");
@@ -740,9 +754,9 @@ mod text_splice_tests {
       for edits in ["[]", r#"[{"index":0,"markdown":"changed"}]"#, r#"[{"index":0,"markdown":""}]"#, r#"[{"index":99,"markdown":"x"}]"#, r#"[{"index":0,"markdown":"x"},{"index":0,"markdown":"y"}]"#, "{}", r#"[{"index":-1,"markdown":2}]"#] {
         let source_c = std::ffi::CString::new(source).unwrap();
         let edits_c = std::ffi::CString::new(edits).unwrap();
-        let pointer = vellora_splice_text(source_c.as_ptr(), edits_c.as_ptr());
+        let pointer = unsafe { vellora_splice_text(source_c.as_ptr(), edits_c.as_ptr()) };
         let text: Value = serde_json::from_str(unsafe { std::ffi::CStr::from_ptr(pointer) }.to_str().unwrap()).unwrap();
-        vellora_free(pointer);
+        unsafe { vellora_free(pointer) };
         let mut full = splice_json(source, edits);
         full.as_object_mut().unwrap().remove("plan");
         assert_eq!(text, full, "source={source:?} edits={edits}");
@@ -757,9 +771,9 @@ mod image_bytes_tests {
   fn read(path: &str, src: &str) -> Value {
     let path = CString::new(path).unwrap();
     let src = CString::new(src).unwrap();
-    let pointer = vellora_image_bytes(path.as_ptr(), src.as_ptr());
+    let pointer = unsafe { vellora_image_bytes(path.as_ptr(), src.as_ptr()) };
     let value = serde_json::from_str(unsafe { CStr::from_ptr(pointer) }.to_str().unwrap()).unwrap();
-    vellora_free(pointer);
+    unsafe { vellora_free(pointer) };
     value
   }
   #[test]
