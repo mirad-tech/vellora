@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -80,15 +81,16 @@ int main(int argc, char** argv) {
         if (!message.isObject()) { socket->abort(); return; }
         const QJsonObject object = message.object();
         const QString path = object.value("path").toString();
+        const bool source = object.value("source").toBool();
+        socket->disconnectFromServer();
         if (window.isMinimized()) window.showNormal();
         else window.show();
         window.raise();
         window.activateWindow();
         if (!path.isEmpty() && QFileInfo(path).isAbsolute() &&
             (path.endsWith(".md", Qt::CaseInsensitive) || path.endsWith(".markdown", Qt::CaseInsensitive))) {
-          window.openPath(path, object.value("source").toBool());
+          window.openPath(path, source);
         }
-        socket->disconnectFromServer();
       };
       QObject::connect(socket, &QLocalSocket::readyRead, &window, consume);
       if (socket->bytesAvailable()) consume();
@@ -129,19 +131,36 @@ int main(int argc, char** argv) {
   }
   // Opt-in capture directly from Qt; it is not a substitute for real-display
   // font/DPI and input-method acceptance.
+  qint64 maxEventLoopPauseMs = 0;
+  QElapsedTimer eventLoopClock;
+  if (!qEnvironmentVariable("VELLORA_TEST_INSTANCE").isEmpty() &&
+      !qEnvironmentVariable("VELLORA_TEST_STATE").isEmpty()) {
+    eventLoopClock.start();
+    auto* heartbeat = new QTimer(&window);
+    heartbeat->setTimerType(Qt::PreciseTimer);
+    heartbeat->setInterval(10);
+    QObject::connect(heartbeat, &QTimer::timeout, &window, [&] {
+      maxEventLoopPauseMs = qMax(maxEventLoopPauseMs, eventLoopClock.restart());
+    });
+    heartbeat->start();
+  }
   if (qEnvironmentVariableIsSet("VELLORA_SCREENSHOT")) {
-    QTimer::singleShot(2500, [&window] {
+    QTimer::singleShot(2500, [&window, &eventLoopClock, &maxEventLoopPauseMs] {
       window.grab().save(qEnvironmentVariable("VELLORA_SCREENSHOT"));
       // Only isolated process tests opt into this observation. Normal launches
       // never export the open document or read a state file.
       if (!qEnvironmentVariable("VELLORA_TEST_INSTANCE").isEmpty() &&
           !qEnvironmentVariable("VELLORA_TEST_STATE").isEmpty()) {
+        if (eventLoopClock.isValid()) {
+          maxEventLoopPauseMs = qMax(maxEventLoopPauseMs, eventLoopClock.restart());
+        }
         auto* source = window.findChild<SourceView*>();
         auto* document = window.findChild<DocumentView*>();
         const QJsonObject state{{"title", window.windowTitle()},
                                {"sourceVisible", source && source->isVisible()},
                                {"sourceText", source ? source->markdown() : QString()},
-                               {"documentText", document ? document->document()->toPlainText() : QString()}};
+                               {"documentText", document ? document->document()->toPlainText() : QString()},
+                               {"maxEventLoopPauseMs", maxEventLoopPauseMs}};
         QFile output(qEnvironmentVariable("VELLORA_TEST_STATE"));
         if (output.open(QIODevice::WriteOnly)) output.write(QJsonDocument(state).toJson());
       }
@@ -173,14 +192,24 @@ int main(int argc, char** argv) {
   if (!initialPath.isEmpty()) {
     window.openPath(initialPath, initialSource);
 #ifdef VELLORA_ENABLE_TEST_HOOKS
-    if (qEnvironmentVariableIsSet("VELLORA_SEARCH")) {
-      window.openSearchPanel(qEnvironmentVariable("VELLORA_SEARCH") == QStringLiteral("replace"));
-      if (qEnvironmentVariableIsSet("VELLORA_SEARCH_QUERY")) {
-        if (auto* edit = window.findChild<QLineEdit*>()) edit->setText(qEnvironmentVariable("VELLORA_SEARCH_QUERY"));
+    auto applyStartupHooks = [&window] {
+      if (qEnvironmentVariableIsSet("VELLORA_SEARCH")) {
+        window.openSearchPanel(qEnvironmentVariable("VELLORA_SEARCH") == QStringLiteral("replace"));
+        if (qEnvironmentVariableIsSet("VELLORA_SEARCH_QUERY")) {
+          if (auto* edit = window.findChild<QLineEdit*>())
+            edit->setText(qEnvironmentVariable("VELLORA_SEARCH_QUERY"));
+        }
       }
-    }
-    if (qEnvironmentVariableIsSet("VELLORA_SCROLL")) {
-      if (auto* view = window.findChild<DocumentView*>()) view->setScrollValue(qEnvironmentVariableIntValue("VELLORA_SCROLL"));
+      if (qEnvironmentVariableIsSet("VELLORA_SCROLL")) {
+        if (auto* view = window.findChild<DocumentView*>())
+          view->setScrollValue(qEnvironmentVariableIntValue("VELLORA_SCROLL"));
+      }
+    };
+    if (!window.isAsyncBusy()) {
+      applyStartupHooks();
+    } else {
+      QObject::connect(&window, &MainWindow::asyncIdle, &window, applyStartupHooks,
+                       Qt::SingleShotConnection);
     }
 #endif
   }

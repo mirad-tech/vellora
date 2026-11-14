@@ -31,8 +31,15 @@ class NativeRegressions : public QObject {
   }
   static DocumentView* doc(MainWindow& w) { return w.findChild<DocumentView*>(); }
   static SourceView* source(MainWindow& w) { return w.findChild<SourceView*>(); }
-  static void mode(MainWindow& w, int value) { emit w.findChild<Toolbar*>()->modeChanged(value); QCoreApplication::processEvents(); }
-  static void show(MainWindow& w, const QString& path) { w.show(); w.openPath(path); w.activateWindow(); QTest::qWait(20); }
+  static void waitIdle(MainWindow& w) {
+    QElapsedTimer timer; timer.start();
+    while (w.isAsyncBusy() && timer.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    }
+    QCoreApplication::processEvents();
+  }
+  static void mode(MainWindow& w, int value) { emit w.findChild<Toolbar*>()->modeChanged(value); waitIdle(w); }
+  static void show(MainWindow& w, const QString& path) { w.show(); w.openPath(path); waitIdle(w); w.activateWindow(); QTest::qWait(20); }
   static void sourceAppend(MainWindow& w, const QString& marker) {
     mode(w, 1); source(w)->setFocus(); QTest::keyClick(source(w), Qt::Key_End, Qt::ControlModifier); QTest::keyClicks(source(w), marker);
   }
@@ -215,9 +222,9 @@ class NativeRegressions : public QObject {
     MainWindow w;w.show();QTest::qWait(10);auto* toolbar=w.findChild<Toolbar*>();auto* modes=toolbar->findChild<SegmentedControl*>();QVERIFY(modes);QVERIFY(!modes->isEnabled());
     int tools=0;for(auto* button:toolbar->findChildren<QToolButton*>()){if(button->isCheckable()){++tools;QVERIFY(!button->isEnabled());}}QCOMPARE(tools,2);
     mode(w,1);QVERIFY(!source(w)->isVisible());w.openSearchPanel(false);QVERIFY(!w.findChild<SearchPanel*>()->isVisible());
-    const QImage empty=doc(w)->viewport()->grab().toImage();w.openPath(files_.filePath("does-not-exist.md"));QCoreApplication::processEvents();QVERIFY(!modes->isEnabled());QVERIFY(doc(w)->viewport()->grab().toImage()!=empty);
+    const QImage empty=doc(w)->viewport()->grab().toImage();w.openPath(files_.filePath("does-not-exist.md"));waitIdle(w);QVERIFY(!modes->isEnabled());QVERIFY(doc(w)->viewport()->grab().toImage()!=empty);
     const QString error=bridge::openDocument(files_.filePath("does-not-exist.md")).value("message").toString();QVERIFY(!error.isEmpty());bool shown=false;for(auto* label:toolbar->findChildren<QLabel*>())if(label->text()==error)shown=true;QVERIFY(shown);
-    const auto path=fixture("# Retried\n\nBody\n");w.openPath(path);QVERIFY(modes->isEnabled());QVERIFY(doc(w)->document()->toPlainText().contains("Retried"));
+    const auto path=fixture("# Retried\n\nBody\n");w.openPath(path);waitIdle(w);QVERIFY(modes->isEnabled());QVERIFY(doc(w)->document()->toPlainText().contains("Retried"));
     for(auto* button:toolbar->findChildren<QToolButton*>())if(button->isCheckable())QVERIFY(button->isEnabled());
   }
   void successfulSaveFeedbackClearsOnEdit() {
@@ -311,7 +318,7 @@ class NativeRegressions : public QObject {
     QCOMPARE(editor->markdown(), QString::fromUtf8(original).replace("TAIL", "TAILX"));
     QCOMPARE(read(path), original); save(w);
     QCOMPARE(read(path), QByteArray(original).replace("TAIL", "TAILX"));
-    w.openPath(fixture("# Other\n\nDifferent file\n")); QCoreApplication::processEvents();
+    w.openPath(fixture("# Other\n\nDifferent file\n")); waitIdle(w);
     QCOMPARE(editor->topInset(), 32);
   }
   void referenceReparseRefreshDoesNotEdit() {
@@ -589,7 +596,7 @@ class NativeRegressions : public QObject {
     const QByteArray expected = ("Before " + first + second + " AfterX\n").toUtf8();
     save(w); QCOMPARE(read(path), expected);
     QTest::keyClick(view, Qt::Key_Z, Qt::ControlModifier); save(w); QCOMPARE(read(path), original);
-    w.openPath(path); QCOMPARE(doc(w)->document()->toPlainText().count(QChar::ObjectReplacementCharacter), 2);
+    w.openPath(path); waitIdle(w); QCOMPARE(doc(w)->document()->toPlainText().count(QChar::ObjectReplacementCharacter), 2);
     QVERIFY(!doc(w)->hasPendingEdits()); QVERIFY(!doc(w)->document()->isUndoAvailable());
   }
   void missingImageAtomicReplacement() {
@@ -659,7 +666,7 @@ class NativeRegressions : public QObject {
     QVERIFY(changed.contains("Before")); QVERIFY(changed.contains("After"));
     if (action == 5) QCOMPARE(changed, QByteArray("Before X After\n"));
     QTest::keyClick(view, Qt::Key_Z, Qt::ControlModifier); save(w); QCOMPARE(read(path), original);
-    w.openPath(path); QCOMPARE(doc(w)->document()->toPlainText().count(QChar::ObjectReplacementCharacter), 1);
+    w.openPath(path); waitIdle(w); QCOMPARE(doc(w)->document()->toPlainText().count(QChar::ObjectReplacementCharacter), 1);
     QVERIFY(!doc(w)->hasPendingEdits());
   }
   void missingImageAdjacentInputAndSemanticCopy() {
@@ -851,12 +858,51 @@ class NativeRegressions : public QObject {
     env.insert("VELLORA_TEST_INSTANCE",token);env.insert("QT_QPA_PLATFORM","offscreen");env.insert("VELLORA_SCREENSHOT",files_.filePath(token+".png"));env.insert("VELLORA_TEST_STATE",statePath);
     env.remove("VELLORA_DIALOG");env.remove("VELLORA_SEARCH");env.remove("VELLORA_DEBUG_TREE");env.remove("VELLORA_TEST_OBSERVE");
     QProcess process;process.setProcessEnvironment(env);process.start(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../test-app/vellora.exe"),{path});QVERIFY(process.waitForStarted(5000));
-    QVERIFY2(process.waitForFinished(15000),"Structured 2MiB fixture blocked the product event loop for over 15 seconds");QCOMPARE(process.exitStatus(),QProcess::NormalExit);QCOMPARE(process.exitCode(),0);
+    QVERIFY2(process.waitForFinished(10000),"Structured 2MiB fixture test process did not finish within 10 seconds");QCOMPARE(process.exitStatus(),QProcess::NormalExit);QCOMPARE(process.exitCode(),0);
     const QJsonObject state=QJsonDocument::fromJson(read(statePath)).object();
     QCOMPARE(state.value("title").toString(),QString("Vellora"));
     QString expectedSource=QString::fromUtf8(bytes);expectedSource.replace("\r\n","\n");
     QCOMPARE(state.value("sourceText").toString(),expectedSource);
     QVERIFY(state.value("documentText").toString().size()>10000);QCOMPARE(read(path),bytes);
+    QVERIFY(state.contains("maxEventLoopPauseMs"));
+    const qint64 launchMaxPauseMs=state.value("maxEventLoopPauseMs").toInteger(-1);
+    qInfo().noquote()<<QString("LARGE_FIXTURE_EVENT_LOOP launch_max_pause_ms=%1").arg(launchMaxPauseMs);
+    QVERIFY2(launchMaxPauseMs>=0 && launchMaxPauseMs<=2500,
+             qPrintable(QString("Launch open event-loop pause %1ms exceeded 2500ms limit").arg(launchMaxPauseMs)));
+
+    // Measure event-loop max pause across async planFor mode switches on 2MiB document.
+    MainWindow w; show(w, path);
+    qint64 maxSwitchPauseMs=0; int heartbeatTicks=0;
+    QElapsedTimer clock; QTimer heartbeat;
+    heartbeat.setTimerType(Qt::PreciseTimer); heartbeat.setInterval(5);
+    connect(&heartbeat,&QTimer::timeout,&w,[&]{
+      maxSwitchPauseMs=qMax(maxSwitchPauseMs,clock.restart());
+      ++heartbeatTicks;
+    });
+    clock.start(); heartbeat.start();
+    mode(w,1);
+    maxSwitchPauseMs=qMax(maxSwitchPauseMs,clock.restart());
+    heartbeat.stop();
+    qInfo().noquote()<<QString("LARGE_FIXTURE_EVENT_LOOP to_source_max_pause_ms=%1 heartbeat_ticks=%2")
+                           .arg(maxSwitchPauseMs).arg(heartbeatTicks);
+    QVERIFY2(heartbeatTicks>=1,"Event loop did not pump during 2MiB mode switch planFor");
+    QVERIFY2(maxSwitchPauseMs<=500,
+             qPrintable(QString("Mode-switch planFor event-loop pause %1ms exceeded 500ms limit").arg(maxSwitchPauseMs)));
+  }
+  void staleModeSwitchPlanDiscardedWhenSessionAdvances() {
+    const QString sourceFile=QDir(QString::fromUtf8(QT_TESTCASE_BUILDDIR)).absoluteFilePath(QString::fromUtf8(__FILE__));
+    const QString fixturePath=QFileInfo(sourceFile).absoluteDir().absoluteFilePath("../../tests/fixtures/performance/large.md");
+    QFile input(fixturePath);QVERIFY(input.open(QIODevice::ReadOnly));
+    const auto largePath=fixture(input.readAll());
+    const auto replacementPath=fixture("# Fresh replacement\n\nBody\n");
+    MainWindow w; show(w, largePath);
+    emit w.findChild<Toolbar*>()->modeChanged(1);
+    QVERIFY(w.isAsyncBusy());
+    w.openPath(replacementPath);
+    QTRY_VERIFY_WITH_TIMEOUT(doc(w)->document()->toPlainText().contains("Fresh replacement"), 5000);
+    waitIdle(w);
+    QVERIFY(!source(w)->isVisible());
+    QVERIFY(doc(w)->isVisible());
   }
   void singleInstanceForwardsDocument_data() {
     QTest::addColumn<QString>("sourceFlag");

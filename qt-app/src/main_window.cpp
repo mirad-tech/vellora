@@ -7,8 +7,10 @@
 #include <QDragEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QHash>
 #include <QUrl>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QHBoxLayout>
 #include <QInputMethod>
 #include <QKeyEvent>
@@ -92,7 +94,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   pendingOpenTimer_.setInterval(40);
   connect(&pendingOpenTimer_, &QTimer::timeout, this, [this] {
     if (pendingOpenPath_.isEmpty()) { pendingOpenTimer_.stop(); return; }
-    if (modalOpen_ || busy_ || compositionActive()) return;
+    if (modalOpen_ || busy_ || opening_ || compositionActive()) return;
     const QString path = std::exchange(pendingOpenPath_, QString());
     const bool source = pendingOpenSource_;
     pendingOpenTimer_.stop();
@@ -213,11 +215,11 @@ bool MainWindow::compositionActive() const {
 }
 
 void MainWindow::afterComposition(std::function<void()> action) {
-  if (modalOpen_ || busy_) return;
+  if (modalOpen_ || busy_ || opening_) return;
   if (!compositionActive()) { action(); return; }
   const quint64 expectedSession = session_;
   compositionActions_.append([this, expectedSession, action] {
-    if (session_ == expectedSession && !modalOpen_ && !busy_) action();
+    if (session_ == expectedSession && !modalOpen_ && !busy_ && !opening_) action();
   });
   compositionTimer_.start();
   if (QGuiApplication::inputMethod()) QGuiApplication::inputMethod()->commit();
@@ -237,6 +239,10 @@ bool MainWindow::confirmDiscard() {
              QStringLiteral("放弃更改"), QStringLiteral("继续编辑"), true) == 2;
 }
 
+void MainWindow::notifyIfAsyncIdle() {
+  if (!opening_ && !planning_) emit asyncIdle();
+}
+
 void MainWindow::chooseFile() {
   const quint64 request = ++openRequestId_;
   afterComposition([this, request] {
@@ -250,20 +256,41 @@ void MainWindow::chooseFile() {
           QString(), QStringLiteral("Markdown 文件 (*.md *.markdown)"));
     }
     if (path.isEmpty() || request != openRequestId_) return;
+    const quint64 expectedSession = ++session_;
+    planning_ = false;
+    pendingMode_ = -1;
     opening_ = true;
     refreshIdentity();
     toolbar_->repaint();
-    const QJsonObject payload = bridge::openDocument(path);
-    opening_ = false;
-    if (payload.value("ok").toBool()) applyDocument(payload);
-    else showOpenError(payload.value("message").toString());
+    auto* watcher = new QFutureWatcher<QJsonObject>(this);
+    connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
+            [this, watcher, request, expectedSession] {
+              const QJsonObject payload = watcher->result();
+              watcher->deleteLater();
+              opening_ = false;
+              const int modeAfterOpen = std::exchange(pendingMode_, -1);
+              if (session_ != expectedSession ||
+                  (request != openRequestId_ && !pendingOpenPath_.isEmpty())) {
+                refreshIdentity();
+                notifyIfAsyncIdle();
+                return;
+              }
+              if (payload.value("ok").toBool()) {
+                applyDocument(payload);
+                if (modeAfterOpen >= 0) setMode(modeAfterOpen);
+              } else {
+                showOpenError(payload.value("message").toString());
+              }
+              notifyIfAsyncIdle();
+            });
+    watcher->setFuture(QtConcurrent::run([path] { return bridge::openDocument(path); }));
   });
 }
 
 void MainWindow::openPath(const QString& path, bool sourceMode) {
   if (path.isEmpty()) return;
   const quint64 request = ++openRequestId_;
-  if (modalOpen_ || busy_) {
+  if (modalOpen_ || busy_ || opening_) {
     // Match the legacy launch queue: preserve the latest path while a prompt
     // owns the window instead of acknowledging and silently losing the request.
     pendingOpenPath_ = path;
@@ -275,14 +302,35 @@ void MainWindow::openPath(const QString& path, bool sourceMode) {
   pendingOpenTimer_.stop();
   afterComposition([this, path, sourceMode, request] {
     if (request != openRequestId_ || !confirmDiscard() || request != openRequestId_) return;
+    const quint64 expectedSession = ++session_;
+    planning_ = false;
+    pendingMode_ = sourceMode ? kModeSource : -1;
     opening_ = true;
     refreshIdentity();
     toolbar_->repaint();
-    const QJsonObject payload = bridge::openDocument(path);
-    opening_ = false;
-    if (!payload.value("ok").toBool()) { showOpenError(payload.value("message").toString()); return; }
-    applyDocument(payload);
-    if (sourceMode) showSourceMode();
+    auto* watcher = new QFutureWatcher<QJsonObject>(this);
+    connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
+            [this, watcher, request, expectedSession] {
+              const QJsonObject payload = watcher->result();
+              watcher->deleteLater();
+              opening_ = false;
+              const int modeAfterOpen = std::exchange(pendingMode_, -1);
+              if (session_ != expectedSession ||
+                  (request != openRequestId_ && !pendingOpenPath_.isEmpty())) {
+                refreshIdentity();
+                notifyIfAsyncIdle();
+                return;
+              }
+              if (!payload.value("ok").toBool()) {
+                showOpenError(payload.value("message").toString());
+                notifyIfAsyncIdle();
+                return;
+              }
+              applyDocument(payload);
+              if (modeAfterOpen >= 0) setMode(modeAfterOpen);
+              notifyIfAsyncIdle();
+            });
+    watcher->setFuture(QtConcurrent::run([path] { return bridge::openDocument(path); }));
   });
 }
 void MainWindow::applyDocument(const QJsonObject& payload) {
@@ -382,71 +430,131 @@ bool MainWindow::collectDraft(bool showFailure) {
 }
 
 void MainWindow::setMode(int mode) {
-  if (documentPath_.isEmpty() || opening_) return;
+  if (opening_) {
+    pendingMode_ = mode;
+    return;
+  }
+  if (documentPath_.isEmpty() || planning_) return;
   const bool toSource = mode == kModeSource;
   if (toSource == !documentMode_) { toolbar_->setMode(mode); return; }
   toolbar_->setMode(documentMode_ ? kModeDocument : kModeSource);
   afterComposition([this, toSource] {
     if (toSource == !documentMode_ || !collectDraft()) return;
+    auto finishSwitch = [this](bool nowSource) {
+      toolbar_->setMode(nowSource ? kModeSource : kModeDocument);
+      refreshOutlineForDraft();
+      if (search_->isVisible()) refreshSearch(true);
+      refreshIdentity();
+      notifyIfAsyncIdle();
+    };
     if (toSource) {
       const QJsonObject anchor = sourceVisited_ ? QJsonObject() : documentView_->readingAnchor();
       documentScroll_ = documentView_->scrollValue();
       const qreal ratio = qreal(documentScroll_) / qMax(1, documentView_->verticalScrollBar()->maximum());
-      if (sourceMarkdown() != draftMarkdown_) {
-        sourceBaselineMarkdown_ = draftMarkdown_;
-        sourceView_->setMarkdown(draftMarkdown_);
-      }
-      documentMode_ = false;
-      stack_->setCurrentWidget(sourceView_);
-      QTextCursor selection(sourceView_->document());
-      const int maximum = sourceView_->document()->characterCount() - 1;
-      selection.setPosition(qBound(0, sourceSelectionStart_, maximum));
-      selection.setPosition(qBound(0, sourceSelectionEnd_, maximum), QTextCursor::KeepAnchor);
-      sourceView_->setTextCursor(selection);
-      if (sourceVisited_) {
-        sourceView_->restoreTopInset(sourceTopInset_);
-        sourceView_->verticalScrollBar()->setValue(sourceScroll_);
-      }
-      else {
-        const QJsonObject parsed = bridge::planFor(draftMarkdown_);
-        const int offset = parsed.value("ok").toBool()
-            ? sourceOffsetForReadingAnchor(anchor, parsed.value("plan").toObject()) : -1;
-        if (offset >= 0) {
+      auto applySourceSwitch = [this, ratio, finishSwitch](int initialOffset) {
+        if (sourceMarkdown() != draftMarkdown_) {
+          sourceBaselineMarkdown_ = draftMarkdown_;
+          sourceView_->setMarkdown(draftMarkdown_);
+        }
+        documentMode_ = false;
+        stack_->setCurrentWidget(sourceView_);
+        QTextCursor selection(sourceView_->document());
+        const int maximum = sourceView_->document()->characterCount() - 1;
+        selection.setPosition(qBound(0, sourceSelectionStart_, maximum));
+        selection.setPosition(qBound(0, sourceSelectionEnd_, maximum), QTextCursor::KeepAnchor);
+        sourceView_->setTextCursor(selection);
+        if (sourceVisited_) {
+          sourceView_->restoreTopInset(sourceTopInset_);
+          sourceView_->verticalScrollBar()->setValue(sourceScroll_);
+        } else if (initialOffset >= 0) {
           const quint64 expectedSession = session_;
           // Source margins and wrapping finish after the stacked widget is shown.
-          QTimer::singleShot(0, this, [this, offset, expectedSession] {
+          QTimer::singleShot(0, this, [this, initialOffset, expectedSession] {
             if (session_ == expectedSession && !documentMode_ && !compositionActive())
-              sourceView_->revealOffset(offset);
+              sourceView_->revealOffset(initialOffset);
           });
-        } else sourceView_->verticalScrollBar()->setValue(qRound(ratio * sourceView_->verticalScrollBar()->maximum()));
+        } else {
+          sourceView_->verticalScrollBar()->setValue(qRound(ratio * sourceView_->verticalScrollBar()->maximum()));
+        }
+        sourceVisited_ = true;
+        sourceView_->setFocus();
+        finishSwitch(true);
+      };
+      if (sourceVisited_) {
+        applySourceSwitch(-1);
+        return;
       }
-      sourceVisited_ = true;
-      sourceView_->setFocus();
+      const quint64 expectedSession = session_;
+      const QString markdown = draftMarkdown_;
+      planning_ = true;
+      refreshIdentity();
+      auto* watcher = new QFutureWatcher<QJsonObject>(this);
+      connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
+              [this, watcher, expectedSession, anchor, applySourceSwitch] {
+                const QJsonObject parsed = watcher->result();
+                watcher->deleteLater();
+                if (session_ != expectedSession) return;
+                planning_ = false;
+                if (!documentMode_) {
+                  refreshIdentity();
+                  notifyIfAsyncIdle();
+                  return;
+                }
+                const int offset = parsed.value("ok").toBool()
+                    ? sourceOffsetForReadingAnchor(anchor, parsed.value("plan").toObject())
+                    : -1;
+                applySourceSwitch(offset);
+              });
+      watcher->setFuture(QtConcurrent::run([markdown] { return bridge::planFor(markdown); }));
     } else {
       sourceScroll_ = sourceView_->verticalScrollBar()->value();
       sourceTopInset_ = sourceView_->topInset();
       sourceSelectionStart_ = sourceView_->textCursor().anchor();
       sourceSelectionEnd_ = sourceView_->textCursor().position();
-      if (draftMarkdown_ != documentViewMarkdown_) {
-        const auto documentSelection = documentView_->selectionState();
-        const QJsonObject result = bridge::planFor(draftMarkdown_);
-        if (!result.value("ok").toBool()) { showError(result.value("message").toString()); return; }
-        const QJsonObject plan = result.value("plan").toObject();
-        documentBaselineMarkdown_ = draftMarkdown_;
-        documentViewMarkdown_ = draftMarkdown_;
-        documentView_->setPlan(plan, documentPath_);
-        documentView_->setPreviewContext(draftMarkdown_);
-        documentView_->restoreSelectionState(documentSelection);
+      auto applyDocumentSwitch = [this, finishSwitch] {
+        documentMode_ = true;
+        stack_->setCurrentWidget(documentView_);
+        documentView_->setScrollValue(documentScroll_);
+        documentView_->setFocus();
+        finishSwitch(false);
+      };
+      if (draftMarkdown_ == documentViewMarkdown_) {
+        applyDocumentSwitch();
+        return;
       }
-      documentMode_ = true;
-      stack_->setCurrentWidget(documentView_);
-      documentView_->setScrollValue(documentScroll_);
-      documentView_->setFocus();
+      const quint64 expectedSession = session_;
+      const QString markdown = draftMarkdown_;
+      const auto documentSelection = documentView_->selectionState();
+      planning_ = true;
+      refreshIdentity();
+      auto* watcher = new QFutureWatcher<QJsonObject>(this);
+      connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
+              [this, watcher, expectedSession, markdown, documentSelection, applyDocumentSwitch] {
+                const QJsonObject result = watcher->result();
+                watcher->deleteLater();
+                if (session_ != expectedSession) return;
+                planning_ = false;
+                if (documentMode_) {
+                  refreshIdentity();
+                  notifyIfAsyncIdle();
+                  return;
+                }
+                if (!result.value("ok").toBool()) {
+                  refreshIdentity();
+                  showError(result.value("message").toString());
+                  notifyIfAsyncIdle();
+                  return;
+                }
+                const QJsonObject plan = result.value("plan").toObject();
+                documentBaselineMarkdown_ = markdown;
+                documentViewMarkdown_ = markdown;
+                documentView_->setPlan(plan, documentPath_);
+                documentView_->setPreviewContext(markdown);
+                documentView_->restoreSelectionState(documentSelection);
+                applyDocumentSwitch();
+              });
+      watcher->setFuture(QtConcurrent::run([markdown] { return bridge::planFor(markdown); }));
     }
-    toolbar_->setMode(toSource ? kModeSource : kModeDocument);
-    refreshOutlineForDraft();
-    if (search_->isVisible()) refreshSearch(true);
-    refreshIdentity();
   });
 }
 
@@ -458,8 +566,8 @@ void MainWindow::refreshIdentity() {
       : dirty_ ? QStringLiteral("有未保存更改") : QStringLiteral("Markdown 文档");
   toolbar_->setDocumentName(documentName_, status, dirty_);
   toolbar_->setDocumentAvailable(!documentPath_.isEmpty());
-  toolbar_->setBusy(busy_ || opening_);
-  toolbar_->setSaveEnabled(!documentPath_.isEmpty() && dirty_ && !busy_ && !opening_);
+  toolbar_->setBusy(busy_ || opening_ || planning_);
+  toolbar_->setSaveEnabled(!documentPath_.isEmpty() && dirty_ && !busy_ && !opening_ && !planning_);
   setWindowTitle(QStringLiteral("Vellora"));
 }
 

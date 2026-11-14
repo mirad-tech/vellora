@@ -1,4 +1,4 @@
-QT += core gui widgets svg testlib network
+QT += core gui widgets svg testlib network concurrent
 CONFIG += c++17 testcase console
 CONFIG -= debug_and_release app_bundle
 TEMPLATE = app

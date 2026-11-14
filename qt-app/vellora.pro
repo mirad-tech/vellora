@@ -1,4 +1,4 @@
-QT += core gui widgets svg network
+QT += core gui widgets svg network concurrent
 CONFIG += c++17
 CONFIG -= debug_and_release
 TEMPLATE = app

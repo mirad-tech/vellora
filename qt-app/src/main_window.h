@@ -25,10 +25,14 @@ class MainWindow : public QMainWindow {
   void showSourceMode();
   bool splicePendingEdits(QString* content);
   void openSearchPanel(bool replaceMode);
+  bool isAsyncBusy() const { return opening_ || planning_; }
 #ifdef VELLORA_CONFLICT_TEST_HOOKS
   std::function<QJsonObject(const QString&, const QString&, const QString&)> conflictSaveHook;
   std::function<QJsonObject(const QString&)> conflictReloadHook;
 #endif
+
+ signals:
+  void asyncIdle();
 
  protected:
   void closeEvent(QCloseEvent* event) override;
@@ -67,6 +71,7 @@ class MainWindow : public QMainWindow {
   bool confirmDiscard();
   bool compositionActive() const;
   void afterComposition(std::function<void()> action);
+  void notifyIfAsyncIdle();
   int ask(const QString& title, const QString& message, const QString& primary,
           const QString& secondary, bool destructive = false,
           const QString& tertiary = QString());
@@ -99,6 +104,8 @@ class MainWindow : public QMainWindow {
   bool modalOpen_ = false;
   bool busy_ = false;
   bool opening_ = false;
+  bool planning_ = false;
+  int pendingMode_ = -1;
   bool savedFeedback_ = false;
   bool sourceVisited_ = false;
   bool deferredClose_ = false;

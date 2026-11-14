@@ -51,7 +51,7 @@ $redist = Get-ChildItem -LiteralPath $redistRoot -Directory | Where-Object { $_.
 $crt = Get-ChildItem -LiteralPath (Join-Path $redist.FullName 'x64') -Directory | Where-Object Name -Like 'Microsoft.VC*.CRT' | Select-Object -First 1
 if (!$crt) { throw 'App-local x64 VC CRT not found.' }
 Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll' -File | Copy-Item -Destination $portable
-foreach ($required in @('vellora.exe','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Svg.dll','Qt6Network.dll','platforms\qwindows.dll','imageformats\qwebp.dll','msvcp140.dll','vcruntime140.dll')) {
+foreach ($required in @('vellora.exe','Qt6Core.dll','Qt6Concurrent.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Svg.dll','Qt6Network.dll','platforms\qwindows.dll','imageformats\qwebp.dll','msvcp140.dll','vcruntime140.dll')) {
   if (!(Test-Path -LiteralPath (Join-Path $portable $required))) { throw "Missing portable dependency: $required" }
 }
 $licenses = Join-Path $portable 'licenses'

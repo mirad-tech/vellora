@@ -23,9 +23,16 @@ class ConflictRegressions : public QObject {
   static QJsonObject changed(const QString& token) {
     return {{"ok", false}, {"code", "FILE_CHANGED"}, {"message", "disk changed"}, {"conflictToken", token}};
   }
+  static void waitIdle(MainWindow& w) {
+    QElapsedTimer timer; timer.start();
+    while (w.isAsyncBusy() && timer.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    }
+    QCoreApplication::processEvents();
+  }
   static void edit(MainWindow& w, bool source) {
     if (source) {
-      w.showSourceMode(); auto* view=w.findChild<SourceView*>();
+      w.showSourceMode(); waitIdle(w); auto* view=w.findChild<SourceView*>();
       view->moveCursor(QTextCursor::End); QTest::keyClicks(view,"LOCAL");
     } else {
       auto* view=w.findChild<DocumentView*>(); view->revealText("body");
@@ -42,7 +49,7 @@ class ConflictRegressions : public QObject {
   void overwriteRetry_data() { QTest::addColumn<bool>("source"); QTest::newRow("document")<<false; QTest::newRow("source")<<true; }
   void overwriteRetry() {
     QFETCH(bool, source);
-    MainWindow w; w.show(); w.activateWindow(); QTest::qWait(20); const QString path=fixture(); w.openPath(path); edit(w,source);
+    MainWindow w; w.show(); w.activateWindow(); QTest::qWait(20); const QString path=fixture(); w.openPath(path); waitIdle(w); edit(w,source);
     const QString local=draft(w,source);
     int calls=0, stage=0; QPointer<ModalDialog> same; QStringList tokens;
     const QString failure=QStringLiteral("保存失败，无法自动恢复原文件。草稿已保留。备份路径：C:\\docs\\backup.md。");
@@ -87,7 +94,7 @@ class ConflictRegressions : public QObject {
   }
   void reloadFailure_data() { overwriteRetry_data(); }
   void reloadFailure() {
-    QFETCH(bool,source); MainWindow w;w.show();const auto path=fixture();w.openPath(path);edit(w,source);
+    QFETCH(bool,source); MainWindow w;w.show();const auto path=fixture();w.openPath(path);waitIdle(w);edit(w,source);
     const QString local=draft(w,source); int reads=0,stage=0;QPointer<ModalDialog> same;
     w.conflictSaveHook=[](const QString&,const QString&,const QString&){return changed("one");};
     w.conflictReloadHook=[&](const QString& p) {
@@ -108,9 +115,9 @@ class ConflictRegressions : public QObject {
   }
   void repeatedFindPreservesQuery_data() { overwriteRetry_data(); }
   void repeatedFindPreservesQuery() {
-    QFETCH(bool,source);MainWindow w;w.show();w.activateWindow();w.openPath(fixture());
+    QFETCH(bool,source);MainWindow w;w.show();w.activateWindow();w.openPath(fixture());waitIdle(w);
     QWidget* editor=nullptr;
-    if(source){w.showSourceMode();QTest::qWait(20);auto* v=w.findChild<SourceView*>();auto c=v->textCursor();c.setPosition(0);c.setPosition(7,QTextCursor::KeepAnchor);v->setTextCursor(c);editor=v;}
+    if(source){w.showSourceMode();waitIdle(w);QTest::qWait(20);auto* v=w.findChild<SourceView*>();auto c=v->textCursor();c.setPosition(0);c.setPosition(7,QTextCursor::KeepAnchor);v->setTextCursor(c);editor=v;}
     else {auto* v=w.findChild<DocumentView*>();QVERIFY(v->revealText("body"));editor=v;}
     editor->setFocus();QCoreApplication::processEvents();w.openSearchPanel(false);
     auto* panel=w.findChild<SearchPanel*>();auto fields=panel->findChildren<QLineEdit*>();QCOMPARE(fields.size(),2);
@@ -120,7 +127,7 @@ class ConflictRegressions : public QObject {
     QTest::keyClick(fields[1],Qt::Key_F,Qt::ControlModifier);QCOMPARE(fields[0]->text(),QString("KEEP_QUERY"));
   }
   void newestQueuedOpenWaitsForConflict() {
-    MainWindow w;w.show();const auto first=fixture();const auto middle=fixture("middle\n");const auto last=fixture("latest\n");w.openPath(first);edit(w,true);
+    MainWindow w;w.show();const auto first=fixture();const auto middle=fixture("middle\n");const auto last=fixture("latest\n");w.openPath(first);waitIdle(w);edit(w,true);
     w.conflictSaveHook=[](const QString&,const QString&,const QString&){return changed("one");};
     QTimer poll;int stage=0;QElapsedTimer time;time.start();
     connect(&poll,&QTimer::timeout,&w,[&]{
@@ -130,17 +137,17 @@ class ConflictRegressions : public QObject {
     });poll.start(5);save(w);QTRY_COMPARE_WITH_TIMEOUT(stage,2,3000);poll.stop();
     QTRY_VERIFY_WITH_TIMEOUT(w.findChild<DocumentView*>()->document()->toPlainText().contains("latest"),3000);
     QCOMPARE(w.windowTitle(),QString("Vellora"));
-    w.showSourceMode();QCOMPARE(draft(w,true),QString("latest\n"));
+    w.showSourceMode();waitIdle(w);QCOMPARE(draft(w,true),QString("latest\n"));
   }
   void reloadSuccessClosesConflict() {
-    MainWindow w;w.show();const auto path=fixture();w.openPath(path);edit(w,true);
+    MainWindow w;w.show();const auto path=fixture();w.openPath(path);waitIdle(w);edit(w,true);
     w.conflictSaveHook=[](const QString&,const QString&,const QString&){return changed("one");};
     QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));file.write("external\n");file.close();
     QTimer poll;int stage=0;
     connect(&poll,&QTimer::timeout,&w,[&]{auto* d=conflict(w);if(!d||stage)return;stage=1;
       button(d,QStringLiteral("重新加载"))->click();button(d,QStringLiteral("放弃草稿并重新加载"))->click();
     });poll.start(5);save(w);poll.stop();QCOMPARE(stage,1);QVERIFY(!conflict(w));
-    w.showSourceMode();QCOMPARE(draft(w,true),QString("external\n"));QVERIFY(!w.findChild<SourceView*>()->document()->isUndoAvailable());
+    w.showSourceMode();waitIdle(w);QCOMPARE(draft(w,true),QString("external\n"));QVERIFY(!w.findChild<SourceView*>()->document()->isUndoAvailable());
   }
   void staleConflictCannotInvokeAction() {
     QWidget host;host.resize(820,900);host.show();bool current=true;int calls=0;
@@ -149,7 +156,7 @@ class ConflictRegressions : public QObject {
     QVERIFY(answer!=2);QCOMPARE(calls,0);QVERIFY(!host.findChild<ModalDialog*>());
   }
   void sourceNoopThenDeletionExhaustsOriginalMatches() {
-    MainWindow w;w.show();w.openPath(fixture("a A\r\n"));w.showSourceMode();w.openSearchPanel(true);
+    MainWindow w;w.show();w.openPath(fixture("a A\r\n"));w.showSourceMode();waitIdle(w);w.openSearchPanel(true);
     auto* search=w.findChild<SearchPanel*>();auto fields=search->findChildren<QLineEdit*>();fields[0]->setText("a");fields[1]->setText("a");
     auto* source=w.findChild<SourceView*>();emit search->replaceRequested();QCOMPARE(source->toPlainText(),QString("a A\n"));QVERIFY(!source->document()->isUndoAvailable());
     fields[1]->setText("");emit search->replaceRequested();QCOMPARE(source->toPlainText(),QString("a \n"));
@@ -161,7 +168,7 @@ class ConflictRegressions : public QObject {
     QTest::addColumn<QString>("replacement");QTest::newRow("growth")<<QString("aa");QTest::newRow("no-op")<<QString("a");
   }
   void sourceReplacementExhaustion() {
-    QFETCH(QString,replacement);MainWindow w;w.show();w.openPath(fixture("a a a\r\n"));w.showSourceMode();w.openSearchPanel(true);
+    QFETCH(QString,replacement);MainWindow w;w.show();w.openPath(fixture("a a a\r\n"));w.showSourceMode();waitIdle(w);w.openSearchPanel(true);
     auto* search=w.findChild<SearchPanel*>();auto fields=search->findChildren<QLineEdit*>();QCOMPARE(fields.size(),2);
     fields[0]->setText("a");fields[1]->setText(replacement);auto* source=w.findChild<SourceView*>();
     for(int i=0;i<3;++i)emit search->replaceRequested();
