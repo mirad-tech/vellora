@@ -2387,35 +2387,363 @@ bool DocumentView::focusNextPrevChild(bool next) {
   return QAbstractScrollArea::focusNextPrevChild(next);
 }
 
-void DocumentView::keyPressEvent(QKeyEvent* event) {
-  searchSelection_ = false;
-  stopHeadingScroll();
+bool DocumentView::handleReadOnlyOrEmptyKey(QKeyEvent* event) {
   if (empty_) {
-    if(event->key()==Qt::Key_Return || event->key()==Qt::Key_Enter || event->key()==Qt::Key_Space){event->accept();emit openRequested();return;}
+    if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
+        event->key() == Qt::Key_Space) {
+      event->accept();
+      emit openRequested();
+      return true;
+    }
     QAbstractScrollArea::keyPressEvent(event);
-    return;
+    return true;
   }
 
   if (previewMode_ && readOnly_ && event->modifiers() == Qt::NoModifier &&
-      (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter || event->key() == Qt::Key_Space)) {
-    emit sourceEditRequested(); event->accept(); return;
+      (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
+       event->key() == Qt::Key_Space)) {
+    emit sourceEditRequested();
+    event->accept();
+    return true;
   }
-  if (readOnly_ && (event->matches(QKeySequence::Cut) || event->matches(QKeySequence::Paste) ||
-      event->matches(QKeySequence::Undo) || event->matches(QKeySequence::Redo) ||
-      event->key() == Qt::Key_Backspace || event->key() == Qt::Key_Delete ||
-      event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
-      (!event->text().isEmpty() && !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier))))) {
-    event->ignore(); return;
+
+  if (readOnly_ &&
+      (event->matches(QKeySequence::Cut) || event->matches(QKeySequence::Paste) ||
+       event->matches(QKeySequence::Undo) || event->matches(QKeySequence::Redo) ||
+       event->key() == Qt::Key_Backspace || event->key() == Qt::Key_Delete ||
+       event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
+       (!event->text().isEmpty() &&
+        !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier))))) {
+    event->ignore();
+    return true;
   }
-  if (event->text().isEmpty() || (event->modifiers() & (Qt::ControlModifier | Qt::AltModifier)))
-    typingContinuation_ = false;
+  return false;
+}
+
+namespace {
+
+int headingFontSize(int level) {
+  return level == 1 ? 30 : level == 2 ? 24 : level == 3 ? 20 : level == 4 ? 18 : 16;
+}
+
+bool blockContainsInlineImage(const QTextBlock& block) {
+  for (auto it = block.begin(); !it.atEnd(); ++it) {
+    const auto character = it.fragment().charFormat();
+    if (character.objectType() == SafeInlineImageObjectType || character.isImageFormat()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void removeLeadingListMarker(const QTextBlock& block) {
+  QTextCursor marker(block);
+  for (auto it = block.begin(); !it.atEnd(); ++it) {
+    const auto fragment = it.fragment();
+    if (!fragment.charFormat().boolProperty(ListMarkerProperty)) break;
+    marker.setPosition(fragment.position());
+    marker.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+    marker.removeSelectedText();
+    break;
+  }
+}
+
+void restyleBlockFragments(const QTextBlock& block, const QTextBlockFormat& format, int level) {
+  const bool heading = format.intProperty(RoleProperty) == RoleHeading;
+  const int size = heading ? headingFontSize(level) : kBody;
+  const bool isCodeBlock = format.intProperty(RoleProperty) == RoleCode;
+  const QColor fg = format.intProperty(QuoteDepthProperty) > 0 ? theme::muted() : theme::text();
+  for (auto it = block.begin(); !it.atEnd(); ++it) {
+    const auto fragment = it.fragment();
+    auto character = fragment.charFormat();
+    character.setFont(character.boolProperty(InlineCodeProperty) || isCodeBlock
+                          ? theme::monoFont(kCode)
+                          : theme::uiFont(size));
+    character.setFontWeight(
+        heading || character.boolProperty(MarkBoldProperty) ? QFont::DemiBold : QFont::Normal);
+    character.setFontItalic(character.boolProperty(MarkItalicProperty));
+    character.setFontStrikeOut(character.boolProperty(MarkStrikeProperty));
+    character.setForeground(fg);
+    QTextCursor span(block);
+    span.setPosition(fragment.position());
+    span.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+    span.setCharFormat(character);
+  }
+}
+
+}  // namespace
+
+bool DocumentView::handleBlockStructureShortcut(QKeyEvent* event, bool editable) {
+  if (readOnly_ || !editable) return false;
   const bool control = (event->modifiers() & Qt::ControlModifier) != 0;
   const bool shift = (event->modifiers() & Qt::ShiftModifier) != 0;
-  const QTextCursor::MoveMode moveMode = shift ? QTextCursor::KeepAnchor : QTextCursor::MoveAnchor;
-  const bool editable = blockEditable(cursor_.block());
+  const bool alt = (event->modifiers() & Qt::AltModifier) != 0;
+  const bool codeKey = control && alt && event->key() == Qt::Key_C;
+  const bool headingKey =
+      control && alt && event->key() >= Qt::Key_0 && event->key() <= Qt::Key_6;
+  const bool listKey = control && shift && !alt &&
+                       (event->key() == Qt::Key_7 || event->key() == Qt::Key_8 ||
+                        event->key() == Qt::Key_Ampersand || event->key() == Qt::Key_Asterisk);
+  const bool quoteKey = control && shift && !alt && event->key() == Qt::Key_B;
+  if (!(headingKey || listKey || quoteKey || codeKey)) return false;
+  if (protectNestedStructure(cursor_)) return true;
 
-  if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
-      (event->modifiers() & Qt::AltModifier)) {
+  QVector<QTextBlock> blocks;
+  for (auto block = document_->findBlock(cursor_.selectionStart());
+       block.isValid() && block.position() <= cursor_.selectionEnd(); block = block.next()) {
+    if (cursor_.hasSelection() && block.position() == cursor_.selectionEnd()) break;
+    const auto format = block.blockFormat();
+    if (format.boolProperty(RawProperty) || format.intProperty(RoleProperty) == RoleTable ||
+        format.intProperty(RoleProperty) == RoleImage) {
+      continue;
+    }
+    blocks.append(block);
+    if (!cursor_.hasSelection()) break;
+  }
+
+  const int level = headingKey ? event->key() - Qt::Key_0 : 0;
+  const bool ordered = event->key() == Qt::Key_7 || event->key() == Qt::Key_Ampersand;
+  const auto initial = cursor_.blockFormat();
+  const bool lift =
+      codeKey ? initial.intProperty(RoleProperty) == RoleCode
+      : headingKey ? (initial.intProperty(RoleProperty) == RoleHeading &&
+                      initial.intProperty(HeadingLevelProperty) == level)
+      : listKey ? (initial.intProperty(RoleProperty) == RoleListItem &&
+                   initial.boolProperty(ListOrderedProperty) == ordered)
+                : initial.intProperty(QuoteDepthProperty) > 0;
+
+  cursor_.beginEditBlock();
+  int number = 1;
+  for (const auto& block : blocks) {
+    auto format = block.blockFormat();
+    bool hasImage = blockContainsInlineImage(block);
+    // Code serializes plain text. Convert image objects to their Markdown
+    // spelling first, within this same undo transaction, rather than losing
+    // their alt text, destination and title as an object replacement glyph.
+    if (codeKey && !lift && hasImage) {
+      QString literal = inlineMarkdown(block);
+      literal.replace(QLatin1Char('\n'), QChar::LineSeparator);
+      QTextCursor replacement(block);
+      replacement.setPosition(block.position() + block.length() - 1, QTextCursor::KeepAnchor);
+      replacement.insertText(literal, bodyFormat());
+      hasImage = false;
+    }
+    if (!quoteKey) {
+      removeLeadingListMarker(block);
+      for (int property :
+           {ListNumberProperty, ListDepthProperty, ListOrderedProperty, ListDelimiterProperty,
+            NewListItemProperty, HeadingLevelProperty, TaskCheckedProperty, ListLooseProperty}) {
+        format.clearProperty(property);
+      }
+      format.setProperty(RoleProperty, RoleBody);
+      format.setTextIndent(0);
+      format.setLineHeight(28, QTextBlockFormat::FixedHeight);
+      format.setTopMargin(16);
+      format.setBottomMargin(0);
+    } else {
+      const int nextQuoteDepth = lift ? qMax(0, format.intProperty(QuoteDepthProperty) - 1)
+                                      : format.intProperty(QuoteDepthProperty) + 1;
+      format.setProperty(QuoteDepthProperty, nextQuoteDepth);
+      if (!format.hasProperty(ListDepthProperty)) {
+        format.setTextIndent(nextQuoteDepth == 0 && format.intProperty(RoleProperty) == RoleBody
+                                 ? chineseFirstLineIndent(block.text())
+                                 : 0);
+      }
+    }
+    if (codeKey && !lift) {
+      format.setProperty(RoleProperty, RoleCode);
+      format.setProperty(CodeLanguageProperty, QString());
+      format.setLineHeight(25.6, QTextBlockFormat::FixedHeight);
+      format.setTopMargin(32);
+      format.setBottomMargin(16);
+      format.setNonBreakableLines(true);
+    } else if (codeKey && lift) {
+      format.setNonBreakableLines(false);
+      format.clearProperty(CodeLanguageProperty);
+    }
+    if (headingKey && level && !lift) {
+      format.setProperty(RoleProperty, RoleHeading);
+      format.setProperty(HeadingLevelProperty, level);
+      format.setLineHeight(headingFontSize(level) * 1.3, QTextBlockFormat::FixedHeight);
+      format.setTopMargin(block.previous().previous().isValid() ? 32 : 0);
+    }
+    if (listKey && !lift) {
+      format.setProperty(RoleProperty, RoleListItem);
+      format.setProperty(ListDepthProperty, 0);
+      format.setProperty(ListOrderedProperty, ordered);
+      format.setProperty(ListNumberProperty, number++);
+      format.setProperty(ListDelimiterProperty, QStringLiteral("."));
+      format.setProperty(NewListItemProperty, true);
+      format.setTopMargin(0);
+    }
+    format.setLeftMargin(format.intProperty(QuoteDepthProperty) * 18 +
+                         (format.hasProperty(ListDepthProperty)
+                              ? 24 * (format.intProperty(ListDepthProperty) + 1)
+                              : 0) +
+                         (format.intProperty(RoleProperty) == RoleCode ? 16 : 0));
+    // A text-only fixed line height clips inline images after a structure
+    // change. Keep the normal text height as a minimum for these blocks.
+    if (hasImage && format.lineHeightType() == QTextBlockFormat::FixedHeight) {
+      format.setLineHeight(format.lineHeight(), QTextBlockFormat::MinimumHeight);
+    }
+    format.setProperty(StructureChangedProperty, true);
+    QTextCursor change(block);
+    change.setBlockFormat(format);
+    restyleBlockFragments(block, format, level);
+    if (listKey && !lift) {
+      const QString marker =
+          ordered ? QString::number(format.intProperty(ListNumberProperty)) + QStringLiteral(". ")
+                  : QStringLiteral("\u2022  ");
+      format.setTextIndent(-QFontMetricsF(theme::uiFont(kBody)).horizontalAdvance(marker));
+      QTextCursor item(block);
+      item.setBlockFormat(format);
+      auto mark = bodyFormat();
+      mark.setProperty(ListMarkerProperty, true);
+      item.insertText(marker, mark);
+    }
+  }
+  cursor_.endEditBlock();
+  resetCaretBlink();
+  viewport()->update();
+  return true;
+}
+
+bool DocumentView::handleInlineMarkShortcut(QKeyEvent* event, bool editable) {
+  const bool control = (event->modifiers() & Qt::ControlModifier) != 0;
+  const bool shift = (event->modifiers() & Qt::ShiftModifier) != 0;
+  const bool alt = (event->modifiers() & Qt::AltModifier) != 0;
+  if (readOnly_ || !control || alt || !editable) return false;
+  const bool basicMark = !shift && (event->key() == Qt::Key_B || event->key() == Qt::Key_I ||
+                                    event->key() == Qt::Key_E);
+  const bool strikeMark = shift && (event->key() == Qt::Key_X || event->key() == Qt::Key_S);
+  if (!basicMark && !strikeMark) return false;
+
+  QTextCharFormat format;
+  const int property = event->key() == Qt::Key_E   ? InlineCodeProperty
+                       : event->key() == Qt::Key_B ? MarkBoldProperty
+                       : event->key() == Qt::Key_I ? MarkItalicProperty
+                                                   : MarkStrikeProperty;
+  const bool enabled = !cursor_.charFormat().boolProperty(property);
+  format.setProperty(property, enabled);
+  if (property == InlineCodeProperty) {
+    format.setFont(enabled ? theme::monoFont(kCode) : theme::uiFont(kBody));
+    if (enabled) {
+      for (int mark : {MarkBoldProperty, MarkItalicProperty, MarkStrikeProperty}) {
+        format.setProperty(mark, false);
+      }
+      format.setFontWeight(QFont::Normal);
+      format.setFontItalic(false);
+      format.setFontStrikeOut(false);
+      format.setAnchor(false);
+      format.setAnchorHref(QString());
+    }
+  }
+  if (property == MarkBoldProperty) {
+    format.setFontWeight(
+        enabled || cursor_.blockFormat().intProperty(RoleProperty) == RoleHeading
+            ? QFont::DemiBold
+            : QFont::Normal);
+  }
+  if (property == MarkItalicProperty) format.setFontItalic(enabled);
+  if (property == MarkStrikeProperty) format.setFontStrikeOut(enabled);
+  cursor_.mergeCharFormat(format);
+  viewport()->update();
+  return true;
+}
+
+bool DocumentView::handleCodeBlockKey(QKeyEvent* event, bool editable) {
+  if (readOnly_ || !editable ||
+      cursor_.blockFormat().intProperty(RoleProperty) != RoleCode ||
+      cursor_.blockFormat().boolProperty(RawProperty)) {
+    return false;
+  }
+  const bool control = (event->modifiers() & Qt::ControlModifier) != 0;
+  const bool shift = (event->modifiers() & Qt::ShiftModifier) != 0;
+  const bool atStart = cursor_.position() == cursor_.block().position();
+  const bool atEnd =
+      cursor_.position() == cursor_.block().position() + cursor_.block().length() - 1;
+
+  if (event->key() == Qt::Key_Backspace && !cursor_.hasSelection() && atStart &&
+      (cursor_.block().text().isEmpty() || !cursor_.block().previous().previous().isValid())) {
+    QKeyEvent toggle(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier | Qt::AltModifier);
+    keyPressEvent(&toggle);
+    return true;
+  }
+
+  if (!cursor_.hasSelection() && !shift && !control &&
+      ((event->key() == Qt::Key_Up && atStart && !cursor_.block().previous().previous().isValid()) ||
+       (event->key() == Qt::Key_Down && atEnd &&
+        (!cursor_.block().next().isValid() || segmentOf(cursor_.block().next()) < 0)))) {
+    if (protectNestedStructure(cursor_)) return true;
+    const bool before = event->key() == Qt::Key_Up;
+    cursor_.beginEditBlock();
+    auto original = cursor_.blockFormat();
+    original.setProperty(StructureChangedProperty, true);
+    auto body = bodyBlock();
+    body.setProperty(NodeProperty, original.intProperty(NodeProperty));
+    body.setProperty(SegmentProperty, segmentOf(cursor_.block()));
+    body.setProperty(StructureChangedProperty, true);
+    cursor_.insertBlock(before ? original : body, before ? cursor_.charFormat() : bodyFormat());
+    if (before) {
+      cursor_.movePosition(QTextCursor::PreviousBlock);
+      cursor_.setBlockFormat(body);
+      cursor_.setCharFormat(bodyFormat());
+    }
+    cursor_.endEditBlock();
+    ensureCaretVisible();
+    return true;
+  }
+
+  if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) {
+    if (replacesBlockStructure(cursor_) && protectNestedStructure(cursor_)) return true;
+    const bool outdent = shift || event->key() == Qt::Key_Backtab;
+    if (cursor_.hasSelection()) {
+      QString selected = cursor_.selectedText();
+      selected.replace(QChar::ParagraphSeparator, QChar::LineSeparator);
+      auto lines = selected.split(QChar::LineSeparator);
+      for (auto& line : lines) {
+        if (outdent) {
+          int count = 0;
+          while (count < 2 && count < line.size() && line.at(count) == QLatin1Char(' ')) ++count;
+          line.remove(0, count);
+        } else {
+          line.prepend(QStringLiteral("  "));
+        }
+      }
+      cursor_.beginEditBlock();
+      cursor_.insertText(lines.join(QChar::LineSeparator));
+      cursor_.endEditBlock();
+    } else if (!outdent) {
+      insertTyped(QStringLiteral("  "));
+    } else {
+      const auto block = cursor_.block();
+      const QString text = block.text();
+      const int offset = cursor_.position() - block.position();
+      const int start = offset ? text.lastIndexOf(QChar::LineSeparator, offset - 1) + 1 : 0;
+      int count = 0;
+      while (count < 2 && start + count < text.size() && text.at(start + count) == QLatin1Char(' ')) {
+        ++count;
+      }
+      if (count) {
+        QTextCursor line(block);
+        line.setPosition(block.position() + start);
+        line.setPosition(block.position() + start + count, QTextCursor::KeepAnchor);
+        line.removeSelectedText();
+      }
+    }
+    ensureCaretVisible();
+    return true;
+  }
+  return false;
+}
+
+bool DocumentView::handleStructuralKey(QKeyEvent* event, bool editable) {
+  const bool control = (event->modifiers() & Qt::ControlModifier) != 0;
+  const bool shift = (event->modifiers() & Qt::ShiftModifier) != 0;
+  const bool isReturn = event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
+  const bool isTab = event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab;
+
+  if (isReturn && (event->modifiers() & Qt::AltModifier)) {
     QString href = cursor_.charFormat().anchorHref();
     if (href.isEmpty()) {
       QTextCursor probe = cursor_;
@@ -2423,155 +2751,85 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
       href = probe.charFormat().anchorHref();
     }
     if (!href.isEmpty()) emit linkActivated(href);
-    return;
+    return true;
   }
-  const bool alt=event->modifiers() & Qt::AltModifier;
-  const bool codeKey=control && alt && event->key()==Qt::Key_C;
-  const bool headingKey=control && alt && event->key()>=Qt::Key_0 && event->key()<=Qt::Key_6;
-  const bool listKey=control && shift && !alt && (event->key()==Qt::Key_7 || event->key()==Qt::Key_8 || event->key()==Qt::Key_Ampersand || event->key()==Qt::Key_Asterisk);
-  const bool quoteKey=control && shift && !alt && event->key()==Qt::Key_B;
-  if (!readOnly_ && editable && (headingKey || listKey || quoteKey || codeKey)) {
-    if (protectNestedStructure(cursor_)) return;
-    QVector<QTextBlock> blocks;
-    for(auto block=document_->findBlock(cursor_.selectionStart());block.isValid() && block.position()<=cursor_.selectionEnd();block=block.next()) {
-      if(cursor_.hasSelection() && block.position()==cursor_.selectionEnd())break;
-      const auto format=block.blockFormat();
-      if(format.boolProperty(RawProperty)||format.intProperty(RoleProperty)==RoleTable||format.intProperty(RoleProperty)==RoleImage)continue;
-      blocks.append(block); if(!cursor_.hasSelection())break;
+
+  if (isReturn && control && editable) {
+    if (replacesBlockStructure(cursor_) && protectNestedStructure(cursor_)) return true;
+    if (cursor_.blockFormat().intProperty(RoleProperty) != RoleCode) {
+      cursor_.insertText(QString(QChar::LineSeparator));
+      resetCaretBlink();
+      ensureCaretVisible();
+      return true;
     }
-    const int level=headingKey?event->key()-Qt::Key_0:0;
-    const bool ordered=event->key()==Qt::Key_7 || event->key()==Qt::Key_Ampersand;
-    const auto initial=cursor_.blockFormat();
-    const bool lift=codeKey?initial.intProperty(RoleProperty)==RoleCode:headingKey?(initial.intProperty(RoleProperty)==RoleHeading && initial.intProperty(HeadingLevelProperty)==level):listKey?(initial.intProperty(RoleProperty)==RoleListItem && initial.boolProperty(ListOrderedProperty)==ordered):initial.intProperty(QuoteDepthProperty)>0;
-    cursor_.beginEditBlock(); int number=1;
-    for(const auto& block:blocks) {
-      auto format=block.blockFormat();
-      bool hasImage = false;
-      for (auto it = block.begin(); !it.atEnd(); ++it) {
-        const auto character = it.fragment().charFormat();
-        hasImage |= character.objectType() == SafeInlineImageObjectType || character.isImageFormat();
-      }
-      // Code serializes plain text. Convert image objects to their Markdown
-      // spelling first, within this same undo transaction, rather than losing
-      // their alt text, destination and title as an object replacement glyph.
-      if (codeKey && !lift && hasImage) {
-        QString literal = inlineMarkdown(block);
-        literal.replace(QLatin1Char('\n'), QChar::LineSeparator);
-        QTextCursor replacement(block);
-        replacement.setPosition(block.position() + block.length() - 1, QTextCursor::KeepAnchor);
-        replacement.insertText(literal, bodyFormat());
-        hasImage = false;
-      }
-      if(!quoteKey) {
-        QTextCursor marker(block);
-        for(auto it=block.begin();!it.atEnd();++it){const auto fragment=it.fragment();if(!fragment.charFormat().boolProperty(ListMarkerProperty))break;marker.setPosition(fragment.position());marker.setPosition(fragment.position()+fragment.length(),QTextCursor::KeepAnchor);marker.removeSelectedText();break;}
-        for(int property:{ListNumberProperty,ListDepthProperty,ListOrderedProperty,ListDelimiterProperty,NewListItemProperty,HeadingLevelProperty,TaskCheckedProperty,ListLooseProperty})format.clearProperty(property);
-        format.setProperty(RoleProperty,RoleBody);format.setTextIndent(0);format.setLineHeight(28,QTextBlockFormat::FixedHeight);format.setTopMargin(16);format.setBottomMargin(0);
-      }
-      if(quoteKey) {
-        format.setProperty(QuoteDepthProperty,lift?qMax(0,format.intProperty(QuoteDepthProperty)-1):format.intProperty(QuoteDepthProperty)+1);
-        if (!format.hasProperty(ListDepthProperty))
-          format.setTextIndent(format.intProperty(QuoteDepthProperty) == 0 && format.intProperty(RoleProperty) == RoleBody
-              ? chineseFirstLineIndent(block.text()) : 0);
-      }
-      if(codeKey && !lift){format.setProperty(RoleProperty,RoleCode);format.setProperty(CodeLanguageProperty,QString());format.setLineHeight(25.6,QTextBlockFormat::FixedHeight);format.setTopMargin(32);format.setBottomMargin(16);format.setNonBreakableLines(true);}
-      if(codeKey && lift){format.setNonBreakableLines(false);format.clearProperty(CodeLanguageProperty);}
-      if(headingKey && level && !lift){format.setProperty(RoleProperty,RoleHeading);format.setProperty(HeadingLevelProperty,level);const int size=level==1?30:level==2?24:level==3?20:level==4?18:16;format.setLineHeight(size*1.3,QTextBlockFormat::FixedHeight);format.setTopMargin(block.previous().previous().isValid()?32:0);}
-      if(listKey && !lift){format.setProperty(RoleProperty,RoleListItem);format.setProperty(ListDepthProperty,0);format.setProperty(ListOrderedProperty,ordered);format.setProperty(ListNumberProperty,number++);format.setProperty(ListDelimiterProperty,QStringLiteral("."));format.setProperty(NewListItemProperty,true);format.setTopMargin(0);}
-      format.setLeftMargin(format.intProperty(QuoteDepthProperty)*18
-          + (format.hasProperty(ListDepthProperty) ? 24*(format.intProperty(ListDepthProperty)+1) : 0)
-          + (format.intProperty(RoleProperty)==RoleCode ? 16 : 0));
-      // A text-only fixed line height clips inline images after a structure
-      // change. Keep the normal text height as a minimum for these blocks.
-      if (hasImage && format.lineHeightType() == QTextBlockFormat::FixedHeight)
-        format.setLineHeight(format.lineHeight(), QTextBlockFormat::MinimumHeight);
-      format.setProperty(StructureChangedProperty,true);QTextCursor change(block);change.setBlockFormat(format);
-      for(auto it=block.begin();!it.atEnd();++it){const auto fragment=it.fragment();auto character=fragment.charFormat();const bool heading=format.intProperty(RoleProperty)==RoleHeading;const int size=heading?(level==1?30:level==2?24:level==3?20:level==4?18:16):kBody;character.setFont(character.boolProperty(InlineCodeProperty)||format.intProperty(RoleProperty)==RoleCode?theme::monoFont(kCode):theme::uiFont(size));character.setFontWeight(heading||character.boolProperty(MarkBoldProperty)?QFont::DemiBold:QFont::Normal);character.setFontItalic(character.boolProperty(MarkItalicProperty));character.setFontStrikeOut(character.boolProperty(MarkStrikeProperty));character.setForeground(format.intProperty(QuoteDepthProperty)>0?theme::muted():theme::text());QTextCursor span(block);span.setPosition(fragment.position());span.setPosition(fragment.position()+fragment.length(),QTextCursor::KeepAnchor);span.setCharFormat(character);}
-      if(listKey && !lift){const QString marker=ordered?QString::number(format.intProperty(ListNumberProperty))+QStringLiteral(". "):QStringLiteral("\u2022  ");format.setTextIndent(-QFontMetricsF(theme::uiFont(kBody)).horizontalAdvance(marker));QTextCursor item(block);item.setBlockFormat(format);auto mark=bodyFormat();mark.setProperty(ListMarkerProperty,true);item.insertText(marker,mark);}
-    }
-    cursor_.endEditBlock(); resetCaretBlink(); viewport()->update();return;
-  }
-  if (!readOnly_ && control && !alt && editable && ((!shift && (event->key()==Qt::Key_B || event->key()==Qt::Key_I || event->key()==Qt::Key_E)) || (shift && (event->key()==Qt::Key_X || event->key()==Qt::Key_S)))) {
-    QTextCharFormat format;
-    const int property=event->key()==Qt::Key_E?InlineCodeProperty:event->key()==Qt::Key_B?MarkBoldProperty:event->key()==Qt::Key_I?MarkItalicProperty:MarkStrikeProperty;
-    const bool enabled=!cursor_.charFormat().boolProperty(property);format.setProperty(property,enabled);
-    if(property==InlineCodeProperty){format.setFont(enabled?theme::monoFont(kCode):theme::uiFont(kBody));if(enabled){for(int mark:{MarkBoldProperty,MarkItalicProperty,MarkStrikeProperty})format.setProperty(mark,false);format.setFontWeight(QFont::Normal);format.setFontItalic(false);format.setFontStrikeOut(false);format.setAnchor(false);format.setAnchorHref(QString());}}
-    if(property==MarkBoldProperty)format.setFontWeight(enabled||cursor_.blockFormat().intProperty(RoleProperty)==RoleHeading?QFont::DemiBold:QFont::Normal);
-    if(property==MarkItalicProperty)format.setFontItalic(enabled);
-    if(property==MarkStrikeProperty)format.setFontStrikeOut(enabled);
-    cursor_.mergeCharFormat(format);viewport()->update();return;
-  }
-  if(!readOnly_ && editable && cursor_.blockFormat().intProperty(RoleProperty)==RoleCode && !cursor_.blockFormat().boolProperty(RawProperty)) {
-    const bool atStart=cursor_.position()==cursor_.block().position();
-    const bool atEnd=cursor_.position()==cursor_.block().position()+cursor_.block().length()-1;
-    if(event->key()==Qt::Key_Backspace && !cursor_.hasSelection() && atStart && (cursor_.block().text().isEmpty() || !cursor_.block().previous().previous().isValid())) {
-      QKeyEvent toggle(QEvent::KeyPress,Qt::Key_C,Qt::ControlModifier|Qt::AltModifier);keyPressEvent(&toggle);return;
-    }
-    if(!cursor_.hasSelection() && !shift && !control && ((event->key()==Qt::Key_Up && atStart && !cursor_.block().previous().previous().isValid()) || (event->key()==Qt::Key_Down && atEnd && (!cursor_.block().next().isValid() || segmentOf(cursor_.block().next())<0)))) {
-      if (protectNestedStructure(cursor_)) return;
-      const bool before=event->key()==Qt::Key_Up;cursor_.beginEditBlock();auto original=cursor_.blockFormat();original.setProperty(StructureChangedProperty,true);auto body=bodyBlock();body.setProperty(NodeProperty,original.intProperty(NodeProperty));body.setProperty(SegmentProperty,segmentOf(cursor_.block()));body.setProperty(StructureChangedProperty,true);
-      cursor_.insertBlock(before?original:body,before?cursor_.charFormat():bodyFormat());if(before){cursor_.movePosition(QTextCursor::PreviousBlock);cursor_.setBlockFormat(body);cursor_.setCharFormat(bodyFormat());}cursor_.endEditBlock();ensureCaretVisible();return;
-    }
-    if(event->key()==Qt::Key_Tab || event->key()==Qt::Key_Backtab) {
-      if (replacesBlockStructure(cursor_) && protectNestedStructure(cursor_)) return;
-    const bool outdent=shift||event->key()==Qt::Key_Backtab;
-      if(cursor_.hasSelection()) {
-        QString selected=cursor_.selectedText();selected.replace(QChar::ParagraphSeparator,QChar::LineSeparator);auto lines=selected.split(QChar::LineSeparator);
-        for(auto& line:lines){if(outdent){int count=0;while(count<2 && count<line.size() && line.at(count)==QLatin1Char(' '))++count;line.remove(0,count);}else line.prepend(QStringLiteral("  "));}
-        cursor_.beginEditBlock();cursor_.insertText(lines.join(QChar::LineSeparator));cursor_.endEditBlock();
-      } else if(!outdent)insertTyped(QStringLiteral("  "));
-      else {
-        const auto block=cursor_.block();const QString text=block.text();const int offset=cursor_.position()-block.position();const int start=offset?text.lastIndexOf(QChar::LineSeparator,offset-1)+1:0;
-        int count=0;while(count<2 && start+count<text.size() && text.at(start+count)==QLatin1Char(' '))++count;
-        if(count){QTextCursor line(block);line.setPosition(block.position()+start);line.setPosition(block.position()+start+count,QTextCursor::KeepAnchor);line.removeSelectedText();}
-      }
-      ensureCaretVisible();return;
-    }
-  }
-  if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && control && editable) {
-    if (replacesBlockStructure(cursor_) && protectNestedStructure(cursor_)) return;
-    if(cursor_.blockFormat().intProperty(RoleProperty)!=RoleCode){cursor_.insertText(QString(QChar::LineSeparator));resetCaretBlink();ensureCaretVisible();return;}
-    if (protectNestedStructure(cursor_)) return;
+    if (protectNestedStructure(cursor_)) return true;
     QTextBlockFormat format = bodyBlock();
-    format.setProperty(StructureChangedProperty,true);
+    format.setProperty(StructureChangedProperty, true);
     format.setProperty(NodeProperty, cursor_.blockFormat().intProperty(NodeProperty));
     format.setProperty(SegmentProperty, segmentOf(cursor_.block()));
     cursor_.movePosition(QTextCursor::EndOfBlock);
-    cursor_.insertBlock(format, bodyFormat()); resetCaretBlink(); ensureCaretVisible(); return;
+    cursor_.insertBlock(format, bodyFormat());
+    resetCaretBlink();
+    ensureCaretVisible();
+    return true;
   }
-  if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && shift && editable) {
-    if (replacesBlockStructure(cursor_) && protectNestedStructure(cursor_)) return;
-    cursor_.insertText(QString(QChar::LineSeparator)); resetCaretBlink(); ensureCaretVisible(); return;
+
+  if (isReturn && shift && editable) {
+    if (replacesBlockStructure(cursor_) && protectNestedStructure(cursor_)) return true;
+    cursor_.insertText(QString(QChar::LineSeparator));
+    resetCaretBlink();
+    ensureCaretVisible();
+    return true;
   }
-  if ((event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) && editable && cursor_.currentTable()) {
+
+  if (isTab && editable && cursor_.currentTable()) {
     QTextTable* table = cursor_.currentTable();
     const auto cell = table->cellAt(cursor_);
     const bool backward = shift || event->key() == Qt::Key_Backtab;
-    int index = cell.row() * table->columns() + cell.column() + (backward ? -1 : 1);
-    if (index < 0) return;
+    const int index = cell.row() * table->columns() + cell.column() + (backward ? -1 : 1);
+    if (index < 0) return true;
     if (index >= table->rows() * table->columns()) {
       cursor_.beginEditBlock();
       const auto prototype = cursor_.blockFormat();
       table->appendRows(1);
       for (int column = 0; column < table->columns(); ++column) {
-        QTextCursor cellCursor = table->cellAt(table->rows()-1,column).firstCursorPosition();
-        auto format = prototype; format.setProperty(TableRowProperty, table->rows()-1); format.setProperty(TableColumnProperty, column);
-        cellCursor.setBlockFormat(format); cellCursor.setCharFormat(bodyFormat());
+        QTextCursor cellCursor = table->cellAt(table->rows() - 1, column).firstCursorPosition();
+        auto format = prototype;
+        format.setProperty(TableRowProperty, table->rows() - 1);
+        format.setProperty(TableColumnProperty, column);
+        cellCursor.setBlockFormat(format);
+        cellCursor.setCharFormat(bodyFormat());
       }
       cursor_.endEditBlock();
     }
     cursor_ = table->cellAt(index / table->columns(), index % table->columns()).lastCursorPosition();
-    cursor_.movePosition(QTextCursor::StartOfBlock); resetCaretBlink(); ensureCaretVisible(); return;
+    cursor_.movePosition(QTextCursor::StartOfBlock);
+    resetCaretBlink();
+    ensureCaretVisible();
+    return true;
   }
-  if ((event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) && editable && cursor_.blockFormat().intProperty(RoleProperty) == RoleListItem) {
-    changeListLevel(shift || event->key() == Qt::Key_Backtab ? -1 : 1); return;
+
+  if (isTab && editable && cursor_.blockFormat().intProperty(RoleProperty) == RoleListItem) {
+    changeListLevel(shift || event->key() == Qt::Key_Backtab ? -1 : 1);
+    return true;
   }
-  if (event->key() == Qt::Key_Tab && editable && cursor_.blockFormat().intProperty(RoleProperty) == RoleCode) {
-    insertTyped(QStringLiteral("  ")); return;
+
+  if (event->key() == Qt::Key_Tab && editable &&
+      cursor_.blockFormat().intProperty(RoleProperty) == RoleCode) {
+    insertTyped(QStringLiteral("  "));
+    return true;
   }
+
+  return false;
+}
+
+bool DocumentView::handleClipboardAndHistoryKey(QKeyEvent* event, bool editable) {
+  const bool control = (event->modifiers() & Qt::ControlModifier) != 0;
+  const bool shift = (event->modifiers() & Qt::ShiftModifier) != 0;
+
   if (event->matches(QKeySequence::Copy)) {
     copySelection();
-    return;
+    return true;
   }
   if (event->matches(QKeySequence::Cut)) {
     if (cursor_.hasSelection()) {
@@ -2581,29 +2839,26 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
       ensureCaretVisible();
       viewport()->update();
     }
-    return;
+    return true;
   }
   if (event->matches(QKeySequence::Paste)) {
     if (editable || cursor_.hasSelection()) insertTyped(QApplication::clipboard()->text());
-    return;
+    return true;
   }
-  if (event->matches(QKeySequence::Undo) && !(control && shift && event->key()==Qt::Key_Z)) {
-    {
-      document_->undo(&cursor_);
-      resetCaretBlink();
-      ensureCaretVisible();
-      viewport()->update();
-    }
-    return;
+  if (event->matches(QKeySequence::Undo) && !(control && shift && event->key() == Qt::Key_Z)) {
+    document_->undo(&cursor_);
+    resetCaretBlink();
+    ensureCaretVisible();
+    viewport()->update();
+    return true;
   }
-  if (!readOnly_ && (event->matches(QKeySequence::Redo) || (control && shift && event->key()==Qt::Key_Z))) {
-    {
-      document_->redo(&cursor_);
-      resetCaretBlink();
-      ensureCaretVisible();
-      viewport()->update();
-    }
-    return;
+  if (!readOnly_ &&
+      (event->matches(QKeySequence::Redo) || (control && shift && event->key() == Qt::Key_Z))) {
+    document_->redo(&cursor_);
+    resetCaretBlink();
+    ensureCaretVisible();
+    viewport()->update();
+    return true;
   }
   if (event->matches(QKeySequence::SelectAll)) {
     QTextCursor cursor(document_);
@@ -2611,72 +2866,112 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
     cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
     cursor_ = cursor;
     viewport()->update();
-    return;
+    return true;
   }
   if (event->key() == Qt::Key_Escape) {
     if (cursor_.hasSelection()) {
       cursor_.clearSelection();
       viewport()->update();
     }
-    return;
+    return true;
   }
-  if (event->key() == Qt::Key_Left) {
-    moveCursor(control ? QTextCursor::WordLeft : QTextCursor::Left, moveMode);
-    return;
+  return false;
+}
+
+bool DocumentView::handleNavigationAndEditKey(QKeyEvent* event) {
+  const bool control = (event->modifiers() & Qt::ControlModifier) != 0;
+  const bool shift = (event->modifiers() & Qt::ShiftModifier) != 0;
+  const QTextCursor::MoveMode moveMode =
+      shift ? QTextCursor::KeepAnchor : QTextCursor::MoveAnchor;
+
+  switch (event->key()) {
+    case Qt::Key_Left:
+      moveCursor(control ? QTextCursor::WordLeft : QTextCursor::Left, moveMode);
+      return true;
+    case Qt::Key_Right:
+      moveCursor(control ? QTextCursor::WordRight : QTextCursor::Right, moveMode);
+      return true;
+    case Qt::Key_Up:
+      moveCursor(QTextCursor::Up, moveMode);
+      return true;
+    case Qt::Key_Down:
+      moveCursor(QTextCursor::Down, moveMode);
+      return true;
+    case Qt::Key_Home:
+      if (!control) {
+        moveCursor(QTextCursor::StartOfLine, moveMode);
+      } else {
+        moveCursor(QTextCursor::Start, moveMode);
+        if (segmentOf(cursor_.block()) < 0) moveCursor(QTextCursor::NextBlock, moveMode);
+      }
+      return true;
+    case Qt::Key_End:
+      moveCursor(control ? QTextCursor::End : QTextCursor::EndOfLine, moveMode);
+      return true;
+    case Qt::Key_Backspace:
+      if (control && !cursor_.hasSelection()) {
+        cursor_.movePosition(QTextCursor::PreviousWord, QTextCursor::KeepAnchor);
+      }
+      deleteBackward();
+      return true;
+    case Qt::Key_Delete:
+      if (control && !cursor_.hasSelection()) {
+        cursor_.movePosition(QTextCursor::NextWord, QTextCursor::KeepAnchor);
+      }
+      deleteForward();
+      return true;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+      if (!control) {
+        splitBlockAtCursor();
+        return true;
+      }
+      break;
+    case Qt::Key_PageDown:
+    case Qt::Key_PageUp: {
+      const bool down = event->key() == Qt::Key_PageDown;
+      cursor_.movePosition(down ? QTextCursor::Down : QTextCursor::Up, moveMode,
+                           qMax(1, viewport()->height() / 28 - 1));
+      verticalScrollBar()->setValue(verticalScrollBar()->value() +
+                                    (down ? 1 : -1) * viewport()->height() * 9 / 10);
+      resetCaretBlink();
+      ensureCaretVisible();
+      return true;
+    }
+    default:
+      break;
   }
-  if (event->key() == Qt::Key_Right) {
-    moveCursor(control ? QTextCursor::WordRight : QTextCursor::Right, moveMode);
-    return;
-  }
-  if (event->key() == Qt::Key_Up) {
-    moveCursor(QTextCursor::Up, moveMode);
-    return;
-  }
-  if (event->key() == Qt::Key_Down) {
-    moveCursor(QTextCursor::Down, moveMode);
-    return;
-  }
-  if (event->key() == Qt::Key_Home && !control) {
-    moveCursor(QTextCursor::StartOfLine, moveMode);
-    return;
-  }
-  if (event->key() == Qt::Key_End && !control) {
-    moveCursor(QTextCursor::EndOfLine, moveMode);
-    return;
-  }
-  if (event->key() == Qt::Key_Home && control) {
-    moveCursor(QTextCursor::Start, moveMode);
-    if (segmentOf(cursor_.block()) < 0) moveCursor(QTextCursor::NextBlock, moveMode);
-    return;
-  }
-  if (event->key() == Qt::Key_End && control) {
-    moveCursor(QTextCursor::End, moveMode);
-    return;
-  }
-  if (event->key() == Qt::Key_Backspace) {
-    if (control && !cursor_.hasSelection()) cursor_.movePosition(QTextCursor::PreviousWord, QTextCursor::KeepAnchor);
-    deleteBackward();
-    return;
-  }
-  if (event->key() == Qt::Key_Delete) {
-    if (control && !cursor_.hasSelection()) cursor_.movePosition(QTextCursor::NextWord, QTextCursor::KeepAnchor);
-    deleteForward();
-    return;
-  }
-  if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && !control) {
-    splitBlockAtCursor();
-    return;
-  }
-  if (event->key() == Qt::Key_PageDown || event->key() == Qt::Key_PageUp) {
-    const bool down = event->key() == Qt::Key_PageDown;
-    cursor_.movePosition(down ? QTextCursor::Down : QTextCursor::Up, moveMode, qMax(1, viewport()->height() / 28 - 1));
-    verticalScrollBar()->setValue(verticalScrollBar()->value() + (down ? 1 : -1) * viewport()->height() * 9 / 10);
-    resetCaretBlink(); ensureCaretVisible(); return;
-  }
+
   if (!control && !event->text().isEmpty() && event->text().at(0).isPrint()) {
     insertTyped(event->text());
+    return true;
+  }
+  return false;
+}
+
+void DocumentView::keyPressEvent(QKeyEvent* event) {
+  searchSelection_ = false;
+  stopHeadingScroll();
+  if (handleReadOnlyOrEmptyKey(event)) return;
+
+  if (event->text().isEmpty() || (event->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+    typingContinuation_ = false;
+  }
+  const bool editable = blockEditable(cursor_.block());
+
+  // Alt+Return link activation precedes structure/code shortcuts, matching original dispatch order.
+  if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
+      (event->modifiers() & Qt::AltModifier)) {
+    handleStructuralKey(event, editable);
     return;
   }
+  if (handleBlockStructureShortcut(event, editable)) return;
+  if (handleInlineMarkShortcut(event, editable)) return;
+  if (handleCodeBlockKey(event, editable)) return;
+  if (handleStructuralKey(event, editable)) return;
+  if (handleClipboardAndHistoryKey(event, editable)) return;
+  if (handleNavigationAndEditKey(event)) return;
+
   QAbstractScrollArea::keyPressEvent(event);
 }
 

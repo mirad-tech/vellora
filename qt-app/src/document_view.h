@@ -240,6 +240,13 @@ class DocumentView : public QAbstractScrollArea {
   QRectF caretRectangle() const;
   void ensureCaretVisible();
   void moveCursor(QTextCursor::MoveOperation operation, QTextCursor::MoveMode mode);
+  bool handleReadOnlyOrEmptyKey(QKeyEvent* event);
+  bool handleBlockStructureShortcut(QKeyEvent* event, bool editable);
+  bool handleInlineMarkShortcut(QKeyEvent* event, bool editable);
+  bool handleCodeBlockKey(QKeyEvent* event, bool editable);
+  bool handleStructuralKey(QKeyEvent* event, bool editable);
+  bool handleClipboardAndHistoryKey(QKeyEvent* event, bool editable);
+  bool handleNavigationAndEditKey(QKeyEvent* event);
   void insertTyped(const QString& text);
   void deleteBackward();
   void deleteForward();
