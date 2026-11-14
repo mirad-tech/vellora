@@ -646,67 +646,144 @@ void DocumentView::setPlan(const QJsonObject& plan, const QString& documentPath)
   if (!query_.isEmpty()) applySearchHighlight(query_);
 }
 
-void DocumentView::buildDocument(const QJsonObject& plan) {
-  taskListPreview_ = previewMode_ && plan.value("taskListWhitespace").toBool();
-  for (auto& surface : rawSurfaces_) { delete surface.preview; }
-  rawSurfaces_.clear();
-  document_->clear();
-  tableRefs_.clear();
-  paintedTables_.clear();
+namespace {
 
-  QTextCursor cursor(document_);
-  cursor.beginEditBlock();
-
-  int nextNode = 0;
-  std::function<QJsonArray(const QJsonArray&)> annotate;
-  annotate = [&](const QJsonArray& input) {
-    QJsonArray result;
-    for (const auto& value : input) {
-      QJsonObject node = value.toObject();
-      node.insert("nodeId", nextNode++);
-      if (node.contains("blocks")) node.insert("blocks", annotate(node.value("blocks").toArray()));
-      if (node.contains("items")) {
-        QJsonArray items;
-        for (const auto& item : node.value("items").toArray()) {
-          QJsonArray children = item.toArray();
-          // Empty items are real editable paragraphs, not absent children.
-          if (children.isEmpty()) children.append(QJsonObject{{"type", "paragraph"}, {"runs", QJsonArray()}});
-          items.append(annotate(children));
-        }
-        node.insert("items", items);
-      }
-      result.append(node);
+QJsonArray annotatePlanNodes(const QJsonArray& input, int& nextNode) {
+  QJsonArray result;
+  for (const auto& value : input) {
+    QJsonObject node = value.toObject();
+    node.insert(QStringLiteral("nodeId"), nextNode++);
+    if (node.contains(QStringLiteral("blocks"))) {
+      node.insert(QStringLiteral("blocks"),
+                  annotatePlanNodes(node.value(QStringLiteral("blocks")).toArray(), nextNode));
     }
-    return result;
-  };
-  modelTree_ = annotate(plan.value("blocks").toArray());
-  const QJsonArray blocks = modelTree_;
+    if (node.contains(QStringLiteral("items"))) {
+      QJsonArray items;
+      for (const auto& item : node.value(QStringLiteral("items")).toArray()) {
+        QJsonArray children = item.toArray();
+        // Empty items are real editable paragraphs, not absent children.
+        if (children.isEmpty()) {
+          children.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("paragraph")},
+                                      {QStringLiteral("runs"), QJsonArray()}});
+        }
+        items.append(annotatePlanNodes(children, nextNode));
+      }
+      node.insert(QStringLiteral("items"), items);
+    }
+    result.append(node);
+  }
+  return result;
+}
+
+struct TableCellSpan {
+  int row = 0;
+  int column = 0;
+  int rows = 1;
+  int columns = 1;
+};
+
+bool tableSpansExceedLimits(const QJsonArray& spanRows, int bodyRowCount) {
+  if (!spanRows.isEmpty() && bodyRowCount > 255) return true;
+  qint64 spanCells = 0;
+  for (const auto& spanRow : spanRows) {
+    for (const auto& value : spanRow.toArray()) {
+      const auto span = value.toObject();
+      const int width = qMax(1, span.value(QStringLiteral("colspan")).toInt(1));
+      const int height = qMax(1, span.value(QStringLiteral("rowspan")).toInt(1));
+      spanCells += qint64(width) * height;
+      if (width > 256 || height > 256 || spanCells > 10000) return true;
+    }
+  }
+  return false;
+}
+
+void expandTableSpanGrid(const QJsonArray& spanRows, const QJsonArray& headerRows,
+                         QJsonArray& header, QJsonArray& rows, QVector<TableCellSpan>& spans,
+                         QHash<QPair<int, int>, QJsonObject>& cellHeaders) {
+  QJsonArray original;
+  original.append(header);
+  for (const auto& row : rows) original.append(row);
+
+  QVector<QVector<QJsonArray>> grid;
+  QSet<QPair<int, int>> occupied;
+  int columnCount = 0;
+  for (int row = 0; row < original.size() && row < 256; ++row) {
+    const QJsonArray cells = original.at(row).toArray();
+    const QJsonArray sizes = row < spanRows.size() ? spanRows.at(row).toArray() : QJsonArray();
+    const QJsonArray headers =
+        row < headerRows.size() ? headerRows.at(row).toArray() : QJsonArray();
+    int column = 0;
+    for (int cell = 0; cell < cells.size() && column < 256; ++cell) {
+      while (occupied.contains({row, column}) && column < 256) ++column;
+      if (column >= 256) break;
+      const QJsonObject size = cell < sizes.size() ? sizes.at(cell).toObject() : QJsonObject();
+      const int height = qBound(1, size.value(QStringLiteral("rowspan")).toInt(1), 256 - row);
+      const int width =
+          qBound(1, size.value(QStringLiteral("colspan")).toInt(1), qMax(1, 256 - column));
+      if (qint64(row + height) * (column + width) > 10000) break;
+      if (grid.size() < row + height) grid.resize(row + height);
+      for (int r = row; r < row + height; ++r) {
+        if (grid[r].size() < column + width) grid[r].resize(column + width);
+        for (int c = column; c < column + width; ++c) occupied.insert({r, c});
+      }
+      grid[row][column] = cells.at(cell).toArray();
+      if (cell < headers.size()) cellHeaders.insert({row, column}, headers.at(cell).toObject());
+      spans.append({row, column, height, width});
+      column += width;
+      columnCount = qMax(columnCount, column);
+    }
+  }
+  rows = QJsonArray();
+  for (int row = 0; row < grid.size(); ++row) {
+    QJsonArray cells;
+    for (int col = 0; col < columnCount; ++col) {
+      cells.append(col < grid[row].size() ? grid[row][col] : QJsonArray());
+    }
+    if (row == 0) {
+      header = cells;
+    } else {
+      rows.append(cells);
+    }
+  }
+}
+
+void insertInvisibleAnchorText(QTextCursor& target) {
+  QTextCharFormat invisible;
+  invisible.setFont(theme::uiFont(1));
+  invisible.setForeground(Qt::transparent);
+  target.insertText(QString(QChar(0x200B)), invisible);
+}
+
+}  // namespace
+
+struct DocumentView::BuildContext {
+  DocumentView& view;
+  QTextCursor cursor;
   int currentNode = -1;
   int quoteDepth = 0;
   QVariantList quoteListInsets;
   int currentListDepth = -1;
+  bool firstContent = true;
+  int hiddenInsertionNode = -1;
+  int hiddenInsertionSegment = -1;
+  bool afterTable = false;
+  qreal pendingInnerBottomPadding = 0;
 
-  // Qt drops the top margin of the very first block. A zero-height leading block
-  // keeps every content block able to carry its own margin (the reading view's
-  // 32px heading rhythm and the 16px code/table padding depend on it).
-  {
+  explicit BuildContext(DocumentView& owner) : view(owner), cursor(owner.document_) {}
+
+  void insertLeadingZeroHeightBlock() {
+    // Qt drops the top margin of the very first block. A zero-height leading block
+    // keeps every content block able to carry its own margin (the reading view's
+    // 32px heading rhythm and the 16px code/table padding depend on it).
     QTextBlockFormat zero;
     zero.setTopMargin(0);
     zero.setBottomMargin(0);
     zero.setLineHeight(0, QTextBlockFormat::FixedHeight);
     cursor.setBlockFormat(zero);
-    QTextCharFormat invisible;
-    invisible.setFont(theme::uiFont(1));
-    invisible.setForeground(Qt::transparent);
-    cursor.insertText(QString(QChar(0x200B)), invisible);
+    insertInvisibleAnchorText(cursor);
   }
 
-  bool firstContent = true;
-  int hiddenInsertionNode = -1, hiddenInsertionSegment = -1;
-  bool afterTable = false;
-  qreal pendingInnerBottomPadding = 0;
-
-  auto openBlock = [&](QTextBlockFormat format, int segment) {
+  void openBlock(QTextBlockFormat format, int segment) {
     // Inner padding must not collapse with the next sibling's outer margin.
     // QTextBlock margins alone cannot represent both sides of that boundary.
     format.setTopMargin(format.topMargin() + pendingInnerBottomPadding);
@@ -733,641 +810,599 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
     cursor.setBlockCharFormat(base);
     cursor.setCharFormat(base);
     firstContent = false;
-  };
+  }
 
-  std::function<void(QTextCursor&, const QJsonArray&, const QTextCharFormat&)> insertRuns;
-  insertRuns = [&](QTextCursor& into, const QJsonArray& runs, const QTextCharFormat& base) {
+  void insertInlineImageRun(QTextCursor& into, const QJsonObject& run,
+                            const QTextCharFormat& base) {
+    // Fixed text leading makes tall inline objects rise over earlier lines.
+    // Keep the paragraph's normal rhythm as a minimum, not an object cap.
+    auto imageBlock = into.blockFormat();
+    if (imageBlock.lineHeightType() == QTextBlockFormat::FixedHeight) {
+      imageBlock.setLineHeight(imageBlock.lineHeight(), QTextBlockFormat::MinimumHeight);
+      into.setBlockFormat(imageBlock);
+    }
+    const QString src = run.value(QStringLiteral("src")).toString();
+    const QJsonObject resolved = bridge::resolveImage(view.documentPath_, src);
+    if (resolved.value(QStringLiteral("ok")).toBool()) {
+      const QString path = resolved.value(QStringLiteral("path")).toString();
+      const auto data = bridge::readImage(view.documentPath_, src);
+      const QByteArray rawView = imageDecode::inputBytes(data.rawView());
+      QBuffer buffer;
+      buffer.setData(rawView);
+      buffer.open(QIODevice::ReadOnly);
+      QImageReader reader(&buffer);
+      const QSize imageSize = data.ok() ? reader.size() : QSize();
+      if (imageSize.isValid()) {
+        const QString key = normalizedImagePath(path);
+        view.authorizedImages_.insert(key);
+        view.imageSources_.insert(key, src);
+        view.imageSizes_.insert(key, imageSize);
+        view.imageStats_.insert(
+            key, ImageStat{true, data.status.value(QStringLiteral("size")).toInteger(data.size),
+                           data.status.value(QStringLiteral("modifiedAt")).toString()});
+        QTextImageFormat imageFormat;
+        imageFormat.setName(path);
+        const qreal width = qMin<qreal>(imageSize.width(), view.contentWidth());
+        imageFormat.setWidth(width);
+        imageFormat.setHeight(imageSize.height() * width / imageSize.width());
+        imageFormat.setProperty(ImageSourceProperty, src);
+        imageFormat.setProperty(ImageAltProperty, run.value(QStringLiteral("alt")).toString());
+        imageFormat.setProperty(ImageTitleProperty, run.value(QStringLiteral("title")).toString());
+        applyRunMarks(imageFormat, run);
+        imageFormat.setObjectType(SafeInlineImageObjectType);
+        imageFormat.setProperty(ImagePathProperty, path);
+        imageFormat.setProperty(ImageWidthProperty, imageFormat.width());
+        imageFormat.setProperty(ImageHeightProperty, imageFormat.height());
+        into.insertText(QString(QChar::ObjectReplacementCharacter), imageFormat);
+        return;
+      }
+    }
+
+    QTextCharFormat alt = base;
+    alt.setProperty(ImageSourceProperty, src);
+    alt.setProperty(ImageAltProperty, run.value(QStringLiteral("alt")).toString());
+    alt.setProperty(ImageTitleProperty, run.value(QStringLiteral("title")).toString());
+    alt.setFont(theme::uiFont(13));
+    alt.setForeground(theme::danger());
+    applyRunMarks(alt, run);
+    alt.setObjectType(SafeInlineImageObjectType);
+    alt.setProperty(MissingImageProperty, true);
+    // A cache identity only, never a filesystem path. Every retry still
+    // passes the original source to bridge::readImage's authorization.
+    const QString key = normalizedImagePath(QStringLiteral("missing-image:") + src);
+    alt.setProperty(ImagePathProperty, key);
+    view.authorizedImages_.insert(key);
+    view.imageSources_.insert(key, src);
+    view.imageStats_.insert(key, ImageStat{false, -1, QString()});
+    // The UI label is painted only: one image occupies one cursor position,
+    // exactly like a successfully decoded image, including IME and search.
+    into.insertText(QString(QChar::ObjectReplacementCharacter), alt);
+  }
+
+  void insertInlineCodeRun(QTextCursor& into, const QJsonObject& run, const QTextCharFormat& base) {
+    QTextCharFormat code;
+    code.setFont(theme::monoFont(kCode));
+    code.setForeground(theme::text());
+    code.setProperty(InlineCodeProperty, true);
+    if (base.fontWeight() >= QFont::DemiBold) code.setFontWeight(QFont::DemiBold);
+    if (run.value(QStringLiteral("bold")).toBool()) code.setProperty(MarkBoldProperty, true);
+    if (run.value(QStringLiteral("italic")).toBool()) {
+      code.setFontItalic(true);
+      code.setProperty(MarkItalicProperty, true);
+    }
+    if (run.value(QStringLiteral("strike")).toBool()) {
+      code.setFontStrikeOut(true);
+      code.setProperty(MarkStrikeProperty, true);
+    }
+    const QJsonObject link = run.value(QStringLiteral("link")).toObject();
+    if (!link.isEmpty()) {
+      code.setAnchor(true);
+      code.setAnchorHref(link.value(QStringLiteral("href")).toString());
+      code.setProperty(LinkTitleProperty, link.value(QStringLiteral("title")).toString());
+      code.setForeground(theme::accent());
+    }
+    applyRunMarks(code, run);
+    into.insertText(run.value(QStringLiteral("text")).toString(), code);
+  }
+
+  void insertInlineTextRun(QTextCursor& into, const QJsonObject& run, const QTextCharFormat& base) {
+    QTextCharFormat format = base;
+    if (run.value(QStringLiteral("bold")).toBool()) {
+      format.setFontWeight(QFont::DemiBold);
+      format.setProperty(MarkBoldProperty, true);
+    }
+    if (run.value(QStringLiteral("italic")).toBool()) {
+      format.setFontItalic(true);
+      format.setProperty(MarkItalicProperty, true);
+    }
+    if (run.value(QStringLiteral("strike")).toBool()) {
+      format.setFontStrikeOut(true);
+      format.setProperty(MarkStrikeProperty, true);
+    }
+    const QJsonObject link = run.value(QStringLiteral("link")).toObject();
+    if (!link.isEmpty()) {
+      format.setAnchor(true);
+      format.setAnchorHref(link.value(QStringLiteral("href")).toString());
+      format.setProperty(LinkTitleProperty, link.value(QStringLiteral("title")).toString());
+      if (link.value(QStringLiteral("reference")).isObject()) {
+        format.setProperty(LinkReferenceProperty,
+                           link.value(QStringLiteral("reference")).toObject().toVariantMap());
+      }
+      format.setForeground(theme::accent());
+      format.setFontUnderline(true);
+      format.setUnderlineColor(QColor("#86b6ef"));
+    }
+    into.insertText(run.value(QStringLiteral("text")).toString(), format);
+  }
+
+  void insertRuns(QTextCursor& into, const QJsonArray& runs, const QTextCharFormat& base) {
     for (const QJsonValue& value : runs) {
       const QJsonObject run = value.toObject();
-      const QString kind = run.value("kind").toString();
-
+      const QString kind = run.value(QStringLiteral("kind")).toString();
       if (kind == QStringLiteral("hardBreak") || kind == QStringLiteral("softBreak")) {
         QTextCharFormat breakFormat = base;
         if (kind == QStringLiteral("softBreak")) breakFormat.setProperty(SoftBreakProperty, true);
         applyRunMarks(breakFormat, run);
         into.insertText(QString(QChar::LineSeparator), breakFormat);
-        continue;
-      }
-      if (kind == QStringLiteral("image")) {
-        // Fixed text leading makes tall inline objects rise over earlier lines.
-        // Keep the paragraph's normal rhythm as a minimum, not an object cap.
-        auto imageBlock = into.blockFormat();
-        if (imageBlock.lineHeightType() == QTextBlockFormat::FixedHeight) {
-          imageBlock.setLineHeight(imageBlock.lineHeight(), QTextBlockFormat::MinimumHeight);
-          into.setBlockFormat(imageBlock);
-        }
-        const QJsonObject resolved = bridge::resolveImage(documentPath_, run.value("src").toString());
-        if (resolved.value("ok").toBool()) {
-          const QString path = resolved.value("path").toString();
-          const auto data = bridge::readImage(documentPath_, run.value("src").toString());
-          const QByteArray view = imageDecode::inputBytes(data.rawView());
-          QBuffer buffer; buffer.setData(view); buffer.open(QIODevice::ReadOnly);
-          QImageReader reader(&buffer);
-          const QSize imageSize = data.ok() ? reader.size() : QSize();
-          if (imageSize.isValid()) {
-            const QString key = normalizedImagePath(path);
-            authorizedImages_.insert(key);
-            imageSources_.insert(key, run.value("src").toString());
-            imageSizes_.insert(key, imageSize);
-            imageStats_.insert(key, ImageStat{true, data.status.value("size").toInteger(data.size),
-                                              data.status.value("modifiedAt").toString()});
-            QTextImageFormat imageFormat;
-            imageFormat.setName(resolved.value("path").toString());
-            const qreal width = qMin(imageSize.width(), contentWidth());
-            imageFormat.setWidth(width);
-            imageFormat.setHeight(imageSize.height() * width / imageSize.width());
-            imageFormat.setProperty(ImageSourceProperty, run.value("src").toString());
-            imageFormat.setProperty(ImageAltProperty, run.value("alt").toString());
-            imageFormat.setProperty(ImageTitleProperty, run.value("title").toString());
-            applyRunMarks(imageFormat, run);
-            imageFormat.setObjectType(SafeInlineImageObjectType);
-            imageFormat.setProperty(ImagePathProperty, path);
-            imageFormat.setProperty(ImageWidthProperty, imageFormat.width());
-            imageFormat.setProperty(ImageHeightProperty, imageFormat.height());
-            into.insertText(QString(QChar::ObjectReplacementCharacter), imageFormat);
-            continue;
-          }
-        }
-        QTextCharFormat alt = base;
-        alt.setProperty(ImageSourceProperty, run.value("src").toString());
-        alt.setProperty(ImageAltProperty, run.value("alt").toString());
-        alt.setProperty(ImageTitleProperty, run.value("title").toString());
-        alt.setFont(theme::uiFont(13));
-        alt.setForeground(theme::danger());
-        applyRunMarks(alt, run);
-        alt.setObjectType(SafeInlineImageObjectType);
-        alt.setProperty(MissingImageProperty, true);
-        // A cache identity only, never a filesystem path. Every retry still
-        // passes the original source to bridge::readImage's authorization.
-        const QString key = normalizedImagePath(QStringLiteral("missing-image:") + run.value("src").toString());
-        alt.setProperty(ImagePathProperty, key);
-        authorizedImages_.insert(key); imageSources_.insert(key, run.value("src").toString());
-        imageStats_.insert(key, ImageStat{false, -1, QString()});
-        // The UI label is painted only: one image occupies one cursor position,
-        // exactly like a successfully decoded image, including IME and search.
-        into.insertText(QString(QChar::ObjectReplacementCharacter), alt);
-        continue;
-      }
-
-      if (kind == QStringLiteral("code")) {
-        QTextCharFormat code;
-        code.setFont(theme::monoFont(kCode));
-        code.setForeground(theme::text());
-        code.setProperty(InlineCodeProperty, true);
-        if (base.fontWeight() >= QFont::DemiBold) code.setFontWeight(QFont::DemiBold);
-        if (run.value("bold").toBool()) code.setProperty(MarkBoldProperty, true);
-        if (run.value("italic").toBool()) {
-          code.setFontItalic(true);
-          code.setProperty(MarkItalicProperty, true);
-        }
-        if (run.value("strike").toBool()) {
-          code.setFontStrikeOut(true);
-          code.setProperty(MarkStrikeProperty, true);
-        }
-        const QJsonObject link = run.value("link").toObject();
-        if (!link.isEmpty()) {
-          code.setAnchor(true);
-          code.setAnchorHref(link.value("href").toString());
-          code.setProperty(LinkTitleProperty, link.value("title").toString());
-          code.setForeground(theme::accent());
-        }
-        applyRunMarks(code, run);
-        into.insertText(run.value("text").toString(), code);
-        continue;
-      }
-
-      QTextCharFormat format = base;
-      const bool bold = run.value("bold").toBool();
-      const bool italic = run.value("italic").toBool();
-      const bool strike = run.value("strike").toBool();
-      if (bold) {
-        format.setFontWeight(QFont::DemiBold);
-        format.setProperty(MarkBoldProperty, true);
-      }
-      if (italic) {
-        format.setFontItalic(true);
-        format.setProperty(MarkItalicProperty, true);
-      }
-      if (strike) {
-        format.setFontStrikeOut(true);
-        format.setProperty(MarkStrikeProperty, true);
-      }
-      const QJsonObject link = run.value("link").toObject();
-      if (!link.isEmpty()) {
-        format.setAnchor(true);
-        format.setAnchorHref(link.value("href").toString());
-        format.setProperty(LinkTitleProperty, link.value("title").toString());
-        if (link.value("reference").isObject()) format.setProperty(LinkReferenceProperty,link.value("reference").toObject().toVariantMap());
-        format.setForeground(theme::accent());
-        format.setFontUnderline(true);
-        format.setUnderlineColor(QColor("#86b6ef"));
-      }
-      into.insertText(run.value("text").toString(), format);
-    }
-  };
-
-  auto collectRuns = [](const QJsonArray& runs, bool bold) {
-    QVector<TableRun> out;
-    for (const QJsonValue& value : runs) {
-      const QJsonObject run = value.toObject();
-      const QString kind = run.value("kind").toString();
-      TableRun item;
-      item.bold = bold || run.value("bold").toBool();
-      item.italic = run.value("italic").toBool();
-      item.strike = run.value("strike").toBool();
-      if (kind == QStringLiteral("hardBreak") || kind == QStringLiteral("softBreak")) {
-        item.text = QStringLiteral(" ");
       } else if (kind == QStringLiteral("image")) {
-        item.text = QStringLiteral("[图片] ") + run.value("alt").toString();
+        insertInlineImageRun(into, run, base);
+      } else if (kind == QStringLiteral("code")) {
+        insertInlineCodeRun(into, run, base);
       } else {
-        item.text = run.value("text").toString();
-        item.code = kind == QStringLiteral("code");
+        insertInlineTextRun(into, run, base);
       }
-      item.href = run.value("link").toObject().value("href").toString();
-      out.append(item);
     }
-    return out;
-  };
+  }
 
-  std::function<void(const QJsonArray&, int, int)> insertBlocks;
-  insertBlocks = [&](const QJsonArray& list, int depth, int inheritedSegment) {
+  bool tryInsertSingleImageParagraph(const QJsonObject& run, int segment) {
+    const QString src = run.value(QStringLiteral("src")).toString();
+    const QJsonObject resolved = bridge::resolveImage(view.documentPath_, src);
+    const QString path = resolved.value(QStringLiteral("ok")).toBool()
+                             ? resolved.value(QStringLiteral("path")).toString()
+                             : QString();
+    QSize imageSize;
+    ImageStat loadedStat;
+    if (!path.isEmpty()) {
+      const auto data = bridge::readImage(view.documentPath_, src);
+      const QByteArray rawView = imageDecode::inputBytes(data.rawView());
+      QBuffer buffer;
+      buffer.setData(rawView);
+      buffer.open(QIODevice::ReadOnly);
+      QImageReader reader(&buffer);
+      if (data.ok()) {
+        imageSize = reader.size();
+        loadedStat = ImageStat{true, data.status.value(QStringLiteral("size")).toInteger(data.size),
+                               data.status.value(QStringLiteral("modifiedAt")).toString()};
+      }
+    }
+    if (!imageSize.isValid()) return false;
+
+    const QString key = normalizedImagePath(path);
+    view.authorizedImages_.insert(key);
+    view.imageSources_.insert(key, src);
+    view.imageSizes_.insert(key, imageSize);
+    view.imageStats_.insert(key, loadedStat);
+    QTextBlockFormat format = bodyBlock();
+    format.setTopMargin(firstContent ? 0 : 16);
+    format.setProperty(RoleProperty, RoleImage);
+    format.setProperty(ImagePathProperty, path);
+    format.setProperty(ImageWidthProperty, imageSize.width());
+    format.setProperty(ImageHeightProperty, imageSize.height());
+    format.setLineHeight(100, QTextBlockFormat::ProportionalHeight);
+    openBlock(format, segment);
+    QTextCharFormat spacer;
+    spacer.setFont(theme::uiFont(1));
+    spacer.setForeground(Qt::transparent);
+    spacer.setObjectType(BlockImageObjectType);
+    spacer.setProperty(ImagePathProperty, path);
+    spacer.setProperty(ImageWidthProperty, imageSize.width());
+    spacer.setProperty(ImageHeightProperty, imageSize.height());
+    spacer.setProperty(ImageSourceProperty, src);
+    spacer.setProperty(ImageAltProperty, run.value(QStringLiteral("alt")).toString());
+    spacer.setProperty(ImageTitleProperty, run.value(QStringLiteral("title")).toString());
+    applyRunMarks(spacer, run);
+    cursor.insertText(QString(QChar::ObjectReplacementCharacter), spacer);
+    return true;
+  }
+
+  void insertParagraphBlock(const QJsonObject& block, int depth, int segment) {
+    const QJsonArray runs = block.value(QStringLiteral("runs")).toArray();
+    // A paragraph holding a single image becomes a block image so it can be
+    // painted with the stylesheet's 6px rounding and full content width.
+    if (runs.size() == 1 &&
+        runs.first().toObject().value(QStringLiteral("kind")).toString() ==
+            QStringLiteral("image") &&
+        tryInsertSingleImageParagraph(runs.first().toObject(), segment)) {
+      return;
+    }
+
+    QTextBlockFormat format = bodyBlock();
+    format.setTopMargin(firstContent ? 0 : 16);
+    if (!view.previewMode_ && depth == 0 && quoteDepth == 0) {
+      format.setTextIndent(chineseFirstLineIndent(runText(runs)));
+    }
+    openBlock(format, segment);
+    insertRuns(cursor, runs, quoteDepth > 0 ? mutedFormat() : bodyFormat());
+  }
+
+  void insertHeadingBlock(const QJsonObject& block, int segment) {
+    const int level = block.value(QStringLiteral("level")).toInt(1);
+    const int size =
+        level == 1 ? 30 : level == 2 ? 24 : level == 3 ? 20 : level == 4 ? 18 : 16;
+    QTextBlockFormat format = bodyBlock();
+    format.setTopMargin(firstContent ? 0 : 32);
+    format.setLineHeight(size * 1.3, QTextBlockFormat::FixedHeight);
+    format.setProperty(RoleProperty, RoleHeading);
+    format.setProperty(HeadingLevelProperty, level);
+    openBlock(format, segment);
+    QTextCharFormat heading;
+    heading.setFont(theme::uiFont(size, QFont::DemiBold));
+    heading.setForeground(theme::text());
+    cursor.setBlockCharFormat(heading);
+    insertRuns(cursor, block.value(QStringLiteral("runs")).toArray(), heading);
+  }
+
+  void insertCodeOrRawBlock(const QJsonObject& block, bool raw, int segment) {
+    QTextBlockFormat format = bodyBlock();
+    // 16px padding above/below plus the stylesheet's 16px margin.
+    format.setTopMargin(firstContent ? 16 : 32);
+    format.setBottomMargin(16);
+    format.setLeftMargin(16);
+    format.setRightMargin(16);
+    // CSS pre inherits 16px and line-height:1.6; its 14px code child does
+    // not reduce that 25.6px line box. Raw source is a separate surface.
+    format.setLineHeight(raw ? 22.4 : 25.6,
+                         raw ? QTextBlockFormat::MinimumHeight : QTextBlockFormat::FixedHeight);
+    format.setProperty(RoleProperty, RoleCode);
+    format.setNonBreakableLines(true);
+    format.setProperty(RawProperty, raw);
+    if (!raw) format.setProperty(CodeLanguageProperty, block.value(QStringLiteral("language")).toString());
+    openBlock(format, segment);
+    QTextCharFormat code;
+    code.setFont(theme::monoFont(raw ? 13 : kCode));
+    code.setForeground(raw ? theme::muted() : theme::text());
+    cursor.setBlockCharFormat(code);
+
+    if (raw && !view.previewMode_ &&
+        !block.value(QStringLiteral("preview")).toObject().value(QStringLiteral("blocks")).toArray().isEmpty()) {
+      RawSurface surface;
+      surface.node = currentNode;
+      surface.preview = new DocumentView(view.viewport());
+      surface.preview->previewMode_ = true;
+      surface.preview->readOnly_ = true;
+      surface.preview->resize(view.contentWidth(), 400);
+      surface.plan = withTaskListSpacing(block.value(QStringLiteral("preview")).toObject(),
+                                         block.value(QStringLiteral("text")).toString());
+      surface.preview->setPlan(surface.plan, view.documentPath_);
+      QObject::connect(surface.preview, &DocumentView::linkActivated, &view,
+                       &DocumentView::linkActivated);
+      QObject::connect(surface.preview, &DocumentView::sourceEditRequested, &view,
+                       [&v = view, node = currentNode] {
+                         v.setRawSourceVisible(node, true);
+                         v.ensureCaretVisible();
+                       });
+      QObject::connect(surface.preview, &DocumentView::viewportChanged, &view,
+                       &DocumentView::viewportChanged);
+      view.rawSurfaces_.insert(currentNode, surface);
+    }
+
+    QString codeText = block.value(QStringLiteral("text")).toString();
+    if (!raw && codeText.endsWith(QLatin1Char('\n'))) codeText.chop(1);
+    const QStringList lines = codeText.split(QLatin1Char('\n'));
+    for (int index = 0; index < lines.size(); ++index) {
+      if (index > 0) cursor.insertText(QString(QChar::LineSeparator), code);
+      cursor.insertText(lines.at(index), code);
+    }
+
+    if (raw && view.rawSurfaces_.contains(currentNode)) {
+      QTextBlock sourceBlock = cursor.block();
+      QTextBlockFormat placeholder = bodyBlock();
+      // The inline preview object owns its measured height. A fixed body
+      // line clips tall previews and lets their child widget cover the next block.
+      placeholder.setLineHeight(1, QTextBlockFormat::MinimumHeight);
+      // openBlock already consumed the preceding surface's inner padding.
+      // Carry that spacing to the visible placeholder, removing only this
+      // raw source block's own top padding (the preview paints its own).
+      placeholder.setTopMargin(qMax<qreal>(0, sourceBlock.blockFormat().topMargin() - 16));
+      placeholder.setBottomMargin(16);
+      placeholder.setProperty(RawPreviewOwnerProperty, currentNode);
+      cursor.insertBlock(placeholder, bodyFormat());
+      QTextCharFormat object;
+      object.setObjectType(RawPreviewObjectType);
+      object.setProperty(RawPreviewOwnerProperty, currentNode);
+      cursor.insertText(QString(QChar::ObjectReplacementCharacter), object);
+      sourceBlock.setVisible(false);
+      sourceBlock.setLineCount(0);
+    }
+    pendingInnerBottomPadding = raw && view.rawSurfaces_.contains(currentNode) ? 0 : 16;
+  }
+
+  void insertListBlock(const QJsonObject& block, int depth, int segment) {
+    const bool ordered = block.value(QStringLiteral("ordered")).toBool();
+    const int start = block.value(QStringLiteral("start")).toInt(1);
+    const QJsonArray items = block.value(QStringLiteral("items")).toArray();
+    const QJsonArray tasks = block.value(QStringLiteral("tasks")).toArray();
+    for (int index = 0; index < items.size(); ++index) {
+      const int before = cursor.position();
+      insertBlocks(items.at(index).toArray(), depth + 1, segment);
+      QTextBlock first = view.document_->findBlock(before).next();
+      if (!first.isValid()) continue;
+      QTextCursor item(first);
+      QTextBlockFormat format = first.blockFormat();
+      format.setTopMargin(depth > 0 ? 4 : (index == 0 ? format.topMargin() : 4));
+      format.setLeftMargin(24 * (depth + 1) + quoteDepth * 18);
+      format.setProperty(ListOrderedProperty, ordered);
+      format.setProperty(ListNumberProperty, start + index);
+      format.setProperty(ListDepthProperty, depth);
+      format.setProperty(ListDelimiterProperty,
+                         block.value(QStringLiteral("delimiter")).toString(QStringLiteral(".")));
+      format.setProperty(ListLooseProperty, block.value(QStringLiteral("loose")).toBool());
+      const bool task = index < tasks.size() && tasks.at(index).isBool();
+      if (task) format.setProperty(TaskCheckedProperty, tasks.at(index).toBool());
+      if (format.intProperty(RoleProperty) == RoleBody) {
+        format.setProperty(RoleProperty, RoleListItem);
+      }
+      const QString marker =
+          task ? (tasks.at(index).toBool() ? QStringLiteral("\u2611  ")
+                                           : QStringLiteral("\u2610  "))
+          : ordered ? QStringLiteral("%1. ").arg(start + index)
+                    : (depth > 0 ? QStringLiteral("\u25e6  ") : QStringLiteral("\u2022  "));
+      format.setTextIndent(-QFontMetricsF(theme::uiFont(kBody)).horizontalAdvance(marker));
+      item.setBlockFormat(format);
+      QTextCharFormat markerFormat = bodyFormat();
+      markerFormat.setProperty(ListMarkerProperty, true);
+      item.insertText(marker, markerFormat);
+    }
+  }
+
+  void fillTableCell(QTextTable* table, int row, int column, const QJsonArray& runs,
+                     bool headerCell, int segment, const QJsonArray& headerRows,
+                     const QHash<QPair<int, int>, QJsonObject>& cellHeaders) {
+    QTextTableCell cell = table->cellAt(row, column);
+    QTextTableCellFormat cellFormat;
+    const auto semantic = cellHeaders.value({row, column});
+    // Metadata only: do not reinterpret the retained HTML or change layout.
+    const bool semanticHeader = semantic.isEmpty() ? (headerRows.isEmpty() && headerCell)
+                                                   : semantic.value(QStringLiteral("header")).toBool();
+    cellFormat.setProperty(CellHeaderProperty, semanticHeader);
+    cellFormat.setProperty(
+        CellScopeProperty,
+        semantic.isEmpty() ? (semanticHeader ? QStringLiteral("col") : QStringLiteral("auto"))
+                           : semantic.value(QStringLiteral("scope")).toString(QStringLiteral("unknown")));
+    cellFormat.setBorder(0);
+    // Qt places the first row's text flush with the table frame and only
+    // honours cell padding between rows. Carry CSS's 6px padding plus
+    // the grid-border allowance in the cell spacer and bottom padding.
+    cellFormat.setTopPadding(0);
+    cellFormat.setBottomPadding(7);
+    cellFormat.setLeftPadding(10);
+    cellFormat.setRightPadding(10);
+    cell.setFormat(cellFormat);
+
+    QTextCursor cellCursor = cell.firstCursorPosition();
+    QTextBlockFormat spacer;
+    spacer.setTopMargin(0);
+    spacer.setBottomMargin(0);
+    spacer.setLineHeight(7, QTextBlockFormat::FixedHeight);
+    cellCursor.setBlockFormat(spacer);
+    insertInvisibleAnchorText(cellCursor);
+
+    QTextBlockFormat cellBlock;
+    cellBlock.setProperty(RoleProperty, RoleTable);
+    cellBlock.setProperty(SegmentProperty, segment);
+    cellBlock.setProperty(NodeProperty, currentNode);
+    cellBlock.setProperty(TableRowProperty, row);
+    cellBlock.setProperty(TableColumnProperty, column);
+    // Presentation preference only: the retained plan keeps the authored
+    // Markdown alignment markers for serialization and saving.
+    cellBlock.setAlignment(Qt::AlignLeft);
+    cellBlock.setLineHeight(28, QTextBlockFormat::FixedHeight);
+    cellBlock.setTopMargin(0);
+    cellBlock.setBottomMargin(0);
+    cellCursor.insertBlock(cellBlock);
+
+    QTextCharFormat base;
+    base.setFont(theme::uiFont(kBody, headerCell ? QFont::Bold : QFont::Normal));
+    base.setForeground(theme::text());
+    cellCursor.setBlockCharFormat(base);
+    cellCursor.setCharFormat(base);
+    const int authoredStart = cellCursor.position();
+    insertRuns(cellCursor, runs, base);
+    if (!headerRows.isEmpty()) {
+      // Raw previews are read-only and rebuilt from source on changes.
+      // mergeCells can append separator/spacer text from covered empty
+      // cells. Retain the actual content extent, not a duplicate string.
+      auto metadata = cell.format();
+      metadata.setProperty(AuthoredCellLengthProperty, cellCursor.position() - authoredStart);
+      cell.setFormat(metadata);
+    }
+  }
+
+  void insertTableBlock(const QJsonObject& block, int segment) {
+    QJsonArray header = block.value(QStringLiteral("header")).toArray();
+    QJsonArray rows = block.value(QStringLiteral("rows")).toArray();
+    const QJsonArray spanRows = block.value(QStringLiteral("spans")).toArray();
+    const QJsonArray headerRows = block.value(QStringLiteral("cellHeaders")).toArray();
+    if (tableSpansExceedLimits(spanRows, rows.size())) {
+      openBlock(bodyBlock(), segment);
+      cursor.insertText(QStringLiteral("表格过大，请切换源码查看。"), mutedFormat());
+      return;
+    }
+
+    QVector<TableCellSpan> spans;
+    QHash<QPair<int, int>, QJsonObject> cellHeaders;
+    if (!spanRows.isEmpty()) {
+      expandTableSpanGrid(spanRows, headerRows, header, rows, spans, cellHeaders);
+    }
+    const int columns = qMax<qsizetype>(1, header.size());
+
+    QFontMetricsF bodyMetrics(theme::uiFont(kBody));
+    QFontMetricsF boldMetrics(theme::uiFont(kBody, QFont::Bold));
+    QVector<qreal> natural(columns, 96.0);  // stylesheet min-width: 96px
+    auto measure = [&](const QJsonArray& cells) {
+      for (int column = 0; column < cells.size() && column < columns; ++column) {
+        const QString text = runText(cells.at(column).toArray());
+        const qreal width = (column < header.size() ? boldMetrics : bodyMetrics)
+                                .horizontalAdvance(text) +
+                            20;  // 10px padding each side
+        natural[column] = qMax(natural[column], width);
+      }
+    };
+    measure(header);
+    for (const QJsonValue& row : rows) measure(row.toArray());
+
+    qreal total = 0;
+    for (qreal width : natural) total += width;
+
+    QTextTableFormat tableFormat;
+    tableFormat.setBorder(0);
+    tableFormat.setMargin(0);
+    tableFormat.setAlignment(Qt::AlignLeft);
+    tableFormat.setBorderBrush(Qt::NoBrush);
+    tableFormat.setCellSpacing(0);
+    tableFormat.setCellPadding(0);
+    tableFormat.setTopMargin(0);
+    tableFormat.setBottomMargin(0);
+    tableFormat.setWidth(QTextLength(QTextLength::FixedLength, total));
+    QList<QTextLength> constraints;
+    for (qreal width : natural) constraints.append(QTextLength(QTextLength::FixedLength, width));
+    tableFormat.setColumnWidthConstraints(constraints);
+    tableFormat.setProperty(RoleProperty, RoleTable);
+    tableFormat.setProperty(NodeProperty, currentNode);
+    tableFormat.setProperty(SegmentProperty, segment);
+    tableFormat.setProperty(HeaderIsBodyProperty, block.value(QStringLiteral("headerIsBody")).toBool());
+
+    QTextBlockFormat format = bodyBlock();
+    // The legacy overflow-x:auto tableWrapper prevents the table's 16px
+    // margin from collapsing through it with a preceding heading's 12px.
+    // Ordinary paragraph siblings still use the collapsed-margin path.
+    const bool afterHeading = cursor.blockFormat().intProperty(RoleProperty) == RoleHeading;
+    format.setTopMargin(firstContent ? 0 : 16 + (afterHeading ? 12 : 0));
+    format.setBottomMargin(32);
+    openBlock(format, segment);
+    QTextTable* table = cursor.insertTable(rows.size() + 1, columns, tableFormat);
+    view.tableRefs_.append({table, natural});
+
+    const bool headerBold = !block.value(QStringLiteral("headerIsBody")).toBool();
+    for (int column = 0; column < columns; ++column) {
+      fillTableCell(table, 0, column, header.at(column).toArray(), headerBold, segment, headerRows,
+                    cellHeaders);
+    }
+    for (int row = 0; row < rows.size(); ++row) {
+      const QJsonArray cells = rows.at(row).toArray();
+      for (int column = 0; column < columns; ++column) {
+        fillTableCell(table, row + 1, column,
+                      column < cells.size() ? cells.at(column).toArray() : QJsonArray(), false,
+                      segment, headerRows, cellHeaders);
+      }
+    }
+
+    for (const auto& span : spans) {
+      if (span.rows > 1 || span.columns > 1) {
+        table->mergeCells(span.row, span.column, span.rows, span.columns);
+      }
+    }
+    cursor = table->lastCursorPosition();
+    cursor.movePosition(QTextCursor::NextBlock);
+
+    // A block that follows a table frame ignores its own top margin in Qt's
+    // layout, so the stylesheet's gap after the table is carried by an
+    // explicit 16px spacer paragraph instead.
+    QTextBlockFormat spacerFormat;
+    spacerFormat.setTopMargin(0);
+    spacerFormat.setBottomMargin(0);
+    spacerFormat.setLineHeight(16, QTextBlockFormat::FixedHeight);
+    cursor.setBlockFormat(spacerFormat);
+    insertInvisibleAnchorText(cursor);
+    afterTable = false;
+  }
+
+  void insertHorizontalRuleBlock(int segment) {
+    QTextBlockFormat format = bodyBlock();
+    format.setTopMargin(firstContent ? 0 : 24);
+    format.setLineHeight(2, QTextBlockFormat::FixedHeight);
+    format.setProperty(RoleProperty, RoleRule);
+    openBlock(format, segment);
+    insertInvisibleAnchorText(cursor);
+  }
+
+  void insertBlocks(const QJsonArray& list, int depth, int inheritedSegment) {
     if (depth > 16) return;
 
     for (const QJsonValue& value : list) {
       const QJsonObject block = value.toObject();
-      const QString type = block.value("type").toString();
-      currentNode = block.value("nodeId").toInt(-1);
+      const QString type = block.value(QStringLiteral("type")).toString();
+      currentNode = block.value(QStringLiteral("nodeId")).toInt(-1);
       currentListDepth = depth - 1;
-      const int segment = block.value("segment").toInt(inheritedSegment);
-      if (type == "raw" && block.value("hidden").toBool()) {
-        hiddenInsertionNode = currentNode; hiddenInsertionSegment = segment;
+      const int segment = block.value(QStringLiteral("segment")).toInt(inheritedSegment);
+      if (type == QStringLiteral("raw") && block.value(QStringLiteral("hidden")).toBool()) {
+        hiddenInsertionNode = currentNode;
+        hiddenInsertionSegment = segment;
         continue;
       }
-      const bool editableBlock = type == QStringLiteral("paragraph") ||
-                                 type == QStringLiteral("heading") ||
-                                 type == QStringLiteral("code") ||
-                                 type == QStringLiteral("list") ||
-                                 type == QStringLiteral("quote") ||
-                                 type == QStringLiteral("table") || type == QStringLiteral("raw") || type == QStringLiteral("hr");
-      if (editableBlock && segment >= 0) editableSegments_.insert(segment);
+      const bool editableBlock =
+          type == QStringLiteral("paragraph") || type == QStringLiteral("heading") ||
+          type == QStringLiteral("code") || type == QStringLiteral("list") ||
+          type == QStringLiteral("quote") || type == QStringLiteral("table") ||
+          type == QStringLiteral("raw") || type == QStringLiteral("hr");
+      if (editableBlock && segment >= 0) view.editableSegments_.insert(segment);
 
       if (type == QStringLiteral("paragraph")) {
-        const QJsonArray runs = block.value("runs").toArray();
-
-        // A paragraph holding a single image becomes a block image so it can be
-        // painted with the stylesheet's 6px rounding and full content width.
-        if (runs.size() == 1 && runs.first().toObject().value("kind").toString() == QStringLiteral("image")) {
-          const QJsonObject run = runs.first().toObject();
-          const QJsonObject resolved = bridge::resolveImage(documentPath_, run.value("src").toString());
-          const QString path = resolved.value("ok").toBool() ? resolved.value("path").toString() : QString();
-          QSize imageSize;
-          ImageStat loadedStat;
-          if (!path.isEmpty()) {
-            const auto data = bridge::readImage(documentPath_, run.value("src").toString());
-            const QByteArray view = imageDecode::inputBytes(data.rawView());
-            QBuffer buffer; buffer.setData(view); buffer.open(QIODevice::ReadOnly);
-            QImageReader reader(&buffer);
-            if (data.ok()) {
-              imageSize = reader.size();
-              loadedStat = ImageStat{true, data.status.value("size").toInteger(data.size),
-                                     data.status.value("modifiedAt").toString()};
-            }
-          }
-          if (imageSize.isValid()) {
-            const QString key = normalizedImagePath(path);
-            authorizedImages_.insert(key);
-            imageSources_.insert(key, run.value("src").toString());
-            imageSizes_.insert(key, imageSize);
-            imageStats_.insert(key, loadedStat);
-            QTextBlockFormat format = bodyBlock();
-            format.setTopMargin(firstContent ? 0 : 16);
-            format.setProperty(RoleProperty, RoleImage);
-            format.setProperty(ImagePathProperty, resolved.value("path").toString());
-            format.setProperty(ImageWidthProperty, imageSize.width());
-            format.setProperty(ImageHeightProperty, imageSize.height());
-            format.setLineHeight(100, QTextBlockFormat::ProportionalHeight);
-            openBlock(format, segment);
-            QTextCharFormat spacer;
-            spacer.setFont(theme::uiFont(1));
-            spacer.setForeground(Qt::transparent);
-            spacer.setObjectType(BlockImageObjectType);
-            spacer.setProperty(ImagePathProperty,path);
-            spacer.setProperty(ImageWidthProperty,imageSize.width());
-            spacer.setProperty(ImageHeightProperty,imageSize.height());
-            spacer.setProperty(ImageSourceProperty, run.value("src").toString());
-            spacer.setProperty(ImageAltProperty, run.value("alt").toString());
-            spacer.setProperty(ImageTitleProperty, run.value("title").toString());
-            applyRunMarks(spacer, run);
-            cursor.insertText(QString(QChar::ObjectReplacementCharacter), spacer);
-            continue;
-          }
-        }
-
-        QTextBlockFormat format = bodyBlock();
-        format.setTopMargin(firstContent ? 0 : 16);
-        if (!previewMode_ && depth == 0 && quoteDepth == 0)
-          format.setTextIndent(chineseFirstLineIndent(runText(runs)));
-        openBlock(format, segment);
-        insertRuns(cursor, runs, quoteDepth > 0 ? mutedFormat() : bodyFormat());
-        continue;
-      }
-
-      if (type == QStringLiteral("heading")) {
-        const int level = block.value("level").toInt(1);
-        const int size = level == 1 ? 30 : level == 2 ? 24 : level == 3 ? 20 : level == 4 ? 18 : 16;
-        QTextBlockFormat format = bodyBlock();
-        format.setTopMargin(firstContent ? 0 : 32);
-        format.setLineHeight(size * 1.3, QTextBlockFormat::FixedHeight);
-        format.setProperty(RoleProperty, RoleHeading);
-        format.setProperty(HeadingLevelProperty, level);
-        openBlock(format, segment);
-        QTextCharFormat heading;
-        heading.setFont(theme::uiFont(size, QFont::DemiBold));
-        heading.setForeground(theme::text());
-        cursor.setBlockCharFormat(heading);
-        insertRuns(cursor, block.value("runs").toArray(), heading);
-        continue;
-      }
-
-      if (type == QStringLiteral("code") || type == QStringLiteral("raw")) {
-        const bool raw = type == QStringLiteral("raw");
-        QTextBlockFormat format = bodyBlock();
-        // 16px padding above/below plus the stylesheet's 16px margin.
-        format.setTopMargin(firstContent ? 16 : 32);
-        format.setBottomMargin(16);
-        format.setLeftMargin(16);
-        format.setRightMargin(16);
-        // CSS pre inherits 16px and line-height:1.6; its 14px code child does
-        // not reduce that 25.6px line box. Raw source is a separate surface.
-        format.setLineHeight(raw ? 22.4 : 25.6, raw ? QTextBlockFormat::MinimumHeight : QTextBlockFormat::FixedHeight);
-        format.setProperty(RoleProperty, RoleCode);
-        format.setNonBreakableLines(true);
-        format.setProperty(RawProperty, raw);
-        if (!raw) format.setProperty(CodeLanguageProperty, block.value("language").toString());
-        openBlock(format, segment);
-        QTextCharFormat code;
-        code.setFont(theme::monoFont(raw ? 13 : kCode));
-        code.setForeground(raw ? theme::muted() : theme::text());
-        cursor.setBlockCharFormat(code);
-        if (raw && !previewMode_ && !block.value("preview").toObject().value("blocks").toArray().isEmpty()) {
-          RawSurface surface; surface.node = currentNode;
-          surface.preview = new DocumentView(viewport());
-          surface.preview->previewMode_ = true; surface.preview->readOnly_ = true;
-          surface.preview->resize(contentWidth(), 400);
-          surface.plan = withTaskListSpacing(block.value("preview").toObject(), block.value("text").toString());
-          surface.preview->setPlan(surface.plan, documentPath_);
-          connect(surface.preview, &DocumentView::linkActivated, this, &DocumentView::linkActivated);
-          connect(surface.preview, &DocumentView::sourceEditRequested, this, [this, node=currentNode] {
-            setRawSourceVisible(node, true);
-            ensureCaretVisible();
-          });
-          connect(surface.preview, &DocumentView::viewportChanged, this, &DocumentView::viewportChanged);
-          rawSurfaces_.insert(currentNode, surface);
-        }
-        QString codeText=block.value("text").toString();
-        if(!raw && codeText.endsWith(QLatin1Char('\n')))codeText.chop(1);
-        const QStringList lines = codeText.split(QLatin1Char('\n'));
-        for (int index = 0; index < lines.size(); ++index) {
-          if (index > 0) cursor.insertText(QString(QChar::LineSeparator), code);
-          cursor.insertText(lines.at(index), code);
-        }
-        if (raw && rawSurfaces_.contains(currentNode)) {
-          QTextBlock sourceBlock = cursor.block();
-          QTextBlockFormat placeholder = bodyBlock();
-          // The inline preview object owns its measured height. A fixed body
-          // line clips tall previews and lets their child widget cover the next block.
-          placeholder.setLineHeight(1, QTextBlockFormat::MinimumHeight);
-          // openBlock already consumed the preceding surface's inner padding.
-          // Carry that spacing to the visible placeholder, removing only this
-          // raw source block's own top padding (the preview paints its own).
-          placeholder.setTopMargin(qMax<qreal>(0, sourceBlock.blockFormat().topMargin() - 16));
-          placeholder.setBottomMargin(16);
-          placeholder.setProperty(RawPreviewOwnerProperty, currentNode);
-          cursor.insertBlock(placeholder, bodyFormat());
-          QTextCharFormat object;
-          object.setObjectType(RawPreviewObjectType);
-          object.setProperty(RawPreviewOwnerProperty, currentNode);
-          cursor.insertText(QString(QChar::ObjectReplacementCharacter), object);
-          sourceBlock.setVisible(false); sourceBlock.setLineCount(0);
-        }
-        pendingInnerBottomPadding = raw && rawSurfaces_.contains(currentNode) ? 0 : 16;
-        continue;
-      }
-
-      if (type == QStringLiteral("quote")) {
+        insertParagraphBlock(block, depth, segment);
+      } else if (type == QStringLiteral("heading")) {
+        insertHeadingBlock(block, segment);
+      } else if (type == QStringLiteral("code") || type == QStringLiteral("raw")) {
+        insertCodeOrRawBlock(block, type == QStringLiteral("raw"), segment);
+      } else if (type == QStringLiteral("quote")) {
         ++quoteDepth;
         // Lists entered later live inside this quote and must not move its rule.
         quoteListInsets.append(24 * depth);
-        insertBlocks(block.value("blocks").toArray(), depth, segment);
+        insertBlocks(block.value(QStringLiteral("blocks")).toArray(), depth, segment);
         quoteListInsets.removeLast();
         --quoteDepth;
         // CSS blockquote contributes 0.2em padding on each side, in addition
         // to the collapsed paragraph margin. Keep that space out of the text.
         pendingInnerBottomPadding += 6.4;
-        continue;
-      }
-
-      if (type == QStringLiteral("list")) {
-        const bool ordered = block.value("ordered").toBool();
-        const int start = block.value("start").toInt(1);
-        const QJsonArray items = block.value("items").toArray();
-        const QJsonArray tasks = block.value("tasks").toArray();
-        for (int index = 0; index < items.size(); ++index) {
-          const int before = cursor.position();
-          insertBlocks(items.at(index).toArray(), depth + 1, segment);
-          QTextBlock first = document_->findBlock(before).next();
-          if (!first.isValid()) continue;
-          QTextCursor item(first);
-          QTextBlockFormat format = first.blockFormat();
-          format.setTopMargin(depth > 0 ? 4 : (index == 0 ? format.topMargin() : 4));
-          format.setLeftMargin(24 * (depth + 1) + quoteDepth * 18);
-          format.setProperty(ListOrderedProperty, ordered);
-          format.setProperty(ListNumberProperty, start + index);
-          format.setProperty(ListDepthProperty, depth);
-          format.setProperty(ListDelimiterProperty, block.value("delimiter").toString(QStringLiteral(".")));
-          format.setProperty(ListLooseProperty, block.value("loose").toBool());
-          const bool task = index < tasks.size() && tasks.at(index).isBool();
-          if (task) format.setProperty(TaskCheckedProperty, tasks.at(index).toBool());
-          if (format.intProperty(RoleProperty) == RoleBody) format.setProperty(RoleProperty, RoleListItem);
-          const QString marker = task ? (tasks.at(index).toBool() ? QStringLiteral("\u2611  ") : QStringLiteral("\u2610  ")) :
-              ordered ? QStringLiteral("%1. ").arg(start + index) : (depth > 0 ? QStringLiteral("\u25e6  ") : QStringLiteral("\u2022  "));
-          format.setTextIndent(-QFontMetricsF(theme::uiFont(kBody)).horizontalAdvance(marker));
-          item.setBlockFormat(format);
-          QTextCharFormat markerFormat = bodyFormat();
-          markerFormat.setProperty(ListMarkerProperty, true);
-          item.insertText(marker, markerFormat);
-        }
-        continue;
-      }
-
-      if (type == QStringLiteral("table")) {
-        QJsonArray header = block.value("header").toArray();
-        QJsonArray rows = block.value("rows").toArray();
-        struct Span { int row; int column; int rows; int columns; };
-        QVector<Span> spans;
-        const QJsonArray spanRows = block.value("spans").toArray();
-        const QJsonArray headerRows = block.value("cellHeaders").toArray();
-        QHash<QPair<int, int>, QJsonObject> cellHeaders;
-        bool oversizedSpans = false;
-        qint64 spanCells = 0;
-        for (const auto& spanRow : spanRows) for (const auto& value : spanRow.toArray()) {
-          const auto span = value.toObject();
-          const int width = qMax(1, span.value("colspan").toInt(1));
-          const int height = qMax(1, span.value("rowspan").toInt(1));
-          spanCells += qint64(width) * height;
-          if (width > 256 || height > 256 || spanCells > 10000) oversizedSpans = true;
-        }
-        if (oversizedSpans || (!spanRows.isEmpty() && rows.size() > 255)) {
-          openBlock(bodyBlock(), segment);
-          cursor.insertText(QStringLiteral("表格过大，请切换源码查看。"), mutedFormat());
-          continue;
-        }
-        if (!spanRows.isEmpty()) {
-          QJsonArray original; original.append(header);
-          for (const auto& row : rows) original.append(row);
-          QVector<QVector<QJsonArray>> grid;
-          QSet<QPair<int, int>> occupied;
-          int columnCount = 0;
-          for (int row = 0; row < original.size() && row < 256; ++row) {
-            const QJsonArray cells = original.at(row).toArray();
-            const QJsonArray sizes = row < spanRows.size() ? spanRows.at(row).toArray() : QJsonArray();
-            const QJsonArray headers = row < headerRows.size() ? headerRows.at(row).toArray() : QJsonArray();
-            int column = 0;
-            for (int cell = 0; cell < cells.size() && column < 256; ++cell) {
-              while (occupied.contains({row, column}) && column < 256) ++column;
-              if (column >= 256) break;
-              const QJsonObject size = cell < sizes.size() ? sizes.at(cell).toObject() : QJsonObject();
-              const int height = qBound(1, size.value("rowspan").toInt(1), 256 - row);
-              const int width = qBound(1, size.value("colspan").toInt(1), qMax(1, 256 - column));
-              if (qint64(row + height) * (column + width) > 10000) break;
-              if (grid.size() < row + height) grid.resize(row + height);
-              for (int r = row; r < row + height; ++r) {
-                if (grid[r].size() < column + width) grid[r].resize(column + width);
-                for (int c = column; c < column + width; ++c) occupied.insert({r, c});
-              }
-              grid[row][column] = cells.at(cell).toArray();
-              if (cell < headers.size()) cellHeaders.insert({row, column}, headers.at(cell).toObject());
-              spans.append({row, column, height, width});
-              column += width; columnCount = qMax(columnCount, column);
-            }
-          }
-          rows = QJsonArray();
-          for (int row = 0; row < grid.size(); ++row) {
-            QJsonArray cells;
-            for (int col = 0; col < columnCount; ++col) cells.append(col < grid[row].size() ? grid[row][col] : QJsonArray());
-            if (row == 0) header = cells; else rows.append(cells);
-          }
-        }
-        const int columns = qMax(1, header.size());
-
-        QFontMetricsF bodyMetrics(theme::uiFont(kBody));
-        QFontMetricsF boldMetrics(theme::uiFont(kBody, QFont::Bold));
-        QVector<qreal> natural(columns, 96.0);  // stylesheet min-width: 96px
-        auto measure = [&](const QJsonArray& cells) {
-          for (int column = 0; column < cells.size() && column < columns; ++column) {
-            const QString text = runText(cells.at(column).toArray());
-            const qreal width = (column < header.size() ? boldMetrics : bodyMetrics)
-                                    .horizontalAdvance(text) + 20;  // 10px padding each side
-            natural[column] = qMax(natural[column], width);
-          }
-        };
-        measure(header);
-        for (const QJsonValue& row : rows) measure(row.toArray());
-
-        qreal total = 0;
-        for (qreal width : natural) total += width;
-        const qreal available = contentWidth();
-
-        if (false && total > available + 0.5) {
-          // The stylesheet caps the table at the reading width and scrolls it
-          // horizontally; Qt clamps negative block margins, so the table is
-          // reserved by a spacer block and painted with its own scroll state.
-          PaintedTable painted;
-          painted.columns = natural;
-          painted.columnWidth = available;
-          painted.maxScroll = total - available;
-          QVector<QVector<TableRun>> headerRow;
-          for (int column = 0; column < columns; ++column) {
-            headerRow.append(collectRuns(header.at(column).toArray(), true));
-          }
-          painted.cells.append(headerRow);
-          for (const QJsonValue& rowValue : rows) {
-            const QJsonArray cells = rowValue.toArray();
-            QVector<QVector<TableRun>> rowCells;
-            for (int column = 0; column < columns; ++column) {
-              rowCells.append(collectRuns(column < cells.size() ? cells.at(column).toArray() : QJsonArray(), false));
-            }
-            painted.cells.append(rowCells);
-          }
-
-          const qreal bodyHeight = painted.cells.size() * 40.0;
-          QTextBlockFormat format = bodyBlock();
-          format.setTopMargin(firstContent ? 0 : 16);
-          format.setBottomMargin(0);
-          openBlock(format, segment);
-          painted.blockPosition = cursor.block().position();
-          QTextBlockFormat spacer = cursor.blockFormat();
-          spacer.setLineHeight(bodyHeight + 12, QTextBlockFormat::FixedHeight);
-          cursor.setBlockFormat(spacer);
-          QTextCharFormat invisible;
-          invisible.setFont(theme::uiFont(1));
-          invisible.setForeground(Qt::transparent);
-          cursor.insertText(QString(QChar(0x200B)), invisible);
-          paintedTables_.append(painted);
-          continue;
-        }
-
-        QTextTableFormat tableFormat;
-        tableFormat.setBorder(0);
-        tableFormat.setMargin(0);
-        tableFormat.setAlignment(Qt::AlignLeft);
-        tableFormat.setBorderBrush(Qt::NoBrush);
-        tableFormat.setCellSpacing(0);
-        tableFormat.setCellPadding(0);
-        tableFormat.setTopMargin(0);
-        tableFormat.setBottomMargin(0);
-        tableFormat.setWidth(QTextLength(QTextLength::FixedLength, total));
-        QList<QTextLength> constraints;
-        for (qreal width : natural) constraints.append(QTextLength(QTextLength::FixedLength, width));
-        tableFormat.setColumnWidthConstraints(constraints);
-        tableFormat.setProperty(RoleProperty, RoleTable);
-        tableFormat.setProperty(NodeProperty, currentNode);
-        tableFormat.setProperty(SegmentProperty, segment);
-        tableFormat.setProperty(HeaderIsBodyProperty, block.value("headerIsBody").toBool());
-
-        QTextBlockFormat format = bodyBlock();
-        // The legacy overflow-x:auto tableWrapper prevents the table's 16px
-        // margin from collapsing through it with a preceding heading's 12px.
-        // Ordinary paragraph siblings still use the collapsed-margin path.
-        const bool afterHeading = cursor.blockFormat().intProperty(RoleProperty) == RoleHeading;
-        format.setTopMargin(firstContent ? 0 : 16 + (afterHeading ? 12 : 0));
-        // Qt drops the following block's top margin after a table frame, so the
-        // table's own bottom margin carries the stylesheet's 16px plus the next
-        // block's 16px rhythm.
-        format.setBottomMargin(32);
-        openBlock(format, segment);
-        QTextTable* table = cursor.insertTable(rows.size() + 1, columns, tableFormat);
-        tableRefs_.append({table, natural});
-
-        auto fill = [&](int row, int column, const QJsonArray& runs, bool headerCell) {
-          QTextTableCell cell = table->cellAt(row, column);
-          QTextTableCellFormat cellFormat;
-          const auto semantic = cellHeaders.value({row, column});
-          // Metadata only: do not reinterpret the retained HTML or change layout.
-          const bool semanticHeader = semantic.isEmpty() ? (headerRows.isEmpty() && headerCell) : semantic.value("header").toBool();
-          cellFormat.setProperty(CellHeaderProperty, semanticHeader);
-          cellFormat.setProperty(CellScopeProperty, semantic.isEmpty() ? (semanticHeader ? QStringLiteral("col") : QStringLiteral("auto"))
-                                                                     : semantic.value("scope").toString(QStringLiteral("unknown")));
-          cellFormat.setBorder(0);
-          // Qt places the first row's text flush with the table frame and only
-          // honours cell padding between rows. Carry CSS's 6px padding plus
-          // the grid-border allowance in the cell spacer and bottom padding.
-          cellFormat.setTopPadding(0);
-          cellFormat.setBottomPadding(7);
-          cellFormat.setLeftPadding(10);
-          cellFormat.setRightPadding(10);
-          cell.setFormat(cellFormat);
-          QTextCursor cellCursor = cell.firstCursorPosition();
-          // Qt lays the first block of a cell out flush with the cell's top edge
-          // and adds cell padding below it, so a 7px spacer block provides the
-          // stylesheet's padding and grid-border allowance above.
-          QTextBlockFormat spacer;
-          spacer.setTopMargin(0);
-          spacer.setBottomMargin(0);
-          spacer.setLineHeight(7, QTextBlockFormat::FixedHeight);
-          cellCursor.setBlockFormat(spacer);
-          QTextCharFormat spacerMark;
-          spacerMark.setFont(theme::uiFont(1));
-          spacerMark.setForeground(Qt::transparent);
-          cellCursor.insertText(QString(QChar(0x200B)), spacerMark);
-          QTextBlockFormat cellBlock;
-          cellBlock.setProperty(RoleProperty, RoleTable);
-          cellBlock.setProperty(SegmentProperty, segment);
-          cellBlock.setProperty(NodeProperty, currentNode);
-          cellBlock.setProperty(TableRowProperty, row);
-          cellBlock.setProperty(TableColumnProperty, column);
-          // Presentation preference only: the retained plan keeps the authored
-          // Markdown alignment markers for serialization and saving.
-          cellBlock.setAlignment(Qt::AlignLeft);
-          cellBlock.setLineHeight(28, QTextBlockFormat::FixedHeight);
-          cellBlock.setTopMargin(0);
-          cellBlock.setBottomMargin(0);
-          cellCursor.insertBlock(cellBlock);
-          QTextCharFormat base;
-          base.setFont(theme::uiFont(kBody, headerCell ? QFont::Bold : QFont::Normal));
-          base.setForeground(theme::text());
-          cellCursor.setBlockCharFormat(base);
-          cellCursor.setCharFormat(base);
-          const int authoredStart = cellCursor.position();
-          insertRuns(cellCursor, runs, base);
-          if (!headerRows.isEmpty()) {
-            // Raw previews are read-only and rebuilt from source on changes.
-            // mergeCells can append separator/spacer text from covered empty
-            // cells. Retain the actual content extent, not a duplicate string.
-            auto metadata = cell.format();
-            metadata.setProperty(AuthoredCellLengthProperty, cellCursor.position() - authoredStart);
-            cell.setFormat(metadata);
-          }
-        };
-
-        for (int column = 0; column < columns; ++column) {
-          fill(0, column, header.at(column).toArray(), !block.value("headerIsBody").toBool());
-        }
-        for (int row = 0; row < rows.size(); ++row) {
-          const QJsonArray cells = rows.at(row).toArray();
-          for (int column = 0; column < columns; ++column) {
-            fill(row + 1, column, column < cells.size() ? cells.at(column).toArray() : QJsonArray(), false);
-          }
-        }
-
-        for (const auto& span : spans)
-          if (span.rows > 1 || span.columns > 1) table->mergeCells(span.row, span.column, span.rows, span.columns);
-        cursor = table->lastCursorPosition();
-        cursor.movePosition(QTextCursor::NextBlock);
-
-        // A block that follows a table frame ignores its own top margin in Qt's
-        // layout, so the stylesheet's gap after the table is carried by an
-        // explicit 16px spacer paragraph instead. The following block still
-        // contributes its own margin; carrying it here too adds 16px twice.
-        QTextBlockFormat spacerFormat;
-        spacerFormat.setTopMargin(0);
-        spacerFormat.setBottomMargin(0);
-        spacerFormat.setLineHeight(16, QTextBlockFormat::FixedHeight);
-        cursor.setBlockFormat(spacerFormat);
-        QTextCharFormat invisible;
-        invisible.setFont(theme::uiFont(1));
-        invisible.setForeground(Qt::transparent);
-        cursor.insertText(QString(QChar(0x200B)), invisible);
-        afterTable = false;
-        continue;
-      }
-
-      if (type == QStringLiteral("hr")) {
-        QTextBlockFormat format = bodyBlock();
-        format.setTopMargin(firstContent ? 0 : 24);
-        format.setLineHeight(2, QTextBlockFormat::FixedHeight);
-        format.setProperty(RoleProperty, RoleRule);
-        openBlock(format, segment);
-        QTextCharFormat spacer;
-        spacer.setFont(theme::uiFont(1));
-        spacer.setForeground(Qt::transparent);
-        cursor.insertText(QString(QChar(0x200B)), spacer);
-        continue;
+      } else if (type == QStringLiteral("list")) {
+        insertListBlock(block, depth, segment);
+      } else if (type == QStringLiteral("table")) {
+        insertTableBlock(block, segment);
+      } else if (type == QStringLiteral("hr")) {
+        insertHorizontalRuleBlock(segment);
       }
     }
-  };
+  }
+};
 
-  insertBlocks(blocks, 0, -1);
-  if (firstContent && hiddenInsertionSegment >= 0) {
+void DocumentView::buildDocument(const QJsonObject& plan) {
+  taskListPreview_ = previewMode_ && plan.value(QStringLiteral("taskListWhitespace")).toBool();
+  for (auto& surface : rawSurfaces_) {
+    delete surface.preview;
+  }
+  rawSurfaces_.clear();
+  document_->clear();
+  tableRefs_.clear();
+  paintedTables_.clear();
+
+  int nextNode = 0;
+  modelTree_ = annotatePlanNodes(plan.value(QStringLiteral("blocks")).toArray(), nextNode);
+
+  BuildContext ctx(*this);
+  ctx.cursor.beginEditBlock();
+  ctx.insertLeadingZeroHeightBlock();
+  ctx.insertBlocks(modelTree_, 0, -1);
+  if (ctx.firstContent && ctx.hiddenInsertionSegment >= 0) {
     // Metadata-only documents still need a safe insertion point. Its serializer
     // appends body text after the hidden source instead of replacing that source.
-    currentNode = hiddenInsertionNode; currentListDepth = -1;
-    quoteDepth = 0; quoteListInsets.clear();
-    openBlock(bodyBlock(), hiddenInsertionSegment);
-    cursor.setCharFormat(bodyFormat());
-    editableSegments_.insert(hiddenInsertionSegment);
+    ctx.currentNode = ctx.hiddenInsertionNode;
+    ctx.currentListDepth = -1;
+    ctx.quoteDepth = 0;
+    ctx.quoteListInsets.clear();
+    ctx.openBlock(bodyBlock(), ctx.hiddenInsertionSegment);
+    ctx.cursor.setCharFormat(bodyFormat());
+    editableSegments_.insert(ctx.hiddenInsertionSegment);
   }
-  cursor.endEditBlock();
+  ctx.cursor.endEditBlock();
 }
 
 bool DocumentView::refreshParagraphIndents(const QTextBlock& only) {

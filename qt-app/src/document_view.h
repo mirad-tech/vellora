@@ -174,6 +174,7 @@ class DocumentView : public QAbstractScrollArea {
     QRectF scrollThumb;
   };
 
+  struct BuildContext;
   void buildDocument(const QJsonObject& plan);
   void relayout();
   bool refreshParagraphIndents(const QTextBlock& only = QTextBlock());
