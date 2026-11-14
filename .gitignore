@@ -4,6 +4,7 @@ spikes/*/target/
 
 # Installer output
 installer/out/
+releases/
 
 # Local logs
 *.log
@@ -19,6 +20,8 @@ qt-app/moc_*.cpp
 qt-app/moc_*.h
 qt-app/moc_predefs.h
 qt-app/qrc_*.cpp
+qt-app/*_resource.rc
+qt-app/*.res
 qt-app/vellora.exe
 qt-app/dist/
 qt-app/release/
@@ -26,3 +29,8 @@ qt-app/debug/
 
 # Local Python tooling (aqtinstall)
 tools/py/
+
+# Local agent config and manual verification artifacts
+.codex/
+tests/manual-ui/
+tests/fixtures/performance/picture-*.png
