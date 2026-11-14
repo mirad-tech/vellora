@@ -411,6 +411,29 @@ pub unsafe extern "C" fn vellora_image(document_path: *const c_char, src: *const
         "path": data.path.to_string_lossy(),
         "mime": data.mime,
         "bytes": data.size,
+        "modifiedAt": data.modified_at,
+      }),
+      CommandResult::Err { code, message, .. } => error_json(&code, &message),
+    }
+  })
+}
+
+/// Queries validated metadata `{ok, size, modifiedAt}` for a local image without
+/// reading payload bytes or returning a filesystem path.
+///
+/// # Safety
+///
+/// `document_path` and `src` must each either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_image_stat(document_path: *const c_char, src: *const c_char) -> *mut c_char {
+  guarded(|| {
+    let document_path = unsafe { from_c(document_path) };
+    let src = unsafe { from_c(src) };
+    match image_access::authorize_local_image(&document_path, &src, None) {
+      CommandResult::Ok { data, .. } => json!({
+        "ok": true,
+        "size": data.size,
+        "modifiedAt": data.modified_at,
       }),
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
@@ -419,7 +442,7 @@ pub unsafe extern "C" fn vellora_image(document_path: *const c_char, src: *const
 
 /// Reads validated owned image bytes directly without base64 or JSON string encoding.
 /// Decoders must consume the returned buffer rather than reopening a pathname returned
-/// by the metadata endpoint. The returned JSON status `{ok, code?, message?, mime}`
+/// by the metadata endpoint. The returned JSON status `{ok, code?, message?, mime, size, modifiedAt}`
 /// never includes a filesystem path.
 ///
 /// # Safety
@@ -449,15 +472,20 @@ pub unsafe extern "C" fn vellora_image_read(
     match image_access::read_local_image(&document_path, &src, None) {
       CommandResult::Ok { data: resolved, .. } => {
         let boxed = resolved.bytes.into_boxed_slice();
+        let byte_len = boxed.len();
         if !boxed.is_empty() {
-          let byte_len = boxed.len();
           let raw = Box::into_raw(boxed) as *mut u8;
           unsafe {
             *data = raw;
             *len = byte_len;
           }
         }
-        json!({ "ok": true, "mime": resolved.mime })
+        json!({
+          "ok": true,
+          "mime": resolved.mime,
+          "size": byte_len,
+          "modifiedAt": resolved.modified_at,
+        })
       }
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }
@@ -959,6 +987,46 @@ mod image_read_tests {
     assert_eq!(len, 0);
     assert_eq!(err_null_data["code"], "INVALID_ARGUMENT");
 
+    std::fs::remove_file(&doc).unwrap();
+    std::fs::remove_dir(&root).unwrap();
+  }
+
+  #[test]
+  fn image_stat_reports_size_and_mtime_without_path() {
+    let root = std::env::temp_dir().join(format!(
+      "vellora-image-stat-{}-{}",
+      std::process::id(),
+      std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let doc = root.join("doc.md");
+    let image = root.join("pic.png");
+    std::fs::write(&doc, "# doc").unwrap();
+    std::fs::write(&image, b"123456").unwrap();
+
+    let stat_call = |src: &str| -> Value {
+      let cdoc = CString::new(doc.to_str().unwrap()).unwrap();
+      let csrc = CString::new(src).unwrap();
+      let raw = unsafe { vellora_image_stat(cdoc.as_ptr(), csrc.as_ptr()) };
+      let val: Value = serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
+      unsafe { vellora_free(raw) };
+      val
+    };
+
+    let first = stat_call("pic.png");
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["size"], 6);
+    assert!(!first["modifiedAt"].as_str().unwrap().is_empty());
+    assert!(first.get("path").is_none());
+
+    std::fs::write(&image, b"123456789").unwrap();
+    let second = stat_call("pic.png");
+    assert_eq!(second["ok"], true);
+    assert_eq!(second["size"], 9);
+
+    assert_eq!(stat_call("../pic.png")["code"], "UNSUPPORTED_IMAGE_SOURCE");
+    std::fs::remove_file(&image).unwrap();
+    assert_eq!(stat_call("pic.png")["code"], "IMAGE_NOT_FOUND");
     std::fs::remove_file(&doc).unwrap();
     std::fs::remove_dir(&root).unwrap();
   }

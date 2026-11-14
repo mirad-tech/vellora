@@ -13,6 +13,7 @@ char* vellora_plan(const char* content);
 char* vellora_save(const char* path, const char* content, const char* token);
 char* vellora_image_read(const char* documentPath, const char* src, uint8_t** data, size_t* len);
 void vellora_free_bytes(uint8_t* data, size_t len);
+char* vellora_image_stat(const char* documentPath, const char* src);
 char* vellora_image(const char* documentPath, const char* src);
 char* vellora_inspect_link(const char* documentPath, const char* href);
 char* vellora_open_link(const char* documentPath, const char* href);
@@ -90,6 +91,10 @@ ImageReadResult readImage(const QString& documentPath, const QString& source) {
   result.data = rawData;
   result.size = static_cast<qsizetype>(rawLen);
   return result;
+}
+
+QJsonObject statImage(const QString& documentPath, const QString& source) {
+  return consume(vellora_image_stat(utf8(documentPath).constData(), utf8(source).constData()));
 }
 
 QJsonObject resolveImage(const QString& documentPath, const QString& source) {

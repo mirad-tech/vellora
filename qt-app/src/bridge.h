@@ -40,6 +40,7 @@ QJsonObject openDocument(const QString& path);
 QJsonObject planFor(const QString& markdown);
 QJsonObject saveDocument(const QString& path, const QString& content, const QString& conflictToken);
 ImageReadResult readImage(const QString& documentPath, const QString& source);
+QJsonObject statImage(const QString& documentPath, const QString& source);
 QJsonObject resolveImage(const QString& documentPath, const QString& source);
 QJsonObject inspectLink(const QString& documentPath, const QString& href);
 QJsonObject openLink(const QString& documentPath, const QString& href);

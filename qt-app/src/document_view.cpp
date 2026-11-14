@@ -558,7 +558,7 @@ void DocumentView::setEmptyState() {
   building_=true;empty_=true;errorMessage_.clear();
   setAccessibleName(QStringLiteral("打开"));
   setAccessibleDescription(QStringLiteral("未打开文件。请选择 .md 或 .markdown 文件。"));
-  imageCache_.clear();animationCache_.clear();authorizedImages_.clear();imageSources_.clear();imageSizes_.clear();paintedImages_.clear();
+  imageCache_.clear();animationCache_.clear();authorizedImages_.clear();imageSources_.clear();imageSizes_.clear();imageStats_.clear();paintedImages_.clear();
   for(auto& surface:rawSurfaces_){delete surface.preview;}rawSurfaces_.clear();
   auto release=[](auto& values){using Values=std::decay_t<decltype(values)>;Values{}.swap(values);};
   release(codeBoxes_);release(quoteBars_);release(ruleLines_);release(imageBoxes_);release(tableBoxes_);release(inlineBoxes_);release(tableRefs_);release(paintedTables_);release(horizontalRegions_);release(blockSnapshot_);release(matches_);
@@ -580,7 +580,7 @@ void DocumentView::setPlan(const QJsonObject& plan, const QString& documentPath)
   resetCodeCopyFeedback();
   errorMessage_.clear();
   setAccessibleName(QStringLiteral("文档编辑器"));setAccessibleDescription(QString());
-  authorizedImages_.clear(); imageSources_.clear(); imageSizes_.clear(); imageCache_.clear(); animationCache_.clear();
+  authorizedImages_.clear(); imageSources_.clear(); imageSizes_.clear(); imageStats_.clear(); paintedImages_.clear(); imageCache_.clear(); animationCache_.clear();
   if(normalizedImagePath(documentPath_)!=normalizedImagePath(documentPath)) {
     // A different file owns a different working set. Keep same-file reparses
     // reusable, but do not carry the previous file's peak vector capacities.
@@ -755,9 +755,12 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
           QImageReader reader(&buffer);
           const QSize imageSize = data.ok() ? reader.size() : QSize();
           if (imageSize.isValid()) {
-            authorizedImages_.insert(normalizedImagePath(path));
-            imageSources_.insert(normalizedImagePath(path),run.value("src").toString());
-            imageSizes_.insert(normalizedImagePath(path),imageSize);
+            const QString key = normalizedImagePath(path);
+            authorizedImages_.insert(key);
+            imageSources_.insert(key, run.value("src").toString());
+            imageSizes_.insert(key, imageSize);
+            imageStats_.insert(key, ImageStat{true, data.status.value("size").toInteger(data.size),
+                                              data.status.value("modifiedAt").toString()});
             QTextImageFormat imageFormat;
             imageFormat.setName(resolved.value("path").toString());
             const qreal width = qMin(imageSize.width(), contentWidth());
@@ -789,6 +792,7 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
         const QString key = normalizedImagePath(QStringLiteral("missing-image:") + run.value("src").toString());
         alt.setProperty(ImagePathProperty, key);
         authorizedImages_.insert(key); imageSources_.insert(key, run.value("src").toString());
+        imageStats_.insert(key, ImageStat{false, -1, QString()});
         // The UI label is painted only: one image occupies one cursor position,
         // exactly like a successfully decoded image, including IME and search.
         into.insertText(QString(QChar::ObjectReplacementCharacter), alt);
@@ -907,17 +911,24 @@ void DocumentView::buildDocument(const QJsonObject& plan) {
           const QJsonObject resolved = bridge::resolveImage(documentPath_, run.value("src").toString());
           const QString path = resolved.value("ok").toBool() ? resolved.value("path").toString() : QString();
           QSize imageSize;
+          ImageStat loadedStat;
           if (!path.isEmpty()) {
             const auto data = bridge::readImage(documentPath_, run.value("src").toString());
             const QByteArray view = imageDecode::inputBytes(data.rawView());
             QBuffer buffer; buffer.setData(view); buffer.open(QIODevice::ReadOnly);
             QImageReader reader(&buffer);
-            if (data.ok()) imageSize = reader.size();
+            if (data.ok()) {
+              imageSize = reader.size();
+              loadedStat = ImageStat{true, data.status.value("size").toInteger(data.size),
+                                     data.status.value("modifiedAt").toString()};
+            }
           }
           if (imageSize.isValid()) {
-            authorizedImages_.insert(normalizedImagePath(path));
-            imageSources_.insert(normalizedImagePath(path),run.value("src").toString());
-            imageSizes_.insert(normalizedImagePath(path),imageSize);
+            const QString key = normalizedImagePath(path);
+            authorizedImages_.insert(key);
+            imageSources_.insert(key, run.value("src").toString());
+            imageSizes_.insert(key, imageSize);
+            imageStats_.insert(key, loadedStat);
             QTextBlockFormat format = bodyBlock();
             format.setTopMargin(firstContent ? 0 : 16);
             format.setProperty(RoleProperty, RoleImage);
@@ -3461,20 +3472,56 @@ void DocumentView::hideEvent(QHideEvent* event) {
   for(auto& surface:rawSurfaces_) {surface.preview->imageCache_.clear();surface.preview->animationCache_.clear();}
 }
 
+void DocumentView::refreshImagesOnFocus() {
+  bool resized = false;
+  bool changed = false;
+  for (const auto& key : paintedImages_) {
+    const QString src = imageSources_.value(key);
+    const QJsonObject stat = bridge::statImage(documentPath_, src);
+    const ImageStat current =
+        stat.value("ok").toBool()
+            ? ImageStat{true, stat.value("size").toInteger(0), stat.value("modifiedAt").toString()}
+            : ImageStat{false, -1, QString()};
+    if (imageStats_.contains(key) && imageStats_.value(key) == current) {
+      continue;
+    }
+    imageStats_.insert(key, current);
+    imageCache_.remove(key);
+    animationCache_.remove(key);
+    changed = true;
+    QSize size;
+    if (current.ok) {
+      const auto data = bridge::readImage(documentPath_, src);
+      const QByteArray view = imageDecode::inputBytes(data.rawView());
+      QBuffer buffer;
+      buffer.setData(view);
+      buffer.open(QIODevice::ReadOnly);
+      QImageReader reader(&buffer);
+      if (data.ok()) size = reader.size();
+    }
+    if (size.isValid() && size != imageSizes_.value(key)) {
+      imageSizes_[key] = size;
+      resized = true;
+    } else if (!size.isValid() && key.startsWith(QStringLiteral("missing-image:")) &&
+               imageSizes_.remove(key)) {
+      resized = true;
+    }
+  }
+  if (resized) {
+    document_->markContentsDirty(0, document_->characterCount());
+    relayout();
+  }
+  if (changed || resized) {
+    viewport()->update();
+  }
+}
+
 void DocumentView::focusInEvent(QFocusEvent* event) {
   QAbstractScrollArea::focusInEvent(event);
-  imageCache_.clear(); animationCache_.clear();
-  bool resized=false;
-  for(const auto& key:paintedImages_) {
-    const auto data=bridge::readImage(documentPath_,imageSources_.value(key));
-    const QByteArray view=imageDecode::inputBytes(data.rawView());
-    QBuffer buffer;buffer.setData(view);buffer.open(QIODevice::ReadOnly);
-    QImageReader reader(&buffer);const QSize size=data.ok()?reader.size():QSize();
-    if(size.isValid() && size!=imageSizes_.value(key)) {imageSizes_[key]=size;resized=true;}
-    else if (!size.isValid() && key.startsWith(QStringLiteral("missing-image:")) && imageSizes_.remove(key)) resized=true;
+  refreshImagesOnFocus();
+  for (auto& surface : rawSurfaces_) {
+    surface.preview->refreshImagesOnFocus();
   }
-  if(resized){document_->markContentsDirty(0,document_->characterCount());relayout();}
-  for (auto& surface : rawSurfaces_) { surface.preview->imageCache_.clear(); surface.preview->animationCache_.clear(); surface.preview->viewport()->update(); }
   resetCaretBlink();
 }
 
@@ -3780,7 +3827,13 @@ QImage DocumentView::decodedImage(const QString& path) {
   if (const auto* animation = animationCache_.object(key)) return animation->movie.currentImage();
   if (const auto* cached = imageCache_.object(key)) return *cached;
   const auto result = bridge::readImage(documentPath_,imageSources_.value(key));
-  if (!result.ok()) { imageCache_.insert(key,new QImage,1); return {}; }
+  if (!result.ok()) {
+    imageStats_.insert(key, ImageStat{false, -1, QString()});
+    imageCache_.insert(key,new QImage,1);
+    return {};
+  }
+  imageStats_.insert(key, ImageStat{true, result.status.value("size").toInteger(result.size),
+                                    result.status.value("modifiedAt").toString()});
   const QByteArray view = imageDecode::inputBytes(result.rawView());
   QBuffer buffer; buffer.setData(view); buffer.open(QIODevice::ReadOnly);
   QImageReader reader(&buffer);

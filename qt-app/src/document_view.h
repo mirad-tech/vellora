@@ -257,6 +257,17 @@ class DocumentView : public QAbstractScrollArea {
   QSet<QString> authorizedImages_;
   QHash<QString,QString> imageSources_;
   QHash<QString,QSize> imageSizes_;
+  struct ImageStat {
+    bool ok = false;
+    qint64 size = -1;
+    QString modifiedAt;
+    bool operator==(const ImageStat& other) const {
+      return ok == other.ok && size == other.size && modifiedAt == other.modifiedAt;
+    }
+    bool operator!=(const ImageStat& other) const { return !(*this == other); }
+  };
+  QHash<QString, ImageStat> imageStats_;
+  void refreshImagesOnFocus();
   struct AnimatedImage { QBuffer buffer; QMovie movie; AnimatedImage(const QByteArray& bytes): movie(&buffer) { buffer.setData(bytes); buffer.open(QIODevice::ReadOnly); } };
   QCache<QString,AnimatedImage> animationCache_{32 * 1024};
   QSet<QString> paintedImages_;

@@ -163,6 +163,40 @@ class NativeRegressions : public QObject {
     QVERIFY(view.revealText("Tail"));QTest::keyClick(&view,Qt::Key_Right);QTest::keyClicks(&view,"abc");view.grab();view.resize(640,800);QCoreApplication::processEvents();QTest::keyClick(&view,Qt::Key_Z,Qt::ControlModifier);QVERIFY(view.pendingEdits().isEmpty());
     QVERIFY(view.revealText("Tail"));QTest::keyClick(&view,Qt::Key_Right);QTest::keyClicks(&view,"abc");image=QImage(1200,1200,QImage::Format_RGB32);image.fill(Qt::blue);QVERIFY(image.save(imagePath));QFocusEvent focus(QEvent::FocusIn);QApplication::sendEvent(&view,&focus);view.grab();QTest::keyClick(&view,Qt::Key_Z,Qt::ControlModifier);QVERIFY(view.pendingEdits().isEmpty());
   }
+  void backgroundImageReplacementRefreshesOnFocus() {
+    const QString keepPath = files_.filePath("keep.png");
+    const QString replacePath = files_.filePath("replace.png");
+    QImage keepImg(48, 48, QImage::Format_RGB32); keepImg.fill(Qt::green); QVERIFY(keepImg.save(keepPath));
+    QImage redImg(48, 48, QImage::Format_RGB32); redImg.fill(Qt::red); QVERIFY(redImg.save(replacePath));
+    const QString markdown = "![keep](keep.png)\n\n![replace](replace.png)\n";
+    const auto path = fixture(markdown.toUtf8());
+    DocumentView view; view.resize(820, 700); view.show();
+    view.setPlan(bridge::planFor(markdown).value("plan").toObject(), path);
+    auto countColors = [&] {
+      const QImage shot = view.viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+      int red = 0, green = 0, blue = 0;
+      for (int y = 0; y < shot.height(); ++y) {
+        const QRgb* row = reinterpret_cast<const QRgb*>(shot.constScanLine(y));
+        for (int x = 0; x < shot.width(); ++x) {
+          if (qRed(row[x]) > 200 && qGreen(row[x]) < 50 && qBlue(row[x]) < 50) ++red;
+          if (qGreen(row[x]) > 120 && qRed(row[x]) < 50 && qBlue(row[x]) < 50) ++green;
+          if (qBlue(row[x]) > 200 && qRed(row[x]) < 50 && qGreen(row[x]) < 50) ++blue;
+        }
+      }
+      return std::tuple<int, int, int>{red, green, blue};
+    };
+    auto [red0, green0, blue0] = countColors();
+    QVERIFY(red0 >= 500); QVERIFY(green0 >= 500); QCOMPARE(blue0, 0);
+    QTest::qWait(25);
+    QImage blueImg(48, 48, QImage::Format_RGB32); blueImg.fill(Qt::blue); QVERIFY(blueImg.save(replacePath));
+    QFile touched(replacePath); QVERIFY(touched.open(QIODevice::ReadWrite));
+    touched.setFileTime(QDateTime::currentDateTimeUtc().addSecs(2), QFileDevice::FileModificationTime);
+    touched.close();
+    QFocusEvent focus(QEvent::FocusIn); QApplication::sendEvent(&view, &focus);
+    auto [red1, green1, blue1] = countColors();
+    QCOMPARE(red1, 0); QVERIFY(green1 >= 500); QVERIFY(blue1 >= 500);
+    QVERIFY(!view.hasPendingEdits()); QVERIFY(!view.document()->isUndoAvailable());
+  }
   void structuralEnterAndMultiDigitIndent() {
     DocumentView view;view.resize(1000,800);view.show();auto open=[&](const QString& text){view.setPlan(bridge::planFor(text).value("plan").toObject(),QString());view.setFocus();};
     auto edited=[&](){QStringList parts;for(const auto& edit:view.pendingEdits())parts<<edit.second;return parts.join("\n");};

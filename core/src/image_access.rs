@@ -17,6 +17,7 @@ pub struct AuthorizedImage {
   pub path: PathBuf,
   pub mime: &'static str,
   pub size: u64,
+  pub modified_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub struct ResolvedImage {
   pub path: PathBuf,
   pub mime: &'static str,
   pub bytes: Vec<u8>,
+  pub modified_at: String,
 }
 
 fn mime_for_extension(ext: &str) -> Option<&'static str> {
@@ -128,6 +130,19 @@ fn open_authorized_local_image<T>(
   Ok(OpenedLocalImage { file, metadata, path: image_path, mime, limit })
 }
 
+fn metadata_modified_token(metadata: &fs::Metadata) -> String {
+  let Ok(modified) = metadata.modified() else {
+    return String::new();
+  };
+  match modified.duration_since(std::time::UNIX_EPOCH) {
+    Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
+    Err(before) => {
+      let d = before.duration();
+      format!("-{}.{:09}", d.as_secs(), d.subsec_nanos())
+    }
+  }
+}
+
 /// Authorize a local image (path boundary, extension, open-handle canonical match,
 /// and metadata size limit) without reading file payload bytes.
 pub fn authorize_local_image(
@@ -139,10 +154,12 @@ pub fn authorize_local_image(
     Ok(opened) => opened,
     Err(failure) => return failure,
   };
+  let modified_at = metadata_modified_token(&opened.metadata);
   CommandResult::success(AuthorizedImage {
     path: opened.path,
     mime: opened.mime,
     size: opened.metadata.len(),
+    modified_at,
   })
 }
 
@@ -158,6 +175,7 @@ pub fn read_local_image(
     Err(failure) => return failure,
   };
 
+  let modified_at = metadata_modified_token(&opened.metadata);
   let capacity = usize::try_from(opened.metadata.len()).unwrap_or(0);
   let mut bytes = Vec::with_capacity(capacity);
   let read_result = opened.file.take(opened.limit.saturating_add(1)).read_to_end(&mut bytes);
@@ -175,7 +193,7 @@ pub fn read_local_image(
     return CommandResult::failure("IMAGE_TOO_LARGE", "Image exceeds the size limit.");
   }
 
-  CommandResult::success(ResolvedImage { path: opened.path, mime: opened.mime, bytes })
+  CommandResult::success(ResolvedImage { path: opened.path, mime: opened.mime, bytes, modified_at })
 }
 
 // Windows returns the normalized path for this actual open handle. This closes
