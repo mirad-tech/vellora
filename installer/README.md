@@ -1,48 +1,68 @@
-# 安装与卸载（Vellora Native Preview 0.1.0）
+# Vellora 构建、打包与安装
 
-## 产物
+当前发行入口为 [package-qt.ps1](package-qt.ps1)，安装行为由 [vellora-qt-preview.nsi](vellora-qt-preview.nsi) 定义。当前代码和打包默认版本为 **0.1.2**。
 
-| 文件 | 大小 | SHA256 |
-|---|---:|---|
-| `native/installer/out/VelloraNative-Setup-0.1.0.exe` | 419,006 B | `AC41C2037C9CBF282EC7935FDE1FF08E5FA82194923A7807C0B49C9C46573292` |
-| `native/target/release/vellora-native.exe` | 678,400 B | `24ECC505D3D491F918DE2091052A1BBCE8843577C5805B93CB7BA12F3463FE6C` |
+## 构建与产物
 
-重新构建：
+需要已有 Rust MSVC 工具链、Visual Studio C++ x64 Build Tools、Windows SDK、Qt 6.8.3 MSVC2022 x64（qtbase、qtsvg、qtimageformats）和官方 NSIS。Qt 安装须保留这三个模块的 `sbom/*.spdx.json`。
+
+在仓库根目录的 PowerShell 中运行，按实际安装位置调整路径：
 
 ```powershell
-pwsh -File native/installer/build-installer.ps1 -Version 0.1.0
+./installer/package-qt.ps1 -QtRoot 'C:\Qt\6.8.3\msvc2022_64' -MakeNsis 'C:\Program Files (x86)\NSIS\makensis.exe'
 ```
 
-脚本会 `cargo build --release`、调用 NSIS（优先使用 `%LOCALAPPDATA%\tauri\NSIS\makensis.exe`），并生成同名 `.json` 清单（含两个哈希与 rustc 版本）。
+脚本先调用 `qt-app/build.ps1` 构建 Rust 桥接库和 Qt 应用，默认运行 Rust 与 Qt 离屏回归。`-RunTests $false` 可跳过回归测试。构建和回归入口详见 [Qt 开发说明](../qt-app/README.md) 与 [测试说明](../qt-app/tests/README.md)。
 
-## 安装位置与影响范围
+- `-QtRoot` 默认读取 `QT_ROOT`，未设置时使用仓库内的 `qt/6.8.3/msvc2022_64`。
+- `-BuildRoot` 默认是 `target/qt-release`；可通过 `-CargoTargetDir`、`-MsvcRoot`、`-WindowsSdkRoot` 指定工具链和构建路径。
+- `-OutputDir` 默认是新建的 `target/qt-package-yyyyMMdd-HHmmss`。指定的输出目录必须不存在，脚本拒绝覆盖已有目录。
+- `-MakeNsis` 未指定时查找 `%LOCALAPPDATA%\tauri\NSIS\makensis.exe`；脚本不会下载或安装工具。
 
-- 安装目录：`%LOCALAPPDATA%\Programs\VelloraNative`（当前用户，无需管理员）。
-- 开始菜单：`Vellora Native`（程序 + 卸载）；桌面快捷方式。
-- 注册表：`HKCU\Software\VelloraNative` 与 `HKCU\...\Uninstall\VelloraNative`（仅用于“应用和功能”条目）。
-- **不写 `.md` 文件关联**：旧版 Vellora 仍是默认程序。切换关联需要在用户批准后单独处理。
+输出目录包含：
 
-## 已验证
-
-在 `%TEMP%\VelloraNativeInstallTest` 上做了完整的静默安装/运行/卸载验证：
-
-| 步骤 | 结果 |
+| 产物 | 内容 |
 |---|---|
-| `/S /D=<临时目录>` 静默安装 | 退出码 0 |
-| 安装内容 | `vellora-native.exe`、`uninstall.exe`、`README.txt`、`LICENSE.txt` |
-| 注册表条目 | DisplayName `Vellora Native (Preview)`、DisplayVersion `0.1.0`、UninstallString 指向安装目录 |
-| 快捷方式 | 开始菜单与桌面均已创建 |
-| 从安装目录启动并打开文档 | 进程存活，标题 `06-ui-polish.md — Vellora` |
-| 静默卸载 | 退出码 0 |
-| 卸载后 | 安装目录、开始菜单项、桌面快捷方式、注册表键全部消失 |
+| `Vellora-0.1.2-portable/` | `vellora.exe`、Qt/MSVC 运行库、插件和许可证；运行时保留完整目录 |
+| `Vellora-Setup-0.1.2.exe` | 当前用户范围的 NSIS 安装包 |
+| `manifest.json` | 实际版本、文件路径、大小、SHA256，以及生产构建标记 |
+| `uninstall-files.nsh` | 从本次便携目录生成的卸载文件清单 |
 
-## 未验证
+打包只使用 `<BuildRoot>/app/vellora.exe`，不包含启用测试钩子的 `test-app`。脚本检查应用和安装器的 Windows 版本资源；`-Version` 必须与代码版本一致，不能只改包名。Qt 运行依赖通过 `windeployqt` 收集，MSVC CRT 随应用部署；`licenses/` 保留许可证、Qt 模块 SBOM、版权及源码链接。
 
-- 覆盖安装（升级）与降级。
-- 多用户机器上的行为。
-- 签名（当前未签名，Windows 可能提示“未知发布者”）。
-- 文件关联注册（按计划有意不做）。
+脚本生成安装包，不执行安装器，也不发布软件。
 
-## 从旧版迁移
+## 安装与升级行为
 
-两者可以并存：旧版继续使用自己的安装目录与关联。要试用原生版，安装后从开始菜单启动，或把文件拖到窗口里。确认不再需要旧版之前，不要删除旧安装。
+- 默认安装到 `%LOCALAPPDATA%\Programs\Vellora`，无需管理员权限；创建 Vellora 开始菜单、桌面快捷方式和卸载入口，不设置开机自启动，也不自动启动应用。
+- 安装器拒绝未标记的非空目标目录，以及其他位置的 Vellora 安装登记或不归本安装管理的已有入口。
+- 带有相同安装器标记的目录允许同版本修复安装。当前 0.1.2 还允许从 0.1.0/0.1.1 原目录升级，但要求安装标记匹配，且注册的安装路径等于目标目录；其他版本不在此升级范围内。
+- 安装和卸载前检查程序文件是否可独占打开；无法替换时要求先保存文档并关闭程序。
+- 卸载按本次包内清单删除文件，保留额外用户文件；仅当登记的安装路径仍属于本安装时清理快捷方式、卸载登记及所属文件关联，不清理应用用户设置。
+
+## 可选 Markdown 关联
+
+安装器在目录页之后提供默认不勾选的关联选项，范围仅为 `.md` 和 `.markdown`。选中时，在当前用户下注册 Vellora 的 ProgID、打开命令、图标、OpenWithProgids、RegisteredApplications 和 Capabilities；注册成功后打开 Windows 默认应用设置，由用户选择默认程序。未勾选时保持既有文件关联。
+
+安装器不写扩展默认值或受保护的 UserChoice。若同名 Vellora 注册指向其他位置，安装器保留它并提示冲突。卸载仅移除所有权与打开命令符合本安装的 ProgID/OpenWith 候选，以及所有权匹配的 Capabilities 登记。
+
+## 验证入口
+
+以下静态策略检查读取安装脚本，不执行安装或修改注册表：
+
+```powershell
+python installer/tests/test_association_policy.py
+python installer/tests/test_release_policy.py
+```
+
+便携运行验证会启动本次便携目录中的应用，单独执行：
+
+```powershell
+./qt-app/tests/smoke-portable.ps1 -PortableDir '输出目录/Vellora-0.1.2-portable' -OutputDir '新测试目录'
+```
+
+该脚本拒绝连接已有生产实例，使用仅含系统目录的 PATH 检查应用本地 DLL 和平台插件，并检查生产版未启用测试钩子。它不运行安装器；真实安装、升级、卸载、文件关联和 Windows 输入法体验需分别验收。
+
+## 历史入口
+
+旧 Win32/Rich Edit 实现、实验目录和预览版安装流程仅保留在本地，由 `.gitignore` 排除，不参与当前 `package-qt.ps1` 发行流程。当前便携版的 `README.txt` 由打包脚本生成。

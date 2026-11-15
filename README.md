@@ -72,7 +72,7 @@ Get-FileHash -Algorithm SHA256 .\Vellora-Setup-0.1.2.exe
 
 请将 Qt 路径替换为自己的安装位置。产物位于 `target\qt-release\app\vellora.exe`，运行需要对应 Qt 动态库。`-Test` 会运行 Rust 与 Qt 自动化测试。
 
-打包脚本为 `installer\package-qt.ps1`，另需官方 NSIS，并通过 `-MakeNsis` 指定 `makensis.exe`；Qt 安装须保留上述模块的 SBOM。脚本会生成携带运行依赖的便携目录和安装包，不自动安装。
+打包脚本为 `installer\package-qt.ps1`，另需官方 NSIS，并通过 `-MakeNsis` 指定 `makensis.exe`；Qt 安装须保留上述模块的 SBOM。脚本会生成携带运行依赖的便携目录和安装包，不自动安装。具体命令、产物及升级规则见[打包与安装说明](installer/README.md)。
 
 ## 许可证
 

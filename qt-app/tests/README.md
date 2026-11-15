@@ -1,16 +1,23 @@
 # Native Qt regressions
 
-From a PowerShell prompt with Rust MSVC installed:
+From the repository root in PowerShell, with Rust MSVC, Qt 6.8.3 MSVC2022 x64
+(including Qt Image Formats), VS C++ tools and Windows SDK installed:
 
-    ./qt-app/build.ps1 -Test
-    ./qt-app/build.ps1 -Test -Clean -QtRoot C:/Qt/6.8.3/msvc2022_64 -BuildRoot C:/temp/vellora-build -CargoTargetDir C:/temp/vellora-rust
+    ./qt-app/build.ps1 -Test -EmitLegacyOutput:$false
+    ./qt-app/build.ps1 -Test -Clean -QtRoot C:/Qt/6.8.3/msvc2022_64 -BuildRoot C:/temp/vellora-build -CargoTargetDir C:/temp/vellora-rust -EmitLegacyOutput:$false
 
 The script builds the Rust bridge before qmake. It never depends on an existing
 bridge library or app executable. `-Test` also runs the Rust core/md/bridge test suites,
-builds a separate QtTest executable and runs it with the offscreen platform.
-JUnit XML and binaries are under `<BuildRoot>/tests`. By default BuildRoot is
-`target/qt-release` (or qt-debug). The installer-compatible executable is
-also copied to `qt-app/vellora.exe` after a successful build.
+builds 14 QtTest suites and runs them with the offscreen platform. Each suite
+writes `results.xml` (JUnit) and `results.txt` beside its executable in its own
+`<BuildRoot>` subdirectory: `tests`, `accessibility-tests`, `serialization-tests`,
+`code-copy-tests`, `conflict-tests`, `feedback-document-tests`, `focused-ui-tests`,
+`parity-document-tests`, `chrome-accessibility-tests`, `chrome-ui-tests`,
+`highlight-parity-tests`, `body-layout-tests`, `ime-raw-tests`, and `fidelity-tests`.
+By default BuildRoot is `target/qt-release` (or `target/qt-debug`). Production
+and instrumented application binaries are under `app` and `test-app` respectively.
+Unless `-EmitLegacyOutput:$false` is passed, the production executable is also
+copied to `qt-app/vellora.exe` after its build succeeds.
 
 Overrides: `-QtRoot` / QT_ROOT; `-MsvcRoot` / VELLORA_MSVC_ROOT accepts either
 VC/Tools/MSVC or a version directory; `-WindowsSdkRoot` / WindowsSdkDir;
@@ -30,13 +37,19 @@ its license (Qt 6 open-source components commonly LGPLv3/GPLv3; verify all used
 modules and redistribution obligations). The script installs no machine tools.
 `-EmitLegacyOutput:$false` avoids copying the executable into the installer input path.
 
-The optional GitHub workflow `native-qt.yml` only builds/tests on Windows 2022;
-it does not package, publish or change the existing release workflow. It uses
-PyPI aqtinstall 3.3.0 as a downloader against https://download.qt.io, Qt 6.8.3
-MSVC2022 x64, the runner's VS/SDK, and Rust stable MSVC. This open-source Qt kit
-must be used subject to https://www.qt.io/licensing/open-source-lgpl-obligations.
-Downloading Qt in CI does not waive license or redistribution requirements.
-The workflow itself has not been run on GitHub until pushed by the owner.
+The GitHub workflow [ci.yml](../../.github/workflows/ci.yml) runs on pushes to
+`main` and pull requests. Its two `windows-latest` jobs use Rust stable and run:
+
+    ./tools/check.ps1
+    ./tools/check.ps1 -Full
+
+The first checks Rust formatting, Clippy with warnings denied, the release panic
+unwind policy, and workspace tests. `-Full` keeps those static checks and runs
+`build.ps1 -Test -EmitLegacyOutput $false` for Rust and Qt regressions. This is a
+mixed build/regression command, not a unit-test-only command. The Qt job installs
+Qt 6.8.3 MSVC2022 x64 plus Qt Image Formats using `jurplel/install-qt-action@v4`
+and the runner's VS/SDK. The workflow does not package or publish artifacts.
+The open-source Qt kit remains subject to its applicable license obligations.
 
 Additional regression cases cover CRLF edits, nested/ordered lists, raw fenced
 code/reference neighbors, replace-all as one undo step, save-then-undo, external
@@ -47,24 +60,32 @@ they never forward documents into a user's normal application instance.
 The offscreen runner uses the installed Windows fonts via QT_QPA_FONTDIR when
 that environment variable is not already configured.
 
-Optional native-window memory test (not a CI timing gate):
+Optional native-window numeric memory diagnostics (not a CI timing gate). Instrumented and production examples:
 
-    ./qt-app/tests/perf.ps1 -Executable 'target/qt-release/app/vellora.exe' -OutputDir 'C:/temp/qt-perf-fresh' -Runs 1
+    ./qt-app/tests/perf.ps1 -Executable 'target/qt-release/test-app/vellora.exe' -OutputDir 'C:/temp/qt-perf-instrumented-fresh' -Runs 1
+    ./qt-app/tests/perf.ps1 -Executable 'target/qt-release/app/vellora.exe' -OutputDir 'C:/temp/qt-perf-production-fresh' -Runs 1 -ProductionOnly
 
-Each run uses qwindows at system DPI, with no scale overrides, and visits empty,
-the repository performance small/large Markdown and images-81 fixtures, then small again.
-Fixtures are copied without modifying originals and their SHA256s are recorded.
+Both save numeric reports with `passed=false` and exit with an explicit
+incomplete-verification error; use the per-stage visible sampling below for
+document-verified acceptance.
+
+Each run uses qwindows at system DPI, with no scale overrides. The default
+instrumented sequence and production subset are described below.
+Markdown fixtures are copied and their SHA256s are recorded. The script invokes
+`tools/make-perf-images.ps1` to prepare image assets in the performance fixture
+directory before copying them to the fresh OutputDir.
 Use -Synthetic only for the separate repeated-paragraph/solid-1280x720-image control.
 For each stage it waits 30 seconds naturally then samples PrivateMemorySize64
 10 times at one-second intervals. No forced GC, cache eviction, working-set
 trim, or scrolling is used. Use Runs=3 for three independent sequential runs.
 The generated fixtures and raw JSON samples remain in the fresh OutputDir.
-Each stage verifies its own PID window title plus metadata observer platform,
-loaded title and document character count before sampling. Reports retain Qt/OS/DPI,
+The instrumented run checks the owned window title, observer platform, mode and
+nonempty document count; these do not verify loaded file identity or content.
+Production runs verify owned window identity only. Reports retain Qt/OS/DPI,
 binary SHA256 and every raw sample. A failed start/forward is an error, not a memory result.
 
 For self-contained distribution build instructions, see
-`installer/README-qt-preview.md`. The old Rust RichEdit installer and its
+[installer/README.md](../../installer/README.md). The old Rust RichEdit installer and its
 performance reports must not be described as Qt artifacts/results.
 
 
@@ -79,20 +100,23 @@ reading anchors on first mode switch, selection preservation after reparse, and
 image delete/type/undo (including a pixel check that the removed red image is gone).
 No test depends on redefining private access or calling mangling-altered methods.
 
-Both qmake projects declare the Rust static library in PRE_TARGETDEPS as well as
-LIBS. A Rust-only rebuild must relink the application and the test executable.
+The application and bridge-linked test qmake projects declare the Rust static
+library in PRE_TARGETDEPS as well as LIBS, so a Rust-only rebuild relinks them.
+The focused UI, chrome UI and highlight suites do not link the Rust bridge.
 The structured 2 MiB fixture also has a generous 15-second event-loop regression
 test; this is distinct from the formal qwindows memory and latency measurements.
 
-The formal memory sequence is empty, small, original large in document mode,
+The instrumented diagnostic sequence is empty, small, original large in document mode,
 original large in source mode, small after large, original 81-image document,
-and small after images. Steady medians across three independent runs are compared
-with 60/80/200 MiB limits; peak samples are reported separately. Both small-file
+and small after images, followed by large images and small after large images.
+Steady medians across three independent runs are compared
+with 60/80/200 MiB limits; peak samples are reported separately. All three small-file
 recovery stages must be within the same run's initial empty state plus 20 MiB.
-Search-state memory can be measured separately with `perf.ps1 -SearchOnly -Runs 3`, using the same executable/output arguments and a fresh OutputDir. It verifies a visible search panel and nonzero matches for `mixed text` in the original large fixture. Input p95 and real Windows IME acceptance are separate checks,
+Search-state memory can be measured separately with `perf.ps1 -SearchOnly -Runs 3`, using the instrumented executable and a fresh OutputDir. It verifies a visible search panel and nonzero matches for `mixed text` in the original large fixture. Input p95 and real Windows IME acceptance are separate checks,
 not implied by this memory script.
 
-During natural settling, process memory is sampled every 100 ms. The observed settling peak is a sampled bound, not an exact instantaneous allocation peak; the ten one-second samples after settling remain the steady-state measurement. No forced GC, trimming, or cache clearing is performed.
+During forwarding and the first two seconds of natural settling, `perf.ps1`
+samples process memory every 10 ms; it then samples every 100 ms. The observed settling peak is a sampled bound, not an exact instantaneous allocation peak; the ten one-second samples after settling remain the steady-state measurement. No forced GC, trimming, or cache clearing is performed.
 
 Keyboard parity tests include Ctrl+E inline code, Ctrl+Alt+1 through 6 headings, Ctrl+Shift+7/8 lists, and Ctrl+Shift+B quote (not bold), with exact disk serialization and Undo restoration. The embedded application icon is also checked independently of external files.
 
@@ -102,7 +126,7 @@ with that macro for isolated IPC, screenshot and observation regressions. The
 portable packager includes only production `app`, never `test-app`.
 Instrumented memory runs use test-app and explicitly report that distinct hash.
 `perf.ps1 -ProductionOnly` collects production numeric diagnostics
-(empty/small/large/images/small), not document-verified acceptance. The fixed
+(empty/small/large/images/small/large-images/small), not document-verified acceptance. The fixed
 `Vellora` title proves window identity only. The periodic test-app observer also
 exports only mode/counts, not file identity or source contents. All `perf.ps1`
 variants now save numeric reports with `document_state_evidence_complete=false`
@@ -115,7 +139,8 @@ screenshot/state environment requests, and validates app-local runtime modules.
 It refuses to contact an existing production single-instance endpoint.
 
 The wholeAppLargeTypingLatency test reports real MainWindow event cycles on the
-original structured fixture for first/middle/last editable paragraphs. Cycles
+original structured fixture for first/middle/last editable paragraphs and the
+last table. Cycles
 include a deliberate 20 ms interval, Qt event processing and grab, with 1.5 seconds
 of typing per location so draft timers execute. It verifies save and Undo bytes.
 These cycle p95/max values are Qt-internal measurements, not DWM presentation
@@ -169,7 +194,7 @@ imports earlier binary measurements. The default remains full eight-stage
 acceptance. Each run must keep the same PID through all its stages.
 
 Windows heap policy is merged additively from `windows.manifest` using
-/MANIFESTINPUT for the app and both test executables. This opts only these
+/MANIFESTINPUT for the app and bridge-linked test executables. This opts only these
 executables into SegmentHeap on Windows 10 2004+; it does not change OS settings,
 trim the working set, or force garbage collection. Existing UAC, compatibility,
 DPI and common-controls declarations must remain in the embedded manifest.

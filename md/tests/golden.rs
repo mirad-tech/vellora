@@ -1,6 +1,6 @@
-//! Golden scenarios generated from the frozen baseline (see
-//! `native/tools/goldens/emit.gen.ts`). Each scenario is a neutral operation,
-//! the exact input bytes, and the Markdown bytes the baseline writes back.
+//! Golden scenarios generated from the frozen baseline. Each scenario contains
+//! a neutral operation, exact input bytes, and the Markdown bytes the baseline
+//! writes back. Fixtures are retained in tests/golden/scenarios.json.
 
 use std::path::PathBuf;
 

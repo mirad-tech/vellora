@@ -28,7 +28,7 @@
 在配置好 MSVC/Windows SDK 环境后，在独立输出目录执行：
 
 ```powershell
-qmake <repo>/native/qt-app/tests/accessibility_regressions.pro CONFIG+=release BRIDGE_DIR=<bridge-directory>
+qmake <repo>/qt-app/tests/accessibility_regressions.pro CONFIG+=release BRIDGE_DIR=<bridge-directory>
 nmake /NOLOGO
 $env:QT_QPA_PLATFORM = 'offscreen'
 $env:QT_QPA_FONTDIR = Join-Path $env:WINDIR 'Fonts'

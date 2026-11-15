@@ -1,10 +1,10 @@
 # Build output
 target/
-spikes/*/target/
 
 # Installer output
 installer/out/
-releases/
+/releases/*
+!/releases/Vellora-Setup-0.1.2.exe
 
 # Local logs
 *.log
@@ -35,3 +35,19 @@ tools/py/
 tests/manual-ui/
 tests/fixtures/performance/picture-*.png
 tests/fixtures/performance/large-image-*.png
+
+# Historical implementations and tools retained locally
+/app/
+/spikes/
+/installer/README-qt-preview.md
+/installer/build-installer.ps1
+/installer/build-qt-installer.ps1
+/installer/vellora-native.nsi
+/installer/vellora-qt.nsi
+/installer/assets/README.txt
+/installer/assets/README-QT.txt
+/tools/goldens/
+/tools/capture-window.ps1
+/tools/measure-process.ps1
+/tests/golden/legacy-rust-cases.txt
+/tests/golden/legacy-vitest-cases.txt
