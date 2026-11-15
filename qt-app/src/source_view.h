@@ -17,6 +17,8 @@ class SourceView : public QPlainTextEdit {
   void restoreTopInset(int inset);
   QString markdown() const { return toPlainText(); }
   QString selectedText() const;
+  QVector<QRectF> activeSearchMatchRects() const;
+  void scrollSearchMatchDown(int pixels);
   bool isComposing() const { return composing_; }
 
  signals:

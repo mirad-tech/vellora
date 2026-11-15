@@ -2,6 +2,10 @@
 #include <QtTest>
 #include <QLocalSocket>
 #include <QCryptographicHash>
+#include <QSemaphore>
+#include <QThreadPool>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cmath>
 #include "bridge.h"
@@ -12,6 +16,31 @@
 #include "main_window.h"
 #include "source_view.h"
 #include "theme.h"
+
+// Hold the shared worker pool at a known boundary without production test hooks.
+class ThreadPoolBarrier {
+  QThreadPool* pool_ = QThreadPool::globalInstance();
+  int previousMaximum_ = pool_->maxThreadCount();
+  QSemaphore entered_;
+  QSemaphore released_;
+  QFuture<void> blocker_;
+  bool releasedOnce_ = false;
+ public:
+  ThreadPoolBarrier() {
+    pool_->setMaxThreadCount(1);
+    blocker_ = QtConcurrent::run([this] { entered_.release(); released_.acquire(); });
+    if (!entered_.tryAcquire(1, 5000)) qFatal("worker barrier did not start");
+  }
+  void release() {
+    if (!releasedOnce_) { releasedOnce_ = true; released_.release(); }
+  }
+  ~ThreadPoolBarrier() {
+    release();
+    blocker_.waitForFinished();
+    pool_->waitForDone();
+    pool_->setMaxThreadCount(previousMaximum_);
+  }
+};
 
 // Only public widget APIs, real key/input-method events and toolbar signals.
 // No private/public macro: that changes MSVC symbol linkage and hides regressions.
@@ -28,6 +57,11 @@ class NativeRegressions : public QObject {
     const QString path = files_.filePath(QString::number(++sequence_) + ".md");
     QFile f(path); if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size()) qFatal("Cannot write isolated fixture");
     return path;
+  }
+  static QString openSessionPath(const QString& path) {
+    const auto opened = bridge::openDocument(path);
+    if (!opened.value("ok").toBool()) qFatal("cannot obtain native session path");
+    return opened.value("document").toObject().value("path").toString();
   }
   static DocumentView* doc(MainWindow& w) { return w.findChild<DocumentView*>(); }
   static SourceView* source(MainWindow& w) { return w.findChild<SourceView*>(); }
@@ -117,6 +151,76 @@ class NativeRegressions : public QObject {
     const auto path = fixture("Body\n"); MainWindow w; show(w, path); sourceAppend(w, "X");
     QTest::keyClick(source(w), Qt::Key_Z, Qt::ControlModifier); QVERIFY(!source(w)->markdown().contains("X"));
     QTest::keyClick(source(w), Qt::Key_Y, Qt::ControlModifier); QVERIFY(source(w)->markdown().contains("X")); save(w); QVERIFY(read(path).contains("X"));
+  }
+  void searchPanelAvoidance_data() {
+    QTest::addColumn<bool>("sourceMode"); QTest::addColumn<bool>("space");
+    QTest::addColumn<bool>("multiple"); QTest::addColumn<int>("width");
+    for (bool sourceMode : {false,true}) for (bool space : {false,true})
+      for (bool multiple : {false,true}) for (int width : {640,820})
+        QTest::newRow(qPrintable(QString("source-%1-space-%2-multiple-%3-width-%4").arg(sourceMode).arg(space).arg(multiple).arg(width)))
+            << sourceMode << space << multiple << width;
+  }
+  void searchPanelAvoidance() {
+    QFETCH(bool,sourceMode); QFETCH(bool,space); QFETCH(bool,multiple); QFETCH(int,width);
+    const QString target = QString(width == 640 ? 36 : 56, QChar('n')) + " needle\n\n";
+    const QString text = (space ? QString("filler paragraph\n\n").repeated(50) : QString()) + target +
+        (multiple ? target : QString()) + (space ? QString("tail paragraph\n\n").repeated(60) : QString());
+    const QByteArray original = text.toUtf8(); const auto path = fixture(original);
+    MainWindow w; w.resize(width,700); show(w,path); if(sourceMode)mode(w,1);
+    QCoreApplication::processEvents(); w.openSearchPanel(false);
+    auto* panel=w.findChild<SearchPanel*>(); auto* query=panel->findChildren<QLineEdit*>().first();
+    auto* editor=sourceMode?static_cast<QAbstractScrollArea*>(source(w)):static_cast<QAbstractScrollArea*>(doc(w));
+    auto* bar=editor->verticalScrollBar();
+    const QRect editorGeometry=editor->geometry(), viewportGeometry=editor->viewport()->geometry();
+    const int minimum=bar->minimum(), maximum=bar->maximum(), inset=source(w)->topInset();
+    const bool sourceUndo=source(w)->document()->isUndoAvailable(), documentUndo=doc(w)->document()->isUndoAvailable();
+    auto settlePanel=[&] {
+      for(auto* animation:panel->findChildren<QVariantAnimation*>())
+        if(animation->state()==QAbstractAnimation::Running)animation->setCurrentTime(animation->duration());
+      QCoreApplication::processEvents();
+    };
+    query->setText("needle"); settlePanel();
+    auto rects=[&]{return sourceMode?source(w)->activeSearchMatchRects():doc(w)->activeSearchMatchRects();};
+    auto panelRect=[&]{return QRect(editor->viewport()->mapFromGlobal(panel->mapToGlobal(QPoint())),panel->size());};
+    QVERIFY(!rects().isEmpty());
+    if(space) {
+      // Put the current result near the top, where native ensure-visible alone
+      // considers it visible even though the floating panel covers it.
+      const qreal delta=rects().first().top()-48;
+      bar->setValue(bar->value()+(sourceMode?qRound(delta/23.8):qRound(delta)));
+      QVERIFY(rects().first().intersects(panelRect()));
+      emit panel->navigateRequested(1); QCoreApplication::processEvents();
+    }
+    auto check=[&] {
+      QCOMPARE(editor->geometry(),editorGeometry); QCOMPARE(editor->viewport()->geometry(),viewportGeometry);
+      QCOMPARE(bar->minimum(),minimum); QCOMPARE(bar->maximum(),maximum); QCOMPARE(source(w)->topInset(),inset);
+      QCOMPARE(query->text(),QString("needle")); QCOMPARE(QApplication::focusWidget(),static_cast<QWidget*>(query));
+      QCOMPARE(source(w)->document()->isUndoAvailable(),sourceUndo); QCOMPARE(doc(w)->document()->isUndoAvailable(),documentUndo);
+      QCOMPARE(read(path),original); QVERIFY(!doc(w)->hasPendingEdits());
+      if(space) {for(const auto& rect:rects()) QVERIFY2(!rect.intersects(panelRect()),"Current match is still covered by the search panel");}
+      else QCOMPARE(bar->value(),minimum);
+    };
+    check();
+    panel->setReplaceVisible(true); settlePanel(); check();
+    panel->setFeedback("Replacement feedback"); settlePanel(); check();
+    panel->setFeedback(QString()); panel->setReplaceVisible(false); settlePanel(); check();
+    // Geometry events must not move a match which already lies outside the panel.
+    bar->setValue(maximum); const int outside=bar->value();
+    panel->setFeedback("Feedback outside match"); QCoreApplication::processEvents(); QCOMPARE(bar->value(),outside);
+    // SourceView rebuilds its own native margins on a queued resize callback.
+    // Verify avoidance after that second viewport resize has settled as well.
+    panel->setFeedback(QString()); settlePanel(); emit panel->navigateRequested(1);
+    w.resize(width==820?640:820,700); QTest::qWait(25); settlePanel();
+    if(space) {for(const auto& rect:rects()) QVERIFY(!rect.intersects(panelRect()));}
+    else QCOMPARE(bar->value(),bar->minimum());
+    QCOMPARE(query->text(),QString("needle")); QCOMPARE(QApplication::focusWidget(),static_cast<QWidget*>(query));
+    const QRect resizedEditor=editor->geometry(), resizedViewport=editor->viewport()->geometry();
+    const int resizedMinimum=bar->minimum(), resizedMaximum=bar->maximum();
+    const int beforeClose=bar->value(); QTest::keyClick(query,Qt::Key_Escape); QCoreApplication::processEvents();
+    QVERIFY(!panel->isVisible()); QCOMPARE(bar->value(),beforeClose);
+    QCOMPARE(editor->geometry(),resizedEditor); QCOMPARE(editor->viewport()->geometry(),resizedViewport);
+    QCOMPARE(bar->minimum(),resizedMinimum); QCOMPARE(bar->maximum(),resizedMaximum);
+    QCOMPARE(read(path),original);
   }
   void searchNavigation() {
     const auto path = fixture("one target two target three target\n"); MainWindow w; show(w, path); w.openSearchPanel(false);
@@ -385,6 +489,26 @@ class NativeRegressions : public QObject {
     QInputMethodEvent second("pending",{});QApplication::sendEvent(doc(w),&second);QVERIFY(!w.close());
     QInputMethodEvent finish;QApplication::sendEvent(doc(w),&finish);QTRY_VERIFY_WITH_TIMEOUT(!w.isVisible(),2000);
     QCOMPARE(read(a),QByteArray("# A\n"));QCOMPARE(read(b),QByteArray("# B\n"));
+  }
+  void supersededImeOpenDoesNotSignalIdle() {
+    const auto first = fixture("# First\n");
+    const auto superseded = fixture("# Superseded\n");
+    const auto latest = fixture("# Latest\n");
+    MainWindow w; show(w, first); doc(w)->setFocus();
+    QSignalSpy idle(&w, &MainWindow::asyncIdle);
+    QInputMethodEvent preedit("pending", {});
+    QApplication::sendEvent(doc(w), &preedit);
+    QVERIFY(doc(w)->isComposing());
+    w.openPath(superseded);
+    w.openPath(latest, true);
+    QCOMPARE(idle.count(), 0);
+    QInputMethodEvent endComposition;
+    QApplication::sendEvent(doc(w), &endComposition);
+    QTRY_VERIFY_WITH_TIMEOUT(source(w)->isVisible() && !w.isAsyncBusy(), 2000);
+    QCOMPARE(source(w)->markdown(), QString("# Latest\n"));
+    QCOMPARE(idle.count(), 1);
+    QCOMPARE(read(first), QByteArray("# First\n"));
+    QCOMPARE(read(superseded), QByteArray("# Superseded\n"));
   }
   void outlineTargetsSourceTokens() {
     const QString markdown = QString::fromUtf8(u8"Repeat\r\n\r\n# **Repeat**\r\n\r\n😀 中文在前\r\n\r\n## 中文标题\r\n\r\n<div>\r\n<h3>Raw heading</h3>\r\n</div>\r\n\r\n> ### Nested\r\n");
@@ -889,20 +1013,232 @@ class NativeRegressions : public QObject {
     QVERIFY2(maxSwitchPauseMs<=500,
              qPrintable(QString("Mode-switch planFor event-loop pause %1ms exceeded 500ms limit").arg(maxSwitchPauseMs)));
   }
-  void staleModeSwitchPlanDiscardedWhenSessionAdvances() {
-    const QString sourceFile=QDir(QString::fromUtf8(QT_TESTCASE_BUILDDIR)).absoluteFilePath(QString::fromUtf8(__FILE__));
-    const QString fixturePath=QFileInfo(sourceFile).absoluteDir().absoluteFilePath("../../tests/fixtures/performance/large.md");
-    QFile input(fixturePath);QVERIFY(input.open(QIODevice::ReadOnly));
-    const auto largePath=fixture(input.readAll());
-    const auto replacementPath=fixture("# Fresh replacement\n\nBody\n");
-    MainWindow w; show(w, largePath);
+  void imeQueuedModeThenOpenPreservesLatestPath_data() {
+    QTest::addColumn<bool>("sourceMode");
+    QTest::addColumn<bool>("supersede");
+    QTest::newRow("document") << false << false;
+    QTest::newRow("source") << true << false;
+    QTest::newRow("latest-source") << true << true;
+  }
+  void imeQueuedModeThenOpenPreservesLatestPath() {
+    QFETCH(bool, sourceMode); QFETCH(bool, supersede);
+    const auto first = fixture("# IME first\n\nBody\n");
+    const auto replacement = fixture("# Replacement B\n\nBody\n");
+    const auto latest = fixture("# Latest C\n\nBody\n");
+    const auto expectedPath = supersede ? latest : replacement;
+    const QString expectedTitle = supersede ? "Latest C" : "Replacement B";
+    const QString firstSession = openSessionPath(first);
+    const QString expectedSession = openSessionPath(expectedPath);
+    MainWindow w; show(w, first);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QCOMPARE(w.findChildren<QFutureWatcherBase*>().size(), 0);
+    QSignalSpy idle(&w, &MainWindow::asyncIdle);
+    ThreadPoolBarrier beforePlan;
+    doc(w)->setFocus();
+    QInputMethodEvent preedit("pending", {});
+    QApplication::sendEvent(doc(w), &preedit);
+    QVERIFY(doc(w)->isComposing());
+    emit w.findChild<Toolbar*>()->modeChanged(1);
+    QVERIFY(doc(w)->isComposing());
+    w.openPath(replacement, sourceMode);
+    if (supersede) w.openPath(latest, sourceMode);
+    QVERIFY(doc(w)->isComposing());
+    QCOMPARE(idle.count(), 0);
+    QInputMethodEvent endComposition;
+    QApplication::sendEvent(doc(w), &endComposition);
+    QVERIFY(!doc(w)->isComposing());
+    // Exactly one watcher proves the deferred mode plan was submitted before
+    // any open. The blocked pool makes this boundary independent of file size.
+    QTRY_COMPARE_WITH_TIMEOUT(w.findChildren<QFutureWatcherBase*>().size(), 1, 2000);
+    QVERIFY(w.isAsyncBusy());
+    QVERIFY(doc(w)->isVisible()); QVERIFY(!source(w)->isVisible());
+    QVERIFY(bridge::sessionMatches(firstSession).value("matches").toBool());
+    beforePlan.release();
+    ThreadPoolBarrier afterPlan;
+    QTRY_VERIFY_WITH_TIMEOUT(source(w)->isVisible(), 2000);
+    QCOMPARE(source(w)->markdown(), QString("# IME first\n\nBody\n"));
+    QVERIFY2(w.isAsyncBusy(), "The external open was lost after the IME-delayed mode plan");
+    QCOMPARE(idle.count(), 0);
+    QVERIFY(bridge::sessionMatches(firstSession).value("matches").toBool());
+    QVERIFY(doc(w)->isReadOnly()); QVERIFY(source(w)->isReadOnly());
+    afterPlan.release(); waitIdle(w);
+    QVERIFY(!w.isAsyncBusy()); QCOMPARE(idle.count(), 1);
+    QVERIFY(bridge::sessionMatches(expectedSession).value("matches").toBool());
+    QVERIFY(!doc(w)->isReadOnly()); QVERIFY(!source(w)->isReadOnly());
+    QCOMPARE(source(w)->isVisible(), sourceMode);
+    if (sourceMode) {
+      QVERIFY(source(w)->markdown().contains(expectedTitle));
+      source(w)->moveCursor(QTextCursor::End); QTest::keyClicks(source(w), "SAVED");
+    } else {
+      QVERIFY(doc(w)->document()->toPlainText().contains(expectedTitle));
+      QVERIFY(documentAppend(w, "Body", "SAVED"));
+    }
+    save(w); QVERIFY(read(expectedPath).contains("SAVED"));
+    QCOMPARE(read(first), QByteArray("# IME first\n\nBody\n"));
+    if (supersede) QCOMPARE(read(replacement), QByteArray("# Replacement B\n\nBody\n"));
+  }
+  void queuedOpenWaitsForModePlan() {
+    const auto first = fixture("# First\n\nBody\n");
+    const auto replacement = fixture("# Fresh replacement\n\nBody\n");
+    const QString firstSession = openSessionPath(first);
+    const QString replacementSession = openSessionPath(replacement);
+    MainWindow w; show(w, first);
+    QSignalSpy idle(&w, &MainWindow::asyncIdle);
+    ThreadPoolBarrier beforePlan;
     emit w.findChild<Toolbar*>()->modeChanged(1);
     QVERIFY(w.isAsyncBusy());
-    w.openPath(replacementPath);
-    QTRY_VERIFY_WITH_TIMEOUT(doc(w)->document()->toPlainText().contains("Fresh replacement"), 5000);
+    w.openPath(replacement);
+    beforePlan.release();
+    // This worker is queued after the plan. The replacement open can only be
+    // submitted by its GUI completion callback, after this barrier is running.
+    ThreadPoolBarrier afterPlan;
+    QCoreApplication::processEvents();
+    QVERIFY(w.isAsyncBusy());
+    QCOMPARE(idle.count(), 0);
+    QVERIFY(source(w)->isVisible());
+    QVERIFY(source(w)->markdown().contains("First"));
+    QVERIFY(bridge::sessionMatches(firstSession).value("matches").toBool());
+    QVERIFY(doc(w)->isReadOnly());
+    QVERIFY(source(w)->isReadOnly());
+    afterPlan.release();
     waitIdle(w);
-    QVERIFY(!source(w)->isVisible());
+    QVERIFY(!w.isAsyncBusy());
+    QCOMPARE(idle.count(), 1);
     QVERIFY(doc(w)->isVisible());
+    QVERIFY(doc(w)->document()->toPlainText().contains("Fresh replacement"));
+    QVERIFY(bridge::sessionMatches(replacementSession).value("matches").toBool());
+    QVERIFY(documentAppend(w, "Body", "EDIT"));
+    save(w); QVERIFY(read(replacement).contains("BodyEDIT"));
+  }
+  void successfulQueuedOpenSurvivesLaterFailure() {
+    const auto first = fixture("# First\n\nBody\n");
+    const auto middle = fixture("# Middle\n\nBody\n");
+    const auto missing = files_.filePath("queued-missing.md");
+    const QString middleSession = openSessionPath(middle);
+    MainWindow w; show(w, first);
+    QSignalSpy idle(&w, &MainWindow::asyncIdle);
+    ThreadPoolBarrier barrier;
+    w.openPath(middle, true);
+    w.openPath(missing);
+    QVERIFY(w.isAsyncBusy());
+    QVERIFY(doc(w)->isReadOnly());
+    QVERIFY(source(w)->isReadOnly());
+    QCOMPARE(idle.count(), 0);
+    barrier.release();
+    waitIdle(w);
+    QVERIFY(!w.isAsyncBusy());
+    QCOMPARE(idle.count(), 1);
+    QVERIFY(source(w)->isVisible());
+    QCOMPARE(source(w)->markdown(), QString("# Middle\n\nBody\n"));
+    QVERIFY(bridge::sessionMatches(middleSession).value("matches").toBool());
+    QVERIFY(!doc(w)->isReadOnly());
+    QVERIFY(!source(w)->isReadOnly());
+    source(w)->moveCursor(QTextCursor::End);
+    QTest::keyClicks(source(w), "SAVED");
+    save(w);
+    QVERIFY(read(middle).endsWith("SAVED"));
+    QCOMPARE(read(first), QByteArray("# First\n\nBody\n"));
+    QVERIFY(!QFileInfo::exists(missing));
+  }
+  void directSourceOpenReusesPlanAndSignalsIdleOnce() {
+    const auto path = fixture("# Direct source\n\nBody\n");
+    const auto next = fixture("# Opened from idle\n");
+    MainWindow w; w.show();
+    QSignalSpy idle(&w, &MainWindow::asyncIdle);
+    bool requestedNext = false;
+    connect(&w, &MainWindow::asyncIdle, &w, [&] {
+      if (!requestedNext) { requestedNext = true; w.openPath(next); }
+    });
+    w.openPath(path, true);
+    // The open finishes before this worker starts. Its GUI callback must use
+    // the returned plan, since another asynchronous plan cannot run yet.
+    ThreadPoolBarrier afterOpen;
+    QTRY_COMPARE_WITH_TIMEOUT(idle.count(), 1, 2000);
+    QVERIFY(source(w)->isVisible());
+    QCOMPARE(source(w)->markdown(), QString("# Direct source\n\nBody\n"));
+    // The idle observer started another open. The first callback must not
+    // clear the new task's busy/read-only state or emit a second idle signal.
+    QVERIFY(requestedNext); QVERIFY(w.isAsyncBusy());
+    QVERIFY(doc(w)->isReadOnly()); QVERIFY(source(w)->isReadOnly());
+    afterOpen.release(); waitIdle(w);
+    QVERIFY(!w.isAsyncBusy()); QCOMPARE(idle.count(), 2);
+    QVERIFY(doc(w)->document()->toPlainText().contains("Opened from idle"));
+    QVERIFY(!doc(w)->isReadOnly()); QVERIFY(!source(w)->isReadOnly());
+  }
+  void asyncPlansFreezeEditsButAllowBrowsing_data() {
+    QTest::addColumn<bool>("fromSource");
+    QTest::newRow("document-to-source") << false;
+    QTest::newRow("source-to-document") << true;
+  }
+  void asyncPlansFreezeEditsButAllowBrowsing() {
+    QFETCH(bool, fromSource);
+    const QByteArray original = "# Heading\n\nBody target\n\n" + QByteArray("Paragraph\n\n").repeated(100);
+    const auto path = fixture(original);
+    const auto linked = fixture("# Linked\n");
+    const QString currentSession = openSessionPath(path);
+    MainWindow w; show(w, path);
+    if (fromSource) sourceAppend(w, "LOCAL");
+    else QVERIFY(documentAppend(w, "Body", "LOCAL"));
+    w.openSearchPanel(true);
+    auto* search = w.findChild<SearchPanel*>();
+    const auto fields = search->findChildren<QLineEdit*>();
+    QCOMPARE(fields.size(), 2);
+    fields[0]->setText("target"); fields[1]->setText("REPLACED");
+    ThreadPoolBarrier barrier;
+    emit w.findChild<Toolbar*>()->modeChanged(fromSource ? 0 : 1);
+    QVERIFY(w.isAsyncBusy());
+    QVERIFY(doc(w)->isReadOnly()); QVERIFY(source(w)->isReadOnly());
+    const QString documentBefore = doc(w)->document()->toPlainText();
+    const QString sourceBefore = source(w)->markdown();
+    QWidget* editor = fromSource ? static_cast<QWidget*>(source(w)) : doc(w);
+    editor->setFocus();
+    QTest::keyClicks(editor, "LATE");
+    QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier);
+    QTest::keyClick(editor, Qt::Key_Y, Qt::ControlModifier);
+    QTest::keyClick(editor, Qt::Key_Delete);
+    QInputMethodEvent preedit(QStringLiteral("composing"), {});
+    QApplication::sendEvent(editor, &preedit);
+    QInputMethodEvent commit; commit.setCommitString("IME_LATE");
+    QApplication::sendEvent(editor, &commit);
+    QVERIFY(!doc(w)->isComposing()); QVERIFY(!source(w)->isComposing());
+    QTest::keyClick(editor, Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(editor, Qt::Key_C, Qt::ControlModifier);
+    QVERIFY(!QApplication::clipboard()->text().isEmpty());
+    QTest::keyClick(editor, Qt::Key_X, Qt::ControlModifier);
+    QTest::keyClick(editor, Qt::Key_V, Qt::ControlModifier);
+    auto* scroll = fromSource ? source(w)->verticalScrollBar() : doc(w)->verticalScrollBar();
+    scroll->setValue(scroll->maximum()); QVERIFY(scroll->value() > 0);
+    emit search->replaceRequested(); emit search->replaceAllRequested();
+    emit doc(w)->linkActivated(QFileInfo(linked).fileName());
+    save(w);
+    QVERIFY(!w.close()); QVERIFY(w.isVisible());
+    emit w.findChild<Toolbar*>()->modeChanged(fromSource ? 1 : 0);
+    QCOMPARE(doc(w)->document()->toPlainText(), documentBefore);
+    QCOMPARE(source(w)->markdown(), sourceBefore);
+    QCOMPARE(read(path), original);
+    QVERIFY(bridge::sessionMatches(currentSession).value("matches").toBool());
+    barrier.release(); waitIdle(w);
+    QVERIFY(!w.isAsyncBusy());
+    QVERIFY(!doc(w)->isReadOnly()); QVERIFY(!source(w)->isReadOnly());
+    QVERIFY(fromSource ? doc(w)->isVisible() : source(w)->isVisible());
+    QString current; QVERIFY(w.splicePendingEdits(&current));
+    QVERIFY(current.contains("LOCAL")); QVERIFY(!current.contains("LATE"));
+    save(w); QVERIFY(read(path).contains("LOCAL")); QVERIFY(!read(path).contains("LATE"));
+  }
+  void idleLocalLinkUsesOpenQueue() {
+    const auto linked = fixture("# Linked destination\n\nBody\n");
+    const auto first = fixture("# First\n\n[go](" + QFileInfo(linked).fileName().toUtf8() + ")\n");
+    const QString linkedSession = openSessionPath(linked);
+    MainWindow w; show(w, first);
+    ThreadPoolBarrier barrier;
+    emit doc(w)->linkActivated(QFileInfo(linked).fileName());
+    QVERIFY(w.isAsyncBusy());
+    QVERIFY(doc(w)->document()->toPlainText().contains("First"));
+    barrier.release(); waitIdle(w);
+    QVERIFY(doc(w)->document()->toPlainText().contains("Linked destination"));
+    QVERIFY(bridge::sessionMatches(linkedSession).value("matches").toBool());
+    QVERIFY(documentAppend(w, "Body", "EDIT"));
+    save(w); QVERIFY(read(linked).contains("BodyEDIT"));
   }
   void singleInstanceForwardsDocument_data() {
     QTest::addColumn<QString>("sourceFlag");

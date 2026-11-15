@@ -25,7 +25,7 @@ class MainWindow : public QMainWindow {
   void showSourceMode();
   bool splicePendingEdits(QString* content);
   void openSearchPanel(bool replaceMode);
-  bool isAsyncBusy() const { return opening_ || planning_; }
+  bool isAsyncBusy() const { return opening_ || planning_ || !pendingOpenPath_.isEmpty(); }
 #ifdef VELLORA_CONFLICT_TEST_HOOKS
   std::function<QJsonObject(const QString&, const QString&, const QString&)> conflictSaveHook;
   std::function<QJsonObject(const QString&)> conflictReloadHook;
@@ -45,6 +45,8 @@ class MainWindow : public QMainWindow {
  private:
   void buildUi();
   void chooseFile();
+  void startOpen(std::function<QJsonObject()> openDocument, bool sourceMode);
+  void finishAsync();
   bool save(QString conflictToken = QString());
   void applyDocument(const QJsonObject& payload);
   void setMode(int mode);
@@ -63,6 +65,7 @@ class MainWindow : public QMainWindow {
   void toggleOutline();
   void layoutOutline();
   void positionSearchPanel();
+  void avoidSearchPanel();
   void showError(const QString& message);
   void showOpenError(const QString& message);
   void openLink(const QString& href);
@@ -106,7 +109,6 @@ class MainWindow : public QMainWindow {
   bool busy_ = false;
   bool opening_ = false;
   bool planning_ = false;
-  int pendingMode_ = -1;
   bool savedFeedback_ = false;
   bool sourceVisited_ = false;
   bool deferredClose_ = false;

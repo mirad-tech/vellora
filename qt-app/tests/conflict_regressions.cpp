@@ -1,5 +1,7 @@
 #include <QtWidgets>
 #include <QtTest>
+#include <QScopeGuard>
+#include <qt_windows.h>
 #include "bridge.h"
 #include "chrome.h"
 #include "document_view.h"
@@ -155,8 +157,150 @@ class ConflictRegressions : public QObject {
     const int answer=ModalDialog::resolveConflict(&host,changed("one"),[&](bool,const QString&){++calls;return QJsonObject{{"ok",true}};},[&]{return current;});
     QVERIFY(answer!=2);QCOMPARE(calls,0);QVERIFY(!host.findChild<ModalDialog*>());
   }
+  void localLinkRevalidatesAfterDiscardConfirmation() {
+    QTemporaryDir tree; QVERIFY(tree.isValid());
+    const QString notes = tree.filePath("notes");
+    const QString sub = notes + "/sub";
+    const QString originalSub = notes + "/sub-original";
+    const QString outside = tree.filePath("outside");
+    QVERIFY(QDir().mkpath(sub)); QVERIFY(QDir().mkpath(outside));
+    const QByteArray original = "# Origin\n\nbody\n\n[go](sub/target.md)\n";
+    const QByteArray insideBytes = "# Inside target\n";
+    const QByteArray outsideBytes = "# Outside target\n";
+    const QString origin = notes + "/origin.md";
+    for (const auto& entry : {qMakePair(origin, original), qMakePair(sub + "/target.md", insideBytes),
+                              qMakePair(outside + "/target.md", outsideBytes)}) {
+      QFile file(entry.first); QVERIFY(file.open(QIODevice::WriteOnly));
+      QCOMPARE(file.write(entry.second), qint64(entry.second.size()));
+    }
+    const auto openedOrigin = bridge::openDocument(origin); QVERIFY(openedOrigin.value("ok").toBool());
+    const QString originSession = openedOrigin.value("document").toObject().value("path").toString();
+    MainWindow w; w.show(); w.openPath(origin); waitIdle(w); edit(w, false);
+    const QString local = draft(w, false);
+    auto* view = w.findChild<DocumentView*>();
+    QVERIFY(view->hasPendingEdits()); QVERIFY(view->document()->isUndoAvailable());
+    QString junction;
+    auto cleanup = qScopeGuard([&] {
+      if (!junction.isEmpty() && !RemoveDirectoryW(reinterpret_cast<LPCWSTR>(junction.utf16())))
+        qWarning() << "Cannot remove test junction" << junction << GetLastError();
+    });
+    QString fixtureError;
+    int stage = 0;
+    QTimer poll;
+    connect(&poll, &QTimer::timeout, &w, [&] {
+      for (auto* dialog : w.findChildren<ModalDialog*>()) {
+        if (!dialog->isVisible()) continue;
+        if (stage == 0) {
+          auto* discard = button(dialog, QStringLiteral("放弃更改"));
+          if (!discard) continue;
+          if (!QDir().rename(sub, originalSub)) {
+            fixtureError = "Cannot rename the real fixture directory";
+          } else {
+            junction = QDir::toNativeSeparators(sub);
+            auto literal = [](QString value) { return "'" + value.replace("'", "''") + "'"; };
+            const QString command = "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path "
+                + literal(junction) + " -Target " + literal(QDir::toNativeSeparators(outside)) + " | Out-Null";
+            const QByteArray encoded(reinterpret_cast<const char*>(command.utf16()), command.size() * 2);
+            QProcess process;
+            process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
+              args->flags |= CREATE_NO_WINDOW;
+            });
+            const QString powershell = QDir(qEnvironmentVariable("SystemRoot"))
+                .filePath("System32/WindowsPowerShell/v1.0/powershell.exe");
+            process.start(powershell, {"-NoProfile", "-NonInteractive", "-EncodedCommand", QString::fromLatin1(encoded.toBase64())});
+            if (!process.waitForStarted(5000)) fixtureError = process.errorString();
+            else if (!process.waitForFinished(10000)) {
+              fixtureError = "Junction creation timed out"; process.kill(); process.waitForFinished(5000);
+            } else if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+              fixtureError = "Junction creation failed: " + QString::fromLocal8Bit(process.readAllStandardError());
+            } else {
+              const DWORD attributes = GetFileAttributesW(reinterpret_cast<LPCWSTR>(junction.utf16()));
+              QFile redirected(sub + "/target.md");
+              if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                fixtureError = "Fixture directory is not a reparse point";
+              else if (!redirected.open(QIODevice::ReadOnly) || redirected.readAll() != outsideBytes)
+                fixtureError = "Junction did not read the isolated outside target";
+            }
+          }
+          if (!fixtureError.isEmpty()) {
+            stage = -1; button(dialog, QStringLiteral("继续编辑"))->click();
+          } else { stage = 1; discard->click(); }
+          return;
+        }
+        if (stage == 1) {
+          if (auto* acknowledge = button(dialog, QStringLiteral("知道了"))) {
+            stage = 2; acknowledge->click(); return;
+          }
+        }
+      }
+    });
+    poll.start(5);
+    emit view->linkActivated("sub/target.md");
+    QVERIFY2(fixtureError.isEmpty(), qPrintable(fixtureError));
+    QTRY_COMPARE_WITH_TIMEOUT(stage, 2, 5000);
+    waitIdle(w); poll.stop(); QVERIFY(!w.isAsyncBusy());
+    QVERIFY(bridge::sessionMatches(originSession).value("matches").toBool());
+    QCOMPARE(bridge::inspectLink(originSession, "sub/target.md").value("code").toString(), QString("UNSUPPORTED_LINK"));
+    QCOMPARE(draft(w, false), local);
+    QVERIFY(view->hasPendingEdits()); QVERIFY(view->document()->isUndoAvailable());
+    save(w);
+    QFile saved(origin); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), local.toUtf8());
+    for (const auto& entry : {qMakePair(originalSub + "/target.md", insideBytes), qMakePair(outside + "/target.md", outsideBytes)}) {
+      QFile target(entry.first); QVERIFY(target.open(QIODevice::ReadOnly)); QCOMPARE(target.readAll(), entry.second);
+    }
+    QVERIFY(RemoveDirectoryW(reinterpret_cast<LPCWSTR>(junction.utf16())));
+    junction.clear();
+    QVERIFY(QFileInfo::exists(outside + "/target.md"));
+  }
+  void newerPathSupersedesLocalLink_data() {
+    QTest::addColumn<bool>("duringIme");
+    QTest::newRow("discard-confirmation") << false;
+    QTest::newRow("ime-wait") << true;
+  }
+  void newerPathSupersedesLocalLink() {
+    QFETCH(bool, duringIme);
+    const auto target = fixture("# Local target must not appear\n");
+    const auto origin = fixture("# Origin\n\nbody\n\n[go](" + QFileInfo(target).fileName().toUtf8() + ")\n");
+    const auto newer = fixture("# Newer path\n\nbody\n");
+    const auto openedNewer = bridge::openDocument(newer); QVERIFY(openedNewer.value("ok").toBool());
+    const QString newerSession = openedNewer.value("document").toObject().value("path").toString();
+    MainWindow w; w.show(); w.openPath(origin); waitIdle(w); edit(w, false);
+    auto* view = w.findChild<DocumentView*>();
+    bool localApplied = false;
+    connect(view->document(), &QTextDocument::contentsChanged, &w, [&] {
+      if (view->document()->toPlainText().contains("Local target must not appear")) localApplied = true;
+    });
+    int confirmations = 0;
+    QTimer poll;
+    connect(&poll, &QTimer::timeout, &w, [&] {
+      for (auto* dialog : w.findChildren<ModalDialog*>()) {
+        if (!dialog->isVisible()) continue;
+        if (auto* discard = button(dialog, QStringLiteral("放弃更改"))) {
+          ++confirmations;
+          if (!duringIme && confirmations == 1) w.openPath(newer);
+          discard->click(); return;
+        }
+      }
+    });
+    poll.start(5);
+    if (duringIme) {
+      view->setFocus(); QInputMethodEvent preedit("pending", {});
+      QApplication::sendEvent(view, &preedit); QVERIFY(view->isComposing());
+    }
+    emit view->linkActivated(QFileInfo(target).fileName());
+    if (duringIme) {
+      w.openPath(newer);
+      QInputMethodEvent endComposition; QApplication::sendEvent(view, &endComposition);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(view->document()->toPlainText().contains("Newer path"), 5000);
+    waitIdle(w); poll.stop(); QVERIFY(!w.isAsyncBusy());
+    QCOMPARE(confirmations, duringIme ? 1 : 2);
+    QVERIFY(!localApplied);
+    QVERIFY(bridge::sessionMatches(newerSession).value("matches").toBool());
+    QVERIFY(!view->isReadOnly());
+  }
   void sourceNoopThenDeletionExhaustsOriginalMatches() {
-    MainWindow w;w.show();w.openPath(fixture("a A\r\n"));w.showSourceMode();waitIdle(w);w.openSearchPanel(true);
+    MainWindow w;w.show();w.openPath(fixture("a A\r\n"),true);waitIdle(w);w.openSearchPanel(true);
     auto* search=w.findChild<SearchPanel*>();auto fields=search->findChildren<QLineEdit*>();fields[0]->setText("a");fields[1]->setText("a");
     auto* source=w.findChild<SourceView*>();emit search->replaceRequested();QCOMPARE(source->toPlainText(),QString("a A\n"));QVERIFY(!source->document()->isUndoAvailable());
     fields[1]->setText("");emit search->replaceRequested();QCOMPARE(source->toPlainText(),QString("a \n"));
@@ -168,7 +312,7 @@ class ConflictRegressions : public QObject {
     QTest::addColumn<QString>("replacement");QTest::newRow("growth")<<QString("aa");QTest::newRow("no-op")<<QString("a");
   }
   void sourceReplacementExhaustion() {
-    QFETCH(QString,replacement);MainWindow w;w.show();w.openPath(fixture("a a a\r\n"));w.showSourceMode();waitIdle(w);w.openSearchPanel(true);
+    QFETCH(QString,replacement);MainWindow w;w.show();w.openPath(fixture("a a a\r\n"),true);waitIdle(w);w.openSearchPanel(true);
     auto* search=w.findChild<SearchPanel*>();auto fields=search->findChildren<QLineEdit*>();QCOMPARE(fields.size(),2);
     fields[0]->setText("a");fields[1]->setText(replacement);auto* source=w.findChild<SourceView*>();
     for(int i=0;i<3;++i)emit search->replaceRequested();

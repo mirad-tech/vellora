@@ -72,8 +72,13 @@ document-verified acceptance.
 Each run uses qwindows at system DPI, with no scale overrides. The default
 instrumented sequence and production subset are described below.
 Markdown fixtures are copied and their SHA256s are recorded. The script invokes
-`tools/make-perf-images.ps1` to prepare image assets in the performance fixture
-directory before copying them to the fresh OutputDir.
+`tools/make-perf-images.ps1 -ImageSet All` to generate PNGs directly in the fresh
+`OutputDir/fixtures`, without reading ignored repository PNGs. The 81-picture
+variant uses 128x128 ARGB PNGs with seeds 2001..2081; it differs from historical
+local images. References, decoding, dimensions and encoded sizes are checked
+before sampling. `prepare-visible-production.ps1` generates and validates the
+same 81-picture variant in its own output directory. Metadata records this
+variant and actual file hashes.
 Use -Synthetic only for the separate repeated-paragraph/solid-1280x720-image control.
 For each stage it waits 30 seconds naturally then samples PrivateMemorySize64
 10 times at one-second intervals. No forced GC, cache eviction, working-set
@@ -107,7 +112,7 @@ The structured 2 MiB fixture also has a generous 15-second event-loop regression
 test; this is distinct from the formal qwindows memory and latency measurements.
 
 The instrumented diagnostic sequence is empty, small, original large in document mode,
-original large in source mode, small after large, original 81-image document,
+original large in source mode, small after large, generated 81-image document,
 and small after images, followed by large images and small after large images.
 Steady medians across three independent runs are compared
 with 60/80/200 MiB limits; peak samples are reported separately. All three small-file
@@ -203,3 +208,10 @@ Each measured binary hash and heap variant must stay explicit in its report.
 ## 整理目录后的夹具
 
 图片排版与清单编辑回归使用 `tests/fixtures/full-document/document.md` 的自包含样本，并在测试临时目录生成图片，不再搜索用户根目录文档。原布局、源码保持和撤销断言保留；这不是已删除全功能文档的逐字复测。
+
+Image fixture generation/validation regressions run without starting Vellora:
+
+    ./tools/test-perf-fixtures.ps1 -OutputDir ./target/review-fixes-fixtures/new-run
+
+Use a fresh directory. The check covers 81 PNG references, decoding, dimensions,
+repeatable hashes, missing/corrupt files, and the Large/All generation modes.

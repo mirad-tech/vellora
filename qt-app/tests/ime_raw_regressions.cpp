@@ -5,6 +5,7 @@
 #include "bridge.h"
 #include "document_view.h"
 #include "theme.h"
+#include "source_view.h"
 
 class CapturingPreview : public DocumentView {
  public:
@@ -46,6 +47,169 @@ class ImeRawRegressions : public QObject {
     return result+"\nFollowing paragraph\n";
   }
  private slots:
+  void temporaryReadOnlyBlocksWritesAndPreservesReading() {
+    const QString source = "Body text\n\n- [ ] task\n\n" + QString("Long paragraph.\n\n").repeated(35);
+    DocumentView view; load(view, source);
+    QVERIFY(view.revealText("Body"));
+    QTest::keyClick(&view, Qt::Key_Right);
+    QTest::keyClicks(&view, "!");
+    QApplication::processEvents();
+    view.setSearchQuery("Body", true);
+    const auto before = view.document()->toPlainText();
+    const auto edits = view.pendingEdits();
+    const auto selected = view.selectionState();
+    const auto copied = view.selectionMime();
+    QVERIFY(view.document()->isUndoAvailable());
+    QSignalSpy edited(&view, &DocumentView::contentEdited);
+    view.setReadOnly(true);
+    QVERIFY(view.isReadOnly());
+    QCOMPARE(view.selectionState(), selected);
+    QVERIFY(!view.inputMethodQuery(Qt::ImEnabled).toBool());
+    QTest::keyClicks(&view, "replacement");
+    QKeyEvent altText(QEvent::KeyPress, Qt::Key_E, Qt::AltModifier, "e");
+    QApplication::sendEvent(&view, &altText);
+    for (int key : {Qt::Key_Backspace, Qt::Key_Delete, Qt::Key_Return, Qt::Key_Tab})
+      QTest::keyClick(&view, Qt::Key(key));
+    for (int key : {Qt::Key_X, Qt::Key_V, Qt::Key_Z, Qt::Key_Y, Qt::Key_B})
+      QTest::keyClick(&view, Qt::Key(key), Qt::ControlModifier);
+    QTest::keyClick(&view, Qt::Key_2, Qt::ControlModifier | Qt::AltModifier);
+    QVERIFY(!view.replaceCurrent("changed"));
+    QCOMPARE(view.replaceAll("changed"), 0);
+    QInputMethodEvent preedit("composition", {});
+    QApplication::sendEvent(&view, &preedit);
+    QInputMethodEvent commit; commit.setCommitString("changed", 0, 4);
+    QApplication::sendEvent(&view, &commit);
+    QVERIFY(!view.isComposing());
+    QCOMPARE(view.document()->toPlainText(), before);
+    QCOMPARE(view.selectionState(), selected);
+    QCOMPARE(view.selectionMime(), copied);
+    QCOMPARE(view.pendingEdits(), edits);
+    QVERIFY(view.document()->isUndoAvailable());
+    QVERIFY(!view.document()->isRedoAvailable());
+    QCOMPARE(edited.count(), 0);
+    const auto task = view.document()->find("task").block();
+    const auto taskBounds = view.document()->documentLayout()->blockBoundingRect(task);
+    const auto line = task.layout()->lineAt(0);
+    const QPoint marker(qRound(taskBounds.left() + line.cursorToX(0) + view.contentLeft() + 2),
+                        qRound(taskBounds.top() + line.y() + line.height() / 2 + view.topPadding() - view.scrollValue()));
+    QTest::mouseClick(view.viewport(), Qt::LeftButton, Qt::NoModifier, marker);
+    QCOMPARE(view.document()->toPlainText(), before);
+    QTest::keyClick(&view, Qt::Key_A, Qt::ControlModifier);
+    QVERIFY(!view.selectionMime().value("text").toString().isEmpty());
+    QTest::keyClick(&view, Qt::Key_End, Qt::ControlModifier);
+    QVERIFY(view.scrollValue() > 0);
+    QCOMPARE(view.document()->toPlainText(), before);
+    view.restoreSelectionState(selected);
+    view.setReadOnly(false);
+    QVERIFY(!view.isReadOnly());
+    QVERIFY(view.inputMethodQuery(Qt::ImEnabled).toBool());
+    QTest::keyClicks(&view, "X");
+    QVERIFY(view.document()->toPlainText() != before);
+    QTest::keyClick(&view, Qt::Key_Z, Qt::ControlModifier);
+    QCOMPARE(view.document()->toPlainText(), before);
+  }
+  void temporaryReadOnlySeparatesTypingUndo() {
+    DocumentView view; load(view, "Body\n");
+    QVERIFY(view.revealText("Body")); QTest::keyClick(&view, Qt::Key_Right);
+    QTest::keyClicks(&view, "before");
+    const auto beforeLock = view.document()->toPlainText();
+    QVERIFY(view.typingContinuation_);
+    const auto selection = view.selectionState();
+    view.setReadOnly(true); view.setReadOnly(false);
+    QCOMPARE(view.selectionState(), selection);
+    QTest::keyClicks(&view, "after");
+    QVERIFY(view.document()->toPlainText().contains("beforeafter"));
+    QTest::keyClick(&view, Qt::Key_Z, Qt::ControlModifier);
+    QCOMPARE(view.document()->toPlainText(), beforeLock);
+    QTest::keyClick(&view, Qt::Key_Z, Qt::ControlModifier);
+    QVERIFY(!view.hasPendingEdits());
+  }
+  void sourceReadOnlyRejectsCompositionAndRecovers() {
+    SourceView view; view.setMarkdown("Body text\n"); view.show(); view.setFocus();
+    QTextCursor selection = view.textCursor(); selection.setPosition(0);
+    selection.setPosition(4, QTextCursor::KeepAnchor); view.setTextCursor(selection);
+    QSignalSpy composition(&view, &SourceView::compositionStateChanged);
+    view.setReadOnly(true);
+    QInputMethodEvent preedit("composition", {}); QApplication::sendEvent(&view, &preedit);
+    QInputMethodEvent commit; commit.setCommitString("changed", 0, 4);
+    QApplication::sendEvent(&view, &commit);
+    QVERIFY(!view.isComposing()); QCOMPARE(composition.count(), 0);
+    QCOMPARE(view.toPlainText(), QString("Body text\n"));
+    QCOMPARE(view.selectedText(), QString("Body"));
+    QVERIFY(!view.document()->isUndoAvailable());
+    view.setReadOnly(false);
+    QInputMethodEvent accepted; accepted.setCommitString("New");
+    QApplication::sendEvent(&view, &accepted);
+    QCOMPARE(view.toPlainText(), QString("New text\n"));
+    QVERIFY(view.document()->isUndoAvailable());
+  }
+  void rawImageResizeOnFocusUpdatesParentHeight_data() {
+    QTest::addColumn<bool>("childFocus");
+    QTest::newRow("root-focus") << false;
+    QTest::newRow("child-focus") << true;
+  }
+  void rawImageResizeOnFocusUpdatesParentHeight() {
+    QFETCH(bool, childFocus);
+    QTemporaryDir dir; QVERIFY(dir.isValid());
+    const QString imagePath = dir.filePath("a.png");
+    QImage image(48, 48, QImage::Format_RGB32); image.fill(Qt::red); QVERIFY(image.save(imagePath));
+    const QString source = "<div><img src=\"a.png\"></div>\n\nTail\n";
+    QFile file(dir.filePath("sample.md")); QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(source.toUtf8()), source.toUtf8().size()); file.close();
+    DocumentView view; view.resize(820, 800); view.show();
+    view.setPlan(bridge::planFor(source).value("plan").toObject(), file.fileName());
+    view.setPreviewContext(source); QApplication::processEvents();
+    QCOMPARE(view.rawSurfaces_.size(), 1);
+    auto* child = view.rawSurfaces_.begin()->preview.data(); QVERIFY(child);
+    view.viewport()->grab(); child->viewport()->grab();
+    if (childFocus) {
+      child->setFocus(); QApplication::processEvents(); QVERIFY(child->hasFocus());
+    }
+    auto placeholder = [&] {
+      for (auto block = view.document()->begin(); block.isValid(); block = block.next())
+        if (block.blockFormat().hasProperty(QTextFormat::UserProperty + 28)) return block;
+      return QTextBlock();
+    };
+    const auto raw = placeholder(); QVERIFY(raw.isValid());
+    auto geometry = [&] {
+      const auto rawBounds = view.document()->documentLayout()->blockBoundingRect(raw);
+      const auto tail = view.document()->find("Tail").block();
+      const auto tailBounds = view.document()->documentLayout()->blockBoundingRect(tail);
+      return QVector<qreal>{child->document()->size().height(), rawBounds.height(), tailBounds.top()};
+    };
+    auto previous = geometry();
+    QSignalSpy edited(&view, &DocumentView::contentEdited);
+    QSignalSpy childEdited(child, &DocumentView::contentEdited);
+    const QDateTime stamp = QDateTime::currentDateTimeUtc().addSecs(10);
+    int generation = 0;
+    for (int height : {300, 24}) {
+      image = QImage(48, height, QImage::Format_RGB32); image.fill(Qt::blue);
+      QVERIFY(image.save(imagePath));
+      QFile touched(imagePath); QVERIFY(touched.open(QIODevice::ReadWrite));
+      QVERIFY(touched.setFileTime(stamp.addSecs(++generation), QFileDevice::FileModificationTime));
+      touched.close();
+      QFocusEvent focus(QEvent::FocusIn);
+      QApplication::sendEvent(childFocus ? child : &view, &focus);
+      QApplication::processEvents();
+      const auto current = geometry();
+      for (int component = 0; component < current.size(); ++component) {
+        if (height == 300) QVERIFY(current[component] > previous[component]);
+        else QVERIFY(current[component] < previous[component]);
+      }
+      QVERIFY(qAbs((current[2] - previous[2]) - (current[1] - previous[1])) <= 1);
+      QVERIFY(child->height() + 1 >= qCeil(current[0]));
+      if (childFocus) {
+        QFocusEvent rootFocus(QEvent::FocusIn); QApplication::sendEvent(&view, &rootFocus);
+        QApplication::processEvents(); QCOMPARE(geometry(), current);
+      }
+      QVERIFY(!view.hasPendingEdits()); QVERIFY(!child->hasPendingEdits());
+      QVERIFY(!view.document()->isUndoAvailable()); QVERIFY(!child->document()->isUndoAvailable());
+      QCOMPARE(edited.count(), 0); QCOMPARE(childEdited.count(), 0);
+      QCOMPARE(draft(view, source), source);
+      previous = current;
+    }
+    QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), source.toUtf8());
+  }
   void structuralImageFormatsReserveHeight_data() {
     QTest::addColumn<int>("key");QTest::addColumn<int>("mods");
     QTest::newRow("heading")<<int(Qt::Key_2)<<int(Qt::ControlModifier|Qt::AltModifier);

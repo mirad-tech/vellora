@@ -60,6 +60,8 @@ class DocumentView : public QAbstractScrollArea {
 
   void setPlan(const QJsonObject& plan, const QString& documentPath);
   void setPreviewContext(const QString& markdown);
+  void setReadOnly(bool readOnly);
+  bool isReadOnly() const { return readOnly_; }
   void setEmptyState();
   void setErrorState(const QString& message);
   void setSearchQuery(const QString& query, bool active);
@@ -72,6 +74,7 @@ class DocumentView : public QAbstractScrollArea {
   int replaceAll(const QString& replacement);
   int replacementChangeCount(const QString& replacement) const;
   void focusSearchResult(int index);
+  QVector<QRectF> activeSearchMatchRects() const;
   bool revealText(const QString& text);
   bool revealHeading(int index);
   int currentHeadingIndex() const;
@@ -95,6 +98,7 @@ class DocumentView : public QAbstractScrollArea {
   void linkActivated(const QString& href);
   void openRequested();
   void sourceEditRequested();
+  void rawPreviewFocusEntered();
   void contentEdited();
   void viewportChanged();
 
@@ -275,7 +279,7 @@ class DocumentView : public QAbstractScrollArea {
     bool operator!=(const ImageStat& other) const { return !(*this == other); }
   };
   QHash<QString, ImageStat> imageStats_;
-  void refreshImagesOnFocus();
+  bool refreshImagesOnFocus();
   struct AnimatedImage { QBuffer buffer; QMovie movie; AnimatedImage(const QByteArray& bytes): movie(&buffer) { buffer.setData(bytes); buffer.open(QIODevice::ReadOnly); } };
   QCache<QString,AnimatedImage> animationCache_{32 * 1024};
   QSet<QString> paintedImages_;

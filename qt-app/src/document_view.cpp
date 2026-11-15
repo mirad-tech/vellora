@@ -574,6 +574,14 @@ void DocumentView::setErrorState(const QString& message) {
   setEmptyState();errorMessage_=message;setAccessibleName(QStringLiteral("重新选择"));setAccessibleDescription(QStringLiteral("打开失败。")+message);viewport()->update();
 }
 
+void DocumentView::setReadOnly(bool readOnly) {
+  if (readOnly_ == readOnly) return;
+  readOnly_ = readOnly;
+  typingContinuation_ = false;
+  viewport()->update();
+  if (auto* method = QGuiApplication::inputMethod()) method->update(Qt::ImEnabled);
+}
+
 void DocumentView::setPlan(const QJsonObject& plan, const QString& documentPath) {
   clearPreeditLayout(); preedit_.clear();
   stopHeadingScroll();
@@ -1083,6 +1091,8 @@ struct DocumentView::BuildContext {
                        });
       QObject::connect(surface.preview, &DocumentView::viewportChanged, &view,
                        &DocumentView::viewportChanged);
+      QObject::connect(surface.preview, &DocumentView::rawPreviewFocusEntered, &view,
+                       [&v = view] { v.refreshImagesOnFocus(); });
       view.rawSurfaces_.insert(currentNode, surface);
     }
 
@@ -2447,8 +2457,7 @@ bool DocumentView::handleReadOnlyOrEmptyKey(QKeyEvent* event) {
        event->matches(QKeySequence::Undo) || event->matches(QKeySequence::Redo) ||
        event->key() == Qt::Key_Backspace || event->key() == Qt::Key_Delete ||
        event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
-       (!event->text().isEmpty() &&
-        !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier))))) {
+       (!event->text().isEmpty() && !(event->modifiers() & Qt::ControlModifier)))) {
     event->ignore();
     return true;
   }
@@ -3385,7 +3394,7 @@ void DocumentView::replaceRange(QTextCursor& range, const QString& text) {
 }
 
 bool DocumentView::replaceCurrent(const QString& replacement) {
-  if (isComposing() || activeMatch_ < 0 || activeMatch_ >= matches_.size()) return false;
+  if (readOnly_ || isComposing() || activeMatch_ < 0 || activeMatch_ >= matches_.size()) return false;
   QTextCursor range = matches_.at(activeMatch_);
   if (replacesBlockStructure(range, replacement) && protectNestedStructure(range)) return false;
   const bool changed = range.selectedText() != replacement;
@@ -3413,7 +3422,7 @@ bool DocumentView::replaceCurrent(const QString& replacement) {
 }
 
 int DocumentView::replaceAll(const QString& replacement) {
-  if (isComposing()) return 0;
+  if (readOnly_ || isComposing()) return 0;
   const auto ranges = matches_;
   for (const auto& range : ranges)
     if (replacesBlockStructure(range, replacement) && protectNestedStructure(range)) return 0;
@@ -3832,7 +3841,7 @@ void DocumentView::hideEvent(QHideEvent* event) {
   for(auto& surface:rawSurfaces_) {surface.preview->imageCache_.clear();surface.preview->animationCache_.clear();}
 }
 
-void DocumentView::refreshImagesOnFocus() {
+bool DocumentView::refreshImagesOnFocus() {
   bool resized = false;
   bool changed = false;
   for (const auto& key : paintedImages_) {
@@ -3867,6 +3876,9 @@ void DocumentView::refreshImagesOnFocus() {
       resized = true;
     }
   }
+  for (auto& surface : rawSurfaces_) {
+    resized = surface.preview->refreshImagesOnFocus() || resized;
+  }
   if (resized) {
     document_->markContentsDirty(0, document_->characterCount());
     relayout();
@@ -3874,14 +3886,13 @@ void DocumentView::refreshImagesOnFocus() {
   if (changed || resized) {
     viewport()->update();
   }
+  return resized;
 }
 
 void DocumentView::focusInEvent(QFocusEvent* event) {
   QAbstractScrollArea::focusInEvent(event);
-  refreshImagesOnFocus();
-  for (auto& surface : rawSurfaces_) {
-    surface.preview->refreshImagesOnFocus();
-  }
+  if (previewMode_) emit rawPreviewFocusEntered();
+  else refreshImagesOnFocus();
   resetCaretBlink();
 }
 
@@ -3981,6 +3992,33 @@ void DocumentView::applySearchHighlight(const QString& query) {
   matchCount_ = matches_.size();
   activeMatch_ = matches_.isEmpty() || previous < 0 ? -1 : qMin(previous, matchCount_ - 1);
   viewport()->update();
+}
+
+QVector<QRectF> DocumentView::activeSearchMatchRects() const {
+  QVector<QRectF> result;
+  if (activeMatch_ < 0 || activeMatch_ >= matches_.size()) return result;
+  const QTextCursor match = matches_.at(activeMatch_);
+  for (QTextBlock block = document_->findBlock(match.selectionStart());
+       block.isValid() && block.position() < match.selectionEnd(); block = block.next()) {
+    if (!block.isVisible()) continue;
+    const QRectF bounds = document_->documentLayout()->blockBoundingRect(block);
+    qreal horizontal = 0;
+    for (const auto& region : horizontalRegions_)
+      if (region.node == block.blockFormat().intProperty(NodeProperty)) { horizontal = region.scroll; break; }
+    const int start = qMax(0, match.selectionStart() - block.position());
+    const int stop = qMin(block.length() - 1, match.selectionEnd() - block.position());
+    for (int index = 0; index < block.layout()->lineCount(); ++index) {
+      const QTextLine line = block.layout()->lineAt(index);
+      const int from = qMax(start, line.textStart());
+      const int to = qMin(stop, line.textStart() + line.textLength());
+      if (from >= to) continue;
+      const qreal left = line.cursorToX(from), right = line.cursorToX(to);
+      result.append(QRectF(contentLeft() + bounds.left() + qMin(left, right) - horizontal,
+                           topPadding() + bounds.top() + line.y() - scrollValue(),
+                           qAbs(right - left), line.height()));
+    }
+  }
+  return result;
 }
 
 void DocumentView::focusSearchResult(int index) {

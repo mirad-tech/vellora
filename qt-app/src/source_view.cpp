@@ -10,6 +10,7 @@
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QTimer>
+#include <QtMath>
 
 #include "theme.h"
 
@@ -82,6 +83,33 @@ void SourceView::setExtraSelections(const QList<QTextEdit::ExtraSelection>& sele
   }
   QPlainTextEdit::setExtraSelections(selections);
   updateSelectionPalette();
+}
+
+QVector<QRectF> SourceView::activeSearchMatchRects() const {
+  QVector<QRectF> result;
+  if (currentSearchMatch_.isNull() || !currentSearchMatch_.hasSelection()) return result;
+  const int end = currentSearchMatch_.selectionEnd();
+  for (QTextBlock block = document()->findBlock(currentSearchMatch_.selectionStart());
+       block.isValid() && block.position() < end; block = block.next()) {
+    const QRectF bounds = blockBoundingGeometry(block).translated(contentOffset());
+    const int start = qMax(0, currentSearchMatch_.selectionStart() - block.position());
+    const int stop = qMin(block.length() - 1, end - block.position());
+    for (int index = 0; index < block.layout()->lineCount(); ++index) {
+      const QTextLine line = block.layout()->lineAt(index);
+      const int from = qMax(start, line.textStart());
+      const int to = qMin(stop, line.textStart() + line.textLength());
+      if (from >= to) continue;
+      const qreal left = line.cursorToX(from), right = line.cursorToX(to);
+      result.append(QRectF(bounds.left() + qMin(left, right), bounds.top() + line.y(),
+                           qAbs(right - left), line.height()));
+    }
+  }
+  return result;
+}
+
+void SourceView::scrollSearchMatchDown(int pixels) {
+  // The native scrollbar counts visual lines; SourceDocumentLayout spaces them at 23.8px.
+  verticalScrollBar()->setValue(verticalScrollBar()->value() - qCeil(pixels / 23.8));
 }
 
 void SourceView::updateSelectionPalette() {
@@ -189,6 +217,7 @@ QString SourceView::selectedText() const {
 }
 
 void SourceView::inputMethodEvent(QInputMethodEvent* event) {
+  if (isReadOnly()) { event->ignore(); return; }
   const bool composing = !event->preeditString().isEmpty();
   // Mark composition before the edit emits textChanged, and clear it only
   // after the committed text has reached the document.

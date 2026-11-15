@@ -53,6 +53,36 @@ class AccessibilityRegressions : public QObject {
     return found;
   }
  private slots:
+  void temporaryReadOnlyBlocksCachedEditingInterface() {
+    DocumentView view; load(view, "Body text\n");
+    auto* root = interface(view); auto* text = root->textInterface();
+    auto* edit = root->editableTextInterface(); QVERIFY(edit);
+    const int body = find(view, "Body");
+    text->setSelection(0, body, body + 4);
+    const auto before = view.document()->toPlainText();
+    QSignalSpy edited(&view, &DocumentView::contentEdited);
+    view.setReadOnly(true);
+    QVERIFY(root->state().readOnly); QVERIFY(!root->state().editable);
+    QVERIFY(!root->editableTextInterface()); QVERIFY(root->textInterface());
+    edit->insertText(body, "new ");
+    edit->deleteText(body, body + 4);
+    edit->replaceText(body, body + 4, "changed");
+    root->setText(QAccessible::Value, "changed");
+    QCOMPARE(view.document()->toPlainText(), before);
+    QCOMPARE(view.selectedText(), QString("Body"));
+    QVERIFY(!view.hasPendingEdits()); QVERIFY(!view.document()->isUndoAvailable());
+    QCOMPARE(edited.count(), 0);
+    text->setSelection(0, body + 5, body + 9);
+    QCOMPARE(view.selectedText(), QString("text"));
+    QCOMPARE(text->text(body, body + 4), QString("Body"));
+    view.setReadOnly(false);
+    QVERIFY(root->state().editable); QVERIFY(!root->state().readOnly);
+    QVERIFY(root->editableTextInterface());
+    edit->replaceText(body, body + 4, "New");
+    QVERIFY(view.document()->toPlainText().contains("New text"));
+    undo(view); QCOMPARE(view.document()->toPlainText(), before);
+  }
+
   void constructionAndLifecycle() {
     for (int i = 0; i != 12; ++i) {
       DocumentView view;

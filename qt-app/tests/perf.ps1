@@ -18,7 +18,7 @@ $OutputDir=[IO.Path]::GetFullPath($OutputDir)
 if(Test-Path -LiteralPath $OutputDir){throw 'Use a fresh OutputDir; this script never deletes existing output.'}
 New-Item -ItemType Directory -Path $OutputDir | Out-Null
 $fixtures=Join-Path $OutputDir 'fixtures';New-Item -ItemType Directory -Path $fixtures | Out-Null
-$fixtureKind='repository-structured-baseline'
+$fixtureKind='repository-markdown-fixed-seed-png-v1'
 $native=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if ($Synthetic) {
 $small=Join-Path $fixtures 'small.md';[IO.File]::WriteAllText($small,"# Small document`n`nA short paragraph.`n",[Text.UTF8Encoding]::new($false))
@@ -31,17 +31,17 @@ for($i=0;$i -lt 81;$i++){
   [void]$markdown.Append("![image $i]($name)`n`n")
 }
 [IO.File]::WriteAllText($images,$markdown.ToString(),[Text.UTF8Encoding]::new($false))
-& (Join-Path $native 'tools\make-perf-images.ps1') -OutputDir $fixtures | Out-Null
+& (Join-Path $native 'tools\make-perf-images.ps1') -OutputDir $fixtures -ImageSet Large | Out-Null
 Copy-Item -LiteralPath (Join-Path $native 'tests\fixtures\performance\large-images.md') -Destination $fixtures
 $largeImages=Join-Path $fixtures 'large-images.md'
 
   $fixtureKind='synthetic-control-repeated-paragraph-and-solid-images'
 } else {
   $baseline=Join-Path $native 'tests\fixtures\performance'
-  & (Join-Path $native 'tools\make-perf-images.ps1') -OutputDir $baseline | Out-Null
   foreach($name in @('small.md','large.md','images-81.md','large-images.md')){Copy-Item -LiteralPath (Join-Path $baseline $name) -Destination $fixtures}
-  Get-ChildItem -LiteralPath $baseline -Filter 'picture-*.png' -File | Copy-Item -Destination $fixtures
-  Get-ChildItem -LiteralPath $baseline -Filter 'large-image-*.png' -File | Copy-Item -Destination $fixtures
+  & (Join-Path $native 'tools\make-perf-images.ps1') -OutputDir $fixtures -ImageSet All | Out-Null
+  . (Join-Path $native 'tools\perf-fixtures.ps1')
+  Assert-Picture81Fixtures -FixtureDir $fixtures
   $small=Join-Path $fixtures 'small.md';$large=Join-Path $fixtures 'large.md';$images=Join-Path $fixtures 'images-81.md';$largeImages=Join-Path $fixtures 'large-images.md'
 }
 Add-Type -Path (Join-Path $PSScriptRoot 'perf-window.cs')
@@ -177,7 +177,7 @@ function Median-Stage([string]$Name) {
 }
 $steady=[ordered]@{empty_mib=(Median-Stage 'empty');small_mib=(Median-Stage 'small');large_mib=(Median-Stage 'large-markdown');large_source_mib=(Median-Stage 'large-source-mode');large_images_mib=(Median-Stage 'large-images');empty_limit_mib=60;small_limit_mib=80;large_limit_mib=200;runs=$Runs}
 $steady.passed=($steady.empty_mib -le 60 -and $steady.small_mib -le 80 -and $steady.large_mib -le 200 -and $steady.large_source_mib -le 200)
-[ordered]@{executable=$Executable;sha256=$executableHash;qt_version=$qtVersion;os=[Environment]::OSVersion.VersionString;fixture_kind=$fixtureKind;fixtures=$fixtureManifest;platform='qwindows';dpi='system default; no scale override';runs=$Runs;idle_seconds=30;sample_count=10;interval_seconds=1;large_fixture_bytes=(Get-Item -LiteralPath $large).Length;image_count=81;image_dimensions=if($Synthetic){'1280x720'}else{'original repository PNGs; see fixture hashes'};gc_or_cache_trimming=$false;document_state_evidence_complete=$false;passed=$false;steady_state_gates=$steady;recovery_gates=$gates;results=$rows} | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $OutputDir 'report.json') -Encoding utf8
+[ordered]@{executable=$Executable;sha256=$executableHash;qt_version=$qtVersion;os=[Environment]::OSVersion.VersionString;fixture_kind=$fixtureKind;fixtures=$fixtureManifest;platform='qwindows';dpi='system default; no scale override';runs=$Runs;idle_seconds=30;sample_count=10;interval_seconds=1;large_fixture_bytes=(Get-Item -LiteralPath $large).Length;image_count=81;image_dimensions=if($Synthetic){'1280x720'}else{'fixed-seed PNG v1: picture 128x128 ARGB, seeds 2001..2081; see fixture hashes'};gc_or_cache_trimming=$false;document_state_evidence_complete=$false;passed=$false;steady_state_gates=$steady;recovery_gates=$gates;results=$rows} | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $OutputDir 'report.json') -Encoding utf8
 Write-Host "Report: $OutputDir\report.json"
 
 

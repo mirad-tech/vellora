@@ -22,6 +22,7 @@
 #include <QStackedLayout>
 #include <QTextBlock>
 #include <QVBoxLayout>
+#include <QtMath>
 
 #include "bridge.h"
 #include "chrome.h"
@@ -75,7 +76,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   maximumDirtyTimer_.setSingleShot(true);
   maximumDirtyTimer_.setInterval(500);
   const auto publishDraft = [this] {
-    if (applying_ || compositionActive()) return;
+    if (applying_ || opening_ || planning_ || compositionActive()) return;
     dirtyTimer_.stop();
     maximumDirtyTimer_.stop();
     collectDraft(false);
@@ -94,7 +95,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   pendingOpenTimer_.setInterval(40);
   connect(&pendingOpenTimer_, &QTimer::timeout, this, [this] {
     if (pendingOpenPath_.isEmpty()) { pendingOpenTimer_.stop(); return; }
-    if (modalOpen_ || busy_ || opening_ || compositionActive()) return;
+    if (modalOpen_ || busy_ || opening_ || planning_ || compositionActive()) return;
     const QString path = std::exchange(pendingOpenPath_, QString());
     const bool source = pendingOpenSource_;
     pendingOpenTimer_.stop();
@@ -181,6 +182,7 @@ void MainWindow::buildUi() {
       if (documentView_->searchMatchCount() > 0)
         documentView_->focusSearchResult(documentView_->searchActiveIndex() + delta);
       search_->setCounter(documentView_->searchActiveIndex() + 1, documentView_->searchMatchCount());
+      avoidSearchPanel();
     } else {
       showSourceMatch(sourceSearchIndex_ + delta);
     }
@@ -215,11 +217,11 @@ bool MainWindow::compositionActive() const {
 }
 
 void MainWindow::afterComposition(std::function<void()> action) {
-  if (modalOpen_ || busy_ || opening_) return;
+  if (modalOpen_ || busy_ || opening_ || planning_) return;
   if (!compositionActive()) { action(); return; }
   const quint64 expectedSession = session_;
   compositionActions_.append([this, expectedSession, action] {
-    if (session_ == expectedSession && !modalOpen_ && !busy_ && !opening_) action();
+    if (session_ == expectedSession && !modalOpen_ && !busy_ && !opening_ && !planning_) action();
   });
   compositionTimer_.start();
   if (QGuiApplication::inputMethod()) QGuiApplication::inputMethod()->commit();
@@ -240,10 +242,18 @@ bool MainWindow::confirmDiscard() {
 }
 
 void MainWindow::notifyIfAsyncIdle() {
-  if (!opening_ && !planning_) emit asyncIdle();
+  if (!isAsyncBusy()) emit asyncIdle();
+}
+
+void MainWindow::finishAsync() {
+  opening_ = false;
+  planning_ = false;
+  refreshIdentity();
+  notifyIfAsyncIdle();
 }
 
 void MainWindow::chooseFile() {
+  if (isAsyncBusy()) return;
   const quint64 request = ++openRequestId_;
   afterComposition([this, request] {
     pendingOpenPath_.clear();
@@ -256,44 +266,16 @@ void MainWindow::chooseFile() {
           QString(), QStringLiteral("Markdown 文件 (*.md *.markdown)"));
     }
     if (path.isEmpty() || request != openRequestId_) return;
-    const quint64 expectedSession = ++session_;
-    planning_ = false;
-    pendingMode_ = -1;
-    opening_ = true;
-    refreshIdentity();
-    toolbar_->repaint();
-    auto* watcher = new QFutureWatcher<QJsonObject>(this);
-    connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
-            [this, watcher, request, expectedSession] {
-              const QJsonObject payload = watcher->result();
-              watcher->deleteLater();
-              opening_ = false;
-              const int modeAfterOpen = std::exchange(pendingMode_, -1);
-              if (session_ != expectedSession ||
-                  (request != openRequestId_ && !pendingOpenPath_.isEmpty())) {
-                refreshIdentity();
-                notifyIfAsyncIdle();
-                return;
-              }
-              if (payload.value("ok").toBool()) {
-                applyDocument(payload);
-                const QJsonObject openedPlan = payload.value("plan").toObject();
-                if (modeAfterOpen >= 0) setModeWithPlan(modeAfterOpen, &openedPlan);
-              } else {
-                showOpenError(payload.value("message").toString());
-              }
-              notifyIfAsyncIdle();
-            });
-    watcher->setFuture(QtConcurrent::run([path] { return bridge::openDocument(path); }));
+    startOpen([path] { return bridge::openDocument(path); }, false);
   });
 }
 
 void MainWindow::openPath(const QString& path, bool sourceMode) {
   if (path.isEmpty()) return;
   const quint64 request = ++openRequestId_;
-  if (modalOpen_ || busy_ || opening_) {
-    // Match the legacy launch queue: preserve the latest path while a prompt
-    // owns the window instead of acknowledging and silently losing the request.
+  if (modalOpen_ || busy_ || opening_ || planning_) {
+    // A started native open already owns the Rust session. Apply its result
+    // before attempting the latest queued path, including when that path fails.
     pendingOpenPath_ = path;
     pendingOpenSource_ = sourceMode;
     pendingOpenTimer_.start();
@@ -301,39 +283,52 @@ void MainWindow::openPath(const QString& path, bool sourceMode) {
   }
   pendingOpenPath_.clear();
   pendingOpenTimer_.stop();
-  afterComposition([this, path, sourceMode, request] {
-    if (request != openRequestId_ || !confirmDiscard() || request != openRequestId_) return;
-    const quint64 expectedSession = ++session_;
-    planning_ = false;
-    pendingMode_ = sourceMode ? kModeSource : -1;
-    opening_ = true;
+  if (compositionActive()) {
+    // Earlier IME-deferred actions may start a plan. Re-enter the open queue
+    // when this request runs instead of dropping it through the generic gate.
+    compositionActions_.append([this, path, sourceMode, request] {
+      if (request == openRequestId_) openPath(path, sourceMode);
+    });
+    compositionTimer_.start();
+    if (QGuiApplication::inputMethod()) QGuiApplication::inputMethod()->commit();
+    return;
+  }
+  const bool discard = confirmDiscard();
+  if (request != openRequestId_) return;
+  if (!discard) {
     refreshIdentity();
-    toolbar_->repaint();
-    auto* watcher = new QFutureWatcher<QJsonObject>(this);
-    connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
-            [this, watcher, request, expectedSession] {
-              const QJsonObject payload = watcher->result();
-              watcher->deleteLater();
-              opening_ = false;
-              const int modeAfterOpen = std::exchange(pendingMode_, -1);
-              if (session_ != expectedSession ||
-                  (request != openRequestId_ && !pendingOpenPath_.isEmpty())) {
-                refreshIdentity();
-                notifyIfAsyncIdle();
-                return;
-              }
-              if (!payload.value("ok").toBool()) {
-                showOpenError(payload.value("message").toString());
-                notifyIfAsyncIdle();
-                return;
-              }
+    notifyIfAsyncIdle();
+    return;
+  }
+  startOpen([path] { return bridge::openDocument(path); }, sourceMode);
+}
+
+void MainWindow::startOpen(std::function<QJsonObject()> openDocument, bool sourceMode) {
+  opening_ = true;
+  dirtyTimer_.stop();
+  maximumDirtyTimer_.stop();
+  refreshIdentity();
+  toolbar_->repaint();
+  auto* watcher = new QFutureWatcher<QJsonObject>(this);
+  connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
+          [this, watcher, sourceMode] {
+            const QJsonObject payload = watcher->result();
+            watcher->deleteLater();
+            if (payload.value("ok").toBool()) {
               applyDocument(payload);
-              const QJsonObject openedPlan = payload.value("plan").toObject();
-              if (modeAfterOpen >= 0) setModeWithPlan(modeAfterOpen, &openedPlan);
-              notifyIfAsyncIdle();
-            });
-    watcher->setFuture(QtConcurrent::run([path] { return bridge::openDocument(path); }));
-  });
+              opening_ = false;
+              if (sourceMode) {
+                const QJsonObject openedPlan = payload.value("plan").toObject();
+                setModeWithPlan(kModeSource, &openedPlan);
+                return;
+              }
+            } else {
+              opening_ = false;
+              showOpenError(payload.value("message").toString());
+            }
+            finishAsync();
+          });
+  watcher->setFuture(QtConcurrent::run(std::move(openDocument)));
 }
 void MainWindow::applyDocument(const QJsonObject& payload) {
   QScopedValueRollback<bool> applying(applying_, true);
@@ -431,14 +426,13 @@ bool MainWindow::collectDraft(bool showFailure) {
   return true;
 }
 
-void MainWindow::setMode(int mode) { setModeWithPlan(mode, nullptr); }
+void MainWindow::setMode(int mode) {
+  if (isAsyncBusy()) return;
+  setModeWithPlan(mode, nullptr);
+}
 
 void MainWindow::setModeWithPlan(int mode, const QJsonObject* precomputedPlan) {
-  if (opening_) {
-    pendingMode_ = mode;
-    return;
-  }
-  if (documentPath_.isEmpty() || planning_) return;
+  if (documentPath_.isEmpty() || modalOpen_ || busy_ || opening_ || planning_) return;
   const bool toSource = mode == kModeSource;
   if (toSource == !documentMode_) { toolbar_->setMode(mode); return; }
   toolbar_->setMode(documentMode_ ? kModeDocument : kModeSource);
@@ -450,8 +444,7 @@ void MainWindow::setModeWithPlan(int mode, const QJsonObject* precomputedPlan) {
       toolbar_->setMode(nowSource ? kModeSource : kModeDocument);
       refreshOutlineForDraft();
       if (search_->isVisible()) refreshSearch(true);
-      refreshIdentity();
-      notifyIfAsyncIdle();
+      finishAsync();
     };
     if (toSource) {
       const QJsonObject anchor = sourceVisited_ ? QJsonObject() : documentView_->readingAnchor();
@@ -494,26 +487,24 @@ void MainWindow::setModeWithPlan(int mode, const QJsonObject* precomputedPlan) {
         applySourceSwitch(sourceOffsetForReadingAnchor(anchor, immediatePlan));
         return;
       }
-      const quint64 expectedSession = session_;
       const QString markdown = draftMarkdown_;
       planning_ = true;
+      dirtyTimer_.stop();
+      maximumDirtyTimer_.stop();
       refreshIdentity();
       auto* watcher = new QFutureWatcher<QJsonObject>(this);
       connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
-              [this, watcher, expectedSession, anchor, applySourceSwitch] {
+              [this, watcher, anchor, applySourceSwitch] {
                 const QJsonObject parsed = watcher->result();
                 watcher->deleteLater();
-                if (session_ != expectedSession) return;
                 planning_ = false;
-                if (!documentMode_) {
+                if (!parsed.value("ok").toBool()) {
                   refreshIdentity();
-                  notifyIfAsyncIdle();
+                  showError(parsed.value("message").toString());
+                  finishAsync();
                   return;
                 }
-                const int offset = parsed.value("ok").toBool()
-                    ? sourceOffsetForReadingAnchor(anchor, parsed.value("plan").toObject())
-                    : -1;
-                applySourceSwitch(offset);
+                applySourceSwitch(sourceOffsetForReadingAnchor(anchor, parsed.value("plan").toObject()));
               });
       watcher->setFuture(QtConcurrent::run([markdown] { return bridge::planFor(markdown); }));
     } else {
@@ -532,27 +523,22 @@ void MainWindow::setModeWithPlan(int mode, const QJsonObject* precomputedPlan) {
         applyDocumentSwitch();
         return;
       }
-      const quint64 expectedSession = session_;
       const QString markdown = draftMarkdown_;
       const auto documentSelection = documentView_->selectionState();
       planning_ = true;
+      dirtyTimer_.stop();
+      maximumDirtyTimer_.stop();
       refreshIdentity();
       auto* watcher = new QFutureWatcher<QJsonObject>(this);
       connect(watcher, &QFutureWatcher<QJsonObject>::finished, this,
-              [this, watcher, expectedSession, markdown, documentSelection, applyDocumentSwitch] {
+              [this, watcher, markdown, documentSelection, applyDocumentSwitch] {
                 const QJsonObject result = watcher->result();
                 watcher->deleteLater();
-                if (session_ != expectedSession) return;
                 planning_ = false;
-                if (documentMode_) {
-                  refreshIdentity();
-                  notifyIfAsyncIdle();
-                  return;
-                }
                 if (!result.value("ok").toBool()) {
                   refreshIdentity();
                   showError(result.value("message").toString());
-                  notifyIfAsyncIdle();
+                  finishAsync();
                   return;
                 }
                 const QJsonObject plan = result.value("plan").toObject();
@@ -576,15 +562,17 @@ void MainWindow::refreshIdentity() {
       : dirty_ ? QStringLiteral("有未保存更改") : QStringLiteral("Markdown 文档");
   toolbar_->setDocumentName(documentName_, status, dirty_);
   toolbar_->setDocumentAvailable(!documentPath_.isEmpty());
-  toolbar_->setBusy(busy_ || opening_ || planning_);
-  toolbar_->setSaveEnabled(!documentPath_.isEmpty() && dirty_ && !busy_ && !opening_ && !planning_);
+  toolbar_->setBusy(busy_ || isAsyncBusy());
+  toolbar_->setSaveEnabled(!documentPath_.isEmpty() && dirty_ && !busy_ && !isAsyncBusy());
+  documentView_->setReadOnly(isAsyncBusy());
+  sourceView_->setReadOnly(isAsyncBusy());
   setWindowTitle(QStringLiteral("Vellora"));
 }
 
 void MainWindow::markDirtyIfNeeded() { collectDraft(false); }
 
 bool MainWindow::save(QString conflictToken) {
-  if (documentPath_.isEmpty() || modalOpen_ || busy_ || compositionActive() || !collectDraft()) return false;
+  if (documentPath_.isEmpty() || modalOpen_ || busy_ || isAsyncBusy() || compositionActive() || !collectDraft()) return false;
   const QString path = documentPath_;
   const quint64 expectedSession = session_;
   const auto current = [this, path, expectedSession] {
@@ -659,7 +647,9 @@ void MainWindow::showError(const QString& message) {
 }
 
 void MainWindow::openLink(const QString& href) {
-  afterComposition([this, href] {
+  if (isAsyncBusy()) return;
+  const quint64 initialRequest = openRequestId_;
+  afterComposition([this, href, initialRequest] {
     if (documentPath_.isEmpty() || href.isEmpty()) return;
     if (href.startsWith('#')) {
       collectDraft(false);
@@ -679,10 +669,18 @@ void MainWindow::openLink(const QString& href) {
       const QJsonObject opened = bridge::openExternal(url);
       if (!opened.value("ok").toBool()) showError(opened.value("message").toString());
     } else {
-      if (!confirmDiscard()) return;
-      const QJsonObject opened = bridge::openLink(documentPath_, href);
-      if (opened.value("ok").toBool()) applyDocument(opened);
-      else showError(opened.value("message").toString());
+      if (initialRequest != openRequestId_) return;
+      const QString originDocument = documentPath_;
+      const quint64 expectedSession = session_;
+      const quint64 request = ++openRequestId_;
+      const bool discard = confirmDiscard();
+      if (request != openRequestId_ || session_ != expectedSession || documentPath_ != originDocument) return;
+      if (!discard) {
+        refreshIdentity();
+        notifyIfAsyncIdle();
+        return;
+      }
+      startOpen([originDocument, href] { return bridge::openLink(originDocument, href); }, false);
     }
   });
 }
@@ -792,7 +790,7 @@ void MainWindow::showSourceMatch(int index) {
 void MainWindow::runSearch(bool forward) { showSourceMatch(sourceSearchIndex_+(forward?1:-1)); }
 
 void MainWindow::replaceCurrent() {
-  if (modalOpen_ || busy_ || compositionActive() || search_->query().trimmed().isEmpty()) return;
+  if (modalOpen_ || busy_ || isAsyncBusy() || compositionActive() || search_->query().trimmed().isEmpty()) return;
   int changed = 0;
   if (documentMode_) {
     changed = documentView_->replaceCurrent(search_->replacement()) ? 1 : 0;
@@ -831,7 +829,7 @@ void MainWindow::replaceCurrent() {
 }
 
 void MainWindow::replaceAll() {
-  if (modalOpen_ || busy_ || compositionActive() || search_->query().trimmed().isEmpty() || !collectDraft()) return;
+  if (modalOpen_ || busy_ || isAsyncBusy() || compositionActive() || search_->query().trimmed().isEmpty() || !collectDraft()) return;
   refreshSearch(false);
   const QString replacement = search_->replacement();
   int count = 0;
@@ -895,10 +893,36 @@ void MainWindow::positionSearchPanel() {
   if(!search_->isVisible())return;
   search_->setMaximumWidth(qMax(200,content_->width()-32));
   search_->move(qMax(8,content_->width()-search_->width()-16),8);search_->raise();
+  avoidSearchPanel();
+}
+
+void MainWindow::avoidSearchPanel() {
+  if (!search_->isVisible()) return;
+  auto* viewport = documentMode_ ? documentView_->viewport() : sourceView_->viewport();
+  const QRect panel(viewport->mapFromGlobal(search_->mapToGlobal(QPoint())), search_->size());
+  const auto matches = documentMode_ ? documentView_->activeSearchMatchRects()
+                                     : sourceView_->activeSearchMatchRects();
+  bool overlaps = false;
+  qreal top = std::numeric_limits<qreal>::max();
+  for (const auto& rect : matches) {
+    overlaps = overlaps || rect.intersects(panel);
+    top = qMin(top, rect.top());
+  }
+  if (!overlaps) return;
+  const int pixels = qCeil(panel.bottom() + 9 - top);
+  if (documentMode_)
+    documentView_->verticalScrollBar()->setValue(documentView_->scrollValue() - pixels);
+  else sourceView_->scrollSearchMatchDown(pixels);
 }
 
 bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
   QWidget* widget=qobject_cast<QWidget*>(watched);
+  if (widget == search_ && (event->type() == QEvent::Show || event->type() == QEvent::Resize)) {
+    QTimer::singleShot(0, this, [this] { avoidSearchPanel(); });
+  }
+  if ((widget == documentView_->viewport() || widget == sourceView_->viewport()) && event->type() == QEvent::Resize) {
+    QTimer::singleShot(0, this, [this] { avoidSearchPanel(); });
+  }
   if ((widget == body_ || widget == content_) && event->type() == QEvent::Resize) {
     QTimer::singleShot(0, this, [this] { layoutOutline(); positionSearchPanel(); });
   }
@@ -933,7 +957,7 @@ void MainWindow::keyPressEvent(QKeyEvent* event) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
-  if(modalOpen_||busy_){event->ignore();return;}
+  if(modalOpen_||busy_||isAsyncBusy()){event->ignore();return;}
   if(compositionActive()) {
     event->ignore();
     if(!deferredClose_){deferredClose_=true;afterComposition([this]{deferredClose_=false;close();});}
