@@ -54,7 +54,8 @@ class ChromeUiRegressions : public QObject {
     QTimer::singleShot(30,&host,[&]{auto* d=visibleDialog(host);if(!d)return;const int initial=d->height();
       for(auto* b:d->findChildren<QPushButton*>())if(b->text()==QStringLiteral("覆盖外部版本")){b->click();break;}
       shrunk=d->height()<initial&&d->size()==expected;
-      host.resize(320,900);QCoreApplication::processEvents();const int narrow=d->height();
+      // Force wrapping even when the runner has no CJK fallback font.
+      host.resize(200,900);QCoreApplication::processEvents();const int narrow=d->height();
       host.resize(820,900);QCoreApplication::processEvents();resized=d->size()==expected&&d->height()<narrow;checked=true;d->close();
     });
     ModalDialog::resolveConflict(&host,{{"message",QStringLiteral("文件内容已被外部修改。\n继续前请选择处理方式。")},{"conflictToken","one"}},[](bool,const QString&){return QJsonObject();},[]{return true;});

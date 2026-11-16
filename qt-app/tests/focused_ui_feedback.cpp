@@ -47,6 +47,7 @@ class FocusedUiFeedback : public QObject {
     QTest::keyClick(bar, Qt::Key_End); QCOMPARE(bar->value(), bar->maximum());
   }
  private slots:
+  void cleanup() { qApp->setProperty("velloraTestSurfaceMotion", QVariant()); }
   void softSelectionIsConsistentWithoutChangingSearchColours() {
     QCOMPARE(theme::selectionBg(), QColor("#e8d8c8"));
     QCOMPARE(theme::selectionText(), QColor("#0b0b0b"));
@@ -160,14 +161,21 @@ class FocusedUiFeedback : public QObject {
     QCOMPARE(view.markdown(), text); QCOMPARE(changed.count(), 0);
     QVERIFY(!view.document()->isUndoAvailable());
   }
+  void surfaceReopenAndSearchExpansion_data() {
+    QTest::addColumn<bool>("motion");
+    QTest::newRow("motion-enabled") << true;
+    QTest::newRow("motion-disabled") << false;
+  }
   void surfaceReopenAndSearchExpansion() {
-    QWidget host; host.resize(820, 600); host.show();
+    QFETCH(bool, motion); qApp->setProperty("velloraTestSurfaceMotion", motion);
+    QWidget host; host.resize(820, 600); host.show(); host.activateWindow();
     SearchPanel panel(&host); panel.move(440, 8); panel.openWith(false);
     const QPoint origin = panel.pos();
     auto* entrance = panel.graphicsEffect()->findChild<QVariantAnimation*>("surfaceEnterAnimation");
     QVERIFY(entrance); QCOMPARE(entrance->duration(), 200);
     auto* query = panel.findChild<QLineEdit*>(); QVERIFY(query);
     auto* row = panel.findChild<QWidget*>("navigationRow"); QVERIFY(row);
+    QTRY_COMPARE_WITH_TIMEOUT(QApplication::focusWidget(), static_cast<QWidget*>(query), 1000);
     QTest::keyClicks(query, "query");
     QTRY_COMPARE_WITH_TIMEOUT(row->height(), 32, 1000);
     QCOMPARE(QApplication::focusWidget(), static_cast<QWidget*>(query));
@@ -212,7 +220,13 @@ class FocusedUiFeedback : public QObject {
     QTest::qWait(250); pixels = host.grab().toImage(); origin = input->mapTo(&host, QPoint());
     QVERIFY(darkPixels(pixels, QRect(origin + QPoint(2, 8), QSize(qMin(160, input->width() - 4), 24))) > 20);
   }
+  void outlineScrollbarAndRapidReopen_data() {
+    QTest::addColumn<bool>("motion");
+    QTest::newRow("motion-enabled") << true;
+    QTest::newRow("motion-disabled") << false;
+  }
   void outlineScrollbarAndRapidReopen() {
+    QFETCH(bool, motion); qApp->setProperty("velloraTestSurfaceMotion", motion);
     QWidget host; host.resize(820, 600); host.show();
     OutlinePanel panel(&host); panel.setFloating(true); panel.setGeometry(12, 8, 248, 500);
     QJsonArray headings;
@@ -224,7 +238,9 @@ class FocusedUiFeedback : public QObject {
     QTRY_COMPARE_WITH_TIMEOUT(entrance->state(), QAbstractAnimation::Stopped, 1000);
     QCOMPARE(panel.geometry(), geometry);
     auto* area = panel.findChild<QScrollArea*>(); QVERIFY(area);
-    auto* bar = area->verticalScrollBar(); QVERIFY(bar->maximum() > 0); QCOMPARE(bar->width(), 10);
+    auto* bar = area->verticalScrollBar();
+    QTRY_VERIFY_WITH_TIMEOUT(bar->isVisible(), 1000);
+    QVERIFY(bar->maximum() > 0); QTRY_COMPARE_WITH_TIMEOUT(bar->width(), 10, 1000);
     const int trackRight = bar->mapTo(&panel, bar->rect().bottomRight()).x();
     QVERIFY(panel.width() - 1 - trackRight >= 1);
     QVERIFY(panel.width() - 1 - trackRight <= 2);
