@@ -1,6 +1,7 @@
 #include <QtWidgets>
 #include <QtTest>
 #include <QLocalSocket>
+#include <QDeadlineTimer>
 #include <QCryptographicHash>
 #include <QSemaphore>
 #include <QThreadPool>
@@ -1259,10 +1260,21 @@ class NativeRegressions : public QObject {
     QProcess primary; primary.setProcessEnvironment(env); primary.start(executable, {a}); QVERIFY(primary.waitForStarted(5000));
     // Probe only this test's random endpoint. Never contact the user's instance.
     const QString serverName = "vellora.qt.preview." + QString::fromLatin1(QCryptographicHash::hash((QDir::homePath() + token).toUtf8(), QCryptographicHash::Sha256).toHex().left(24));
-    QElapsedTimer deadline; deadline.start(); bool ready = false;
-    while (deadline.elapsed() < 1800 && !ready) {
-      QLocalSocket probe; probe.connectToServer(serverName); ready = probe.waitForConnected(100); probe.disconnectFromServer();
-      if (!ready) QTest::qWait(20);
+    QDeadlineTimer deadline(1800, Qt::PreciseTimer); bool ready = false;
+    while (!deadline.hasExpired() && !ready) {
+      QLocalSocket probe; probe.connectToServer(serverName);
+      if (!probe.waitForConnected(qMin(100, int(deadline.remainingTime())))) {
+        QTest::qWait(qMin(20, int(deadline.remainingTime())));
+        continue;
+      }
+      // A processed empty request confirms the primary's event loop is ready.
+      const QByteArray request("{\"path\":\"\",\"source\":false}\n");
+      QCOMPARE(probe.write(request), qint64(request.size()));
+      if (probe.bytesToWrite() > 0)
+        QVERIFY2(probe.waitForBytesWritten(int(deadline.remainingTime())), qPrintable(probe.errorString()));
+      QVERIFY2(probe.state() == QLocalSocket::UnconnectedState ||
+                   probe.waitForDisconnected(int(deadline.remainingTime())), qPrintable(probe.errorString()));
+      ready = true;
     }
     QVERIFY2(ready, primary.readAllStandardError().constData());
     QProcess secondary; secondary.setProcessEnvironment(env); secondary.start(executable, {b, sourceFlag});
