@@ -1,3 +1,6 @@
+# Keep Rust sources compatible with rustfmt on Windows checkouts.
+*.rs text eol=lf
+
 # Fixtures and goldens are byte-exact inputs: never normalise their line endings.
 tests/fixtures/** -text
 tests/golden/** -text
