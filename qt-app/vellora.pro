@@ -30,7 +30,7 @@ HEADERS += \
 isEmpty(BRIDGE_DIR): BRIDGE_DIR = $$PWD/../target/release
 PRE_TARGETDEPS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
 LIBS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
-LIBS += -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -loleaut32 -luuid
+LIBS += -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -loleaut32 -luuid -lsynchronization
 
 RC_ICONS = $$PWD/../installer/assets/vellora.ico
 VERSION = 0.1.3

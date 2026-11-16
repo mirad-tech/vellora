@@ -10,7 +10,7 @@ HEADERS += ../src/bridge.h ../src/code_highlight.h ../src/document_view.h ../src
 isEmpty(BRIDGE_DIR): BRIDGE_DIR = $$PWD/../../target/release
 PRE_TARGETDEPS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
 LIBS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
-LIBS += -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -loleaut32 -luuid
+LIBS += -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -loleaut32 -luuid -lsynchronization
 RESOURCES += $$PWD/../resources.qrc
 win32-msvc* {
     QMAKE_LFLAGS += /MANIFESTINPUT:$$shell_quote($$shell_path($$PWD/../windows.manifest))
