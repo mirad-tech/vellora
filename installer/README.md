@@ -1,6 +1,6 @@
 # Vellora 构建、打包与安装
 
-当前发行入口为 [package-qt.ps1](package-qt.ps1)，安装行为由 [vellora-qt-preview.nsi](vellora-qt-preview.nsi) 定义。当前代码和打包默认版本为 **0.1.2**。
+当前发行入口为 [package-qt.ps1](package-qt.ps1)，安装行为由 [vellora-qt-preview.nsi](vellora-qt-preview.nsi) 定义。当前代码和打包默认版本为 **0.1.3**。
 
 ## 构建与产物
 
@@ -23,8 +23,8 @@
 
 | 产物 | 内容 |
 |---|---|
-| `Vellora-0.1.2-portable/` | `vellora.exe`、Qt/MSVC 运行库、插件和许可证；运行时保留完整目录 |
-| `Vellora-Setup-0.1.2.exe` | 当前用户范围的 NSIS 安装包 |
+| `Vellora-0.1.3-portable/` | `vellora.exe`、Qt/MSVC 运行库、插件和许可证；运行时保留完整目录 |
+| `Vellora-Setup-0.1.3.exe` | 当前用户范围的 NSIS 安装包 |
 | `manifest.json` | 实际版本、文件路径、大小、SHA256，以及生产构建标记 |
 | `uninstall-files.nsh` | 从本次便携目录生成的卸载文件清单 |
 
@@ -36,7 +36,7 @@
 
 - 默认安装到 `%LOCALAPPDATA%\Programs\Vellora`，无需管理员权限；创建 Vellora 开始菜单、桌面快捷方式和卸载入口，不设置开机自启动，也不自动启动应用。
 - 安装器拒绝未标记的非空目标目录，以及其他位置的 Vellora 安装登记或不归本安装管理的已有入口。
-- 带有相同安装器标记的目录允许同版本修复安装。当前 0.1.2 还允许从 0.1.0/0.1.1 原目录升级，但要求安装标记匹配，且注册的安装路径等于目标目录；其他版本不在此升级范围内。
+- 带有相同安装器标记的目录允许同版本修复安装。当前 0.1.3 还允许从 0.1.0/0.1.1/0.1.2 原目录升级，但要求安装标记匹配，且注册的安装路径等于目标目录；其他版本不在此升级范围内。
 - 安装和卸载前检查程序文件是否可独占打开；无法替换时要求先保存文档并关闭程序。
 - 卸载按本次包内清单删除文件，保留额外用户文件；仅当登记的安装路径仍属于本安装时清理快捷方式、卸载登记及所属文件关联，不清理应用用户设置。
 
@@ -58,7 +58,7 @@ python installer/tests/test_release_policy.py
 便携运行验证会启动本次便携目录中的应用，单独执行：
 
 ```powershell
-./qt-app/tests/smoke-portable.ps1 -PortableDir '输出目录/Vellora-0.1.2-portable' -OutputDir '新测试目录'
+./qt-app/tests/smoke-portable.ps1 -PortableDir '输出目录/Vellora-0.1.3-portable' -OutputDir '新测试目录'
 ```
 
 该脚本拒绝连接已有生产实例，使用仅含系统目录的 PATH 检查应用本地 DLL 和平台插件，并检查生产版未启用测试钩子。它不运行安装器；真实安装、升级、卸载、文件关联和 Windows 输入法体验需分别验收。

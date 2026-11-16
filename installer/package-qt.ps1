@@ -1,6 +1,6 @@
 # Build-only Qt distribution. Never runs Setup or changes installed applications.
 param(
-  [string]$Version = '0.1.2',
+  [string]$Version = '0.1.3',
   [string]$QtRoot = $env:QT_ROOT,
   [string]$BuildRoot,
   [string]$CargoTargetDir,
@@ -40,7 +40,7 @@ New-Item -ItemType Directory -Path $OutputDir | Out-Null
 $portable = Join-Path $OutputDir "Vellora-$Version-portable"
 New-Item -ItemType Directory -Path $portable | Out-Null
 Copy-Item -LiteralPath (Join-Path $BuildRoot 'app\vellora.exe') -Destination $portable
-& (Join-Path $QtRoot 'bin\windeployqt.exe') --release --no-translations --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime (Join-Path $portable 'vellora.exe')
+& (Join-Path $QtRoot 'bin\windeployqt.exe') --release --concurrent --no-translations --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime (Join-Path $portable 'vellora.exe')
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed: $LASTEXITCODE" }
 # Deploy the official app-local MSVC runtime, not a machine-wide redistributable installer.
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'

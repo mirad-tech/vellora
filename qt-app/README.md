@@ -18,9 +18,9 @@ Qt kit 优先使用 `-QtRoot` 或 `QT_ROOT`；未指定时使用 `qt/6.8.3/msvc2
 
 ## 运行与打包
 
-便携版入口为构建产物中的 `Vellora-0.1.2-portable/vellora.exe`，整目录须保留。应用接受 Markdown 文件路径以及 `--source` / `--source-mode`；同用户已有实例时，打开请求可能送到该实例，不要在用户编辑期间用它做隔离测试。
+便携版入口为构建产物中的 `Vellora-0.1.3-portable/vellora.exe`，整目录须保留。应用接受 Markdown 文件路径以及 `--source` / `--source-mode`；同用户已有实例时，打开请求可能送到该实例，不要在用户编辑期间用它做隔离测试。
 
-`installer/package-qt.ps1` 生成新便携目录和 NSIS 安装包，不安装、不改关联；使用新输出目录，保留完整运行库、插件与许可证。当前代码和打包默认版本为 0.1.2。依赖、命令、产物和升级规则见[打包与安装说明](../installer/README.md)。
+`installer/package-qt.ps1` 生成新便携目录和 NSIS 安装包，不安装、不改关联；使用新输出目录，保留完整运行库、插件与许可证。当前代码和打包默认版本为 0.1.3。依赖、命令、产物和升级规则见[打包与安装说明](../installer/README.md)。
 
 ## 实现与安全边界
 
