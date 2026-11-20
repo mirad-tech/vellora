@@ -2,7 +2,7 @@
 Unicode true
 ManifestDPIAware true
 !ifndef APP_VERSION
-  !define APP_VERSION "0.1.3"
+  !define APP_VERSION "0.1.4"
 !endif
 !ifndef SOURCE_DIR
   !error "SOURCE_DIR is required"
@@ -192,7 +192,7 @@ Function un.RemoveOwnedMarkdownAssociations
 FunctionEnd
 
 ; Never replace a foreign installation or downgrade; only the tested upgrade is allowed.
-; Same-version repair and 0.1.0/0.1.1/0.1.2 -> 0.1.3 require this installer marker; upgrade also requires the registered directory.
+; Same-version repair and 0.1.0/0.1.1/0.1.2/0.1.3 -> 0.1.4 require this installer marker; upgrade also requires the registered directory.
 Function VerifyDestination
   SetShellVarContext current
   ReadRegStr $0 HKCU "${INSTALL_KEY}" "InstallDir"
@@ -224,11 +224,12 @@ Function VerifyDestination
     ${If} $0 == "${APP_VERSION}"
       StrCpy $3 1
     ${EndIf}
-!if "${APP_VERSION}" == "0.1.3"
+!if "${APP_VERSION}" == "0.1.4"
     ; Only known older versions with matching ownership may upgrade in place.
     ${If} $0 == "0.1.0"
     ${OrIf} $0 == "0.1.1"
     ${OrIf} $0 == "0.1.2"
+    ${OrIf} $0 == "0.1.3"
       ReadRegStr $2 HKCU "${INSTALL_KEY}" "InstallDir"
       ${If} $2 == $INSTDIR
         StrCpy $3 1

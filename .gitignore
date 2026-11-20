@@ -4,7 +4,7 @@ target/
 # Installer output
 installer/out/
 /releases/*
-!/releases/Vellora-Setup-0.1.3.exe
+!/releases/Vellora-Setup-0.1.4.exe
 
 # Local logs
 *.log
