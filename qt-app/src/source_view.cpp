@@ -1,11 +1,13 @@
 #include "source_view.h"
 
 #include <QFontMetricsF>
+#include <QGuiApplication>
 #include <QPalette>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QSignalBlocker>
 #include <QScrollBar>
+#include <QStyleHints>
 
 #include <QTextBlock>
 #include <QTextLayout>
@@ -41,24 +43,15 @@ SourceView::SourceView(QWidget* parent) : QPlainTextEdit(parent) {
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   // tab-size: 2 in the stylesheet; the tab stop follows the mono advance.
   setTabStopDistance(QFontMetricsF(theme::monoFont(14)).horizontalAdvance(QLatin1Char(' ')) * 2);
-  setStyleSheet(QStringLiteral(
-                    "QPlainTextEdit { background: %1; color: %2; border: 0;"
-                    "  font-family: 'Cascadia Code', 'Consolas', 'Microsoft YaHei UI';"
-                    "  font-size: 14px; }"
-                    "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
-                    "QScrollBar::handle:vertical { background: rgba(11,11,11,0.20); border-radius: 2px; margin: 0 1px 0 5px; min-height: 32px; }"
-                    "QScrollBar::handle:vertical:hover { background: rgba(11,11,11,0.35); }"
-                    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-                    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
-                    .arg(theme::surface().name(), theme::text().name()));
 
   // The legacy source view is a plain textarea plus a search-highlight layer:
   // there is no syntax colouring. Keeping it plain is the 1:1 behaviour.
   document()->setDocumentMargin(0);
   document()->setDefaultFont(theme::monoFont(14));
-  QPalette textPalette = theme::selectionPalette(palette());
-  textPalette.setColor(QPalette::Text, theme::text());
-  setPalette(textPalette);
+  applyTheme();
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, &SourceView::applyTheme);
+  }
   connect(this, &QPlainTextEdit::selectionChanged, this, &SourceView::updateSelectionPalette);
   connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, [this] {
     QTimer::singleShot(0, this, [this] { rebuildMargins(); });
@@ -70,6 +63,23 @@ SourceView::SourceView(QWidget* parent) : QPlainTextEdit(parent) {
     }
   });
   rebuildMargins();
+}
+
+void SourceView::applyTheme() {
+  setStyleSheet(QStringLiteral(
+                    "QPlainTextEdit { background: %1; color: %2; border: 0;"
+                    "  font-family: 'Cascadia Code', 'Consolas', 'Microsoft YaHei UI';"
+                    "  font-size: 14px; }"
+                    "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
+                    "QScrollBar::handle:vertical { background: %3; border-radius: 2px; margin: 0 1px 0 5px; min-height: 32px; }"
+                    "QScrollBar::handle:vertical:hover { background: %4; }"
+                    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+                    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
+                    .arg(theme::surface().name(), theme::text().name(),
+                         theme::rgbaCss(theme::scrollbarThumb()),
+                         theme::rgbaCss(theme::scrollbarThumbHover())));
+  updateSelectionPalette();
+  viewport()->update();
 }
 
 void SourceView::setExtraSelections(const QList<QTextEdit::ExtraSelection>& selections) {
@@ -121,6 +131,8 @@ void SourceView::updateSelectionPalette() {
       selected.selectionStart() == currentSearchMatch_.selectionStart() &&
       selected.selectionEnd() == currentSearchMatch_.selectionEnd();
   QPalette colours = theme::selectionPalette(palette());
+  colours.setColor(QPalette::Text, theme::text());
+  colours.setColor(QPalette::Base, theme::surface());
   if (active) {
     for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
       colours.setColor(group, QPalette::Highlight, theme::searchCurrentBg());

@@ -11,6 +11,8 @@
 #include <QLocalSocket>
 #include <QTextStream>
 #include <QScreen>
+#include <QStyle>
+#include <QStyleHints>
 #include <QTimer>
 
 #include "chrome.h"
@@ -27,7 +29,10 @@ int main(int argc, char** argv) {
   app.setOrganizationName(QStringLiteral("Vellora Contributors"));
   app.setFont(theme::uiFont(14));
   app.setStyle(QStringLiteral("Fusion"));
-  app.setPalette(theme::selectionPalette(app.palette()));
+  app.setPalette(theme::appPalette(app.style()->standardPalette()));
+  QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, &app, [&app] {
+    app.setPalette(theme::appPalette(app.style()->standardPalette()));
+  });
   app.setWindowIcon(QIcon(QStringLiteral(":/vellora/icon.ico")));
   const QStringList args = app.arguments();
   QString initialPath;

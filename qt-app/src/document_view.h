@@ -33,6 +33,7 @@ class QTextTable;
 class QPainter;
 class QPushButton;
 class QPropertyAnimation;
+class QSyntaxHighlighter;
 class AccessibleDocumentView;
 
 class RawPreviewObject final : public QObject, public QTextObjectInterface {
@@ -83,6 +84,7 @@ class DocumentView : public QAbstractScrollArea {
   QPair<int,int> selectionState() const { return {cursor_.anchor(), cursor_.position()}; }
   void restoreSelectionState(const QPair<int,int>& state);
   void setScrollValue(int value);
+  void applyTheme();
 
   /// Document mode is editable: paragraphs and headings accept inline text
   /// edits that are spliced back per segment on save, so blocks the user did not
@@ -263,6 +265,7 @@ class DocumentView : public QAbstractScrollArea {
   void paintEmptyState(QPainter& painter);
 
   QTextDocument* document_ = nullptr;
+  QSyntaxHighlighter* highlighter_ = nullptr;
   QTextCursor cursor_;
   QString documentPath_;
   QString previewContext_;

@@ -19,10 +19,15 @@
 #include <QRegularExpression>
 #include <QScopedValueRollback>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QStackedLayout>
+#include <QStyleHints>
 #include <QTextBlock>
 #include <QVBoxLayout>
 #include <QtMath>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 
 #include "bridge.h"
 #include "chrome.h"
@@ -69,8 +74,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   resize(820, 900);
   setMinimumSize(640, 400);
   setAcceptDrops(true);
-  setStyleSheet(QStringLiteral("QMainWindow { background: %1; }").arg(theme::bg().name()));
   buildUi();
+  applyTheme();
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, &MainWindow::applyTheme);
+  }
   dirtyTimer_.setSingleShot(true);
   dirtyTimer_.setInterval(120);
   maximumDirtyTimer_.setSingleShot(true);
@@ -991,4 +999,45 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
   layoutOutline();
   positionSearchPanel();
+}
+
+void MainWindow::showEvent(QShowEvent* event) {
+  QMainWindow::showEvent(event);
+  syncWindowFrameTheme();
+}
+
+void MainWindow::applyTheme() {
+  setStyleSheet(QStringLiteral("QMainWindow { background: %1; }").arg(theme::bg().name()));
+  syncWindowFrameTheme();
+  if (!documentMode_ && search_ && search_->isVisible()) {
+    refreshSearch(false);
+  }
+  update();
+}
+
+void MainWindow::syncWindowFrameTheme() {
+#ifdef Q_OS_WIN
+  if (!testAttribute(Qt::WA_WState_Created) ||
+      QGuiApplication::platformName() != QStringLiteral("windows")) {
+    return;
+  }
+  const WId id = internalWinId();
+  if (!id) return;
+  using DwmSetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+  static const DwmSetWindowAttributeFn setAttr = []() -> DwmSetWindowAttributeFn {
+    HMODULE module = GetModuleHandleW(L"dwmapi.dll");
+    if (!module) module = LoadLibraryW(L"dwmapi.dll");
+    if (!module) return nullptr;
+    return reinterpret_cast<DwmSetWindowAttributeFn>(
+        GetProcAddress(module, "DwmSetWindowAttribute"));
+  }();
+  if (!setAttr) return;
+  const BOOL dark = theme::isDark() ? TRUE : FALSE;
+  const HWND hwnd = reinterpret_cast<HWND>(id);
+  constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
+  constexpr DWORD kDwmwaUseImmersiveDarkModeLegacy = 19;
+  if (FAILED(setAttr(hwnd, kDwmwaUseImmersiveDarkMode, &dark, sizeof(dark)))) {
+    setAttr(hwnd, kDwmwaUseImmersiveDarkModeLegacy, &dark, sizeof(dark));
+  }
+#endif
 }

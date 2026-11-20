@@ -21,6 +21,7 @@
 #include <QJsonObject>
 #include <QSvgRenderer>
 #include <QStyle>
+#include <QStyleHints>
 #include <QStyleOptionButton>
 #include <QStylePainter>
 #include <QCloseEvent>
@@ -61,14 +62,19 @@ QEasingCurve surfaceEasing() {
 class SurfaceEnterEffect final : public QGraphicsDropShadowEffect {
  public:
   explicit SurfaceEnterEffect(QWidget* owner, bool shadow = true)
-      : QGraphicsDropShadowEffect(owner), animation_(this) {
+      : QGraphicsDropShadowEffect(owner), animation_(this), shadow_(shadow) {
     setBlurRadius(shadow ? 24 : 0); setOffset(0, shadow ? 8 : 0);
-    setColor(shadow ? QColor(0, 0, 0, 40) : QColor(Qt::transparent));
+    setColor(shadow ? theme::shadowColor() : QColor(Qt::transparent));
     animation_.setObjectName("surfaceEnterAnimation");
     animation_.setDuration(200); animation_.setEasingCurve(surfaceEasing());
     connect(&animation_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
       progress_ = value.toReal(); update();
     });
+    if (auto* hints = QGuiApplication::styleHints()) {
+      connect(hints, &QStyleHints::colorSchemeChanged, this, [this] {
+        if (shadow_) setColor(theme::shadowColor());
+      });
+    }
     owner->installEventFilter(this);
   }
  protected:
@@ -93,6 +99,7 @@ class SurfaceEnterEffect final : public QGraphicsDropShadowEffect {
  private:
   QVariantAnimation animation_;
   qreal progress_ = 1;
+  bool shadow_ = true;
 };
 
 class CentredToolButton final : public QToolButton {
@@ -113,7 +120,7 @@ class CentredToolButton final : public QToolButton {
     if (iconWidth) contentIcon.paint(&painter, QRect(left, (height() - iconSize().height()) / 2,
                                                    iconWidth, iconSize().height()), Qt::AlignCenter,
                                       isEnabled() ? QIcon::Normal : QIcon::Disabled);
-    const QColor colour = !isEnabled() ? QColor("#b6b5b2")
+    const QColor colour = !isEnabled() ? theme::disabled()
         : property("primary").toBool() ? theme::surface()
         : underMouse() ? theme::text() : theme::muted();
     painter.setPen(colour);
@@ -125,12 +132,29 @@ QString toolButtonStyle() {
   return QStringLiteral(
              "QToolButton { border: 0; border-radius: 8px; background: transparent; color: %1;"
              "  padding: 0 8px; height: 32px; font-size: 13px; }"
-             "QToolButton:hover { background: rgba(11,11,11,0.05); color: %2; }"
-             "QToolButton:pressed { background: rgba(11,11,11,0.09); }"
-             "QToolButton:checked { background: rgba(11,11,11,0.09); color: %2; }"
+             "QToolButton:hover { background: %4; color: %2; }"
+             "QToolButton:pressed { background: %5; }"
+             "QToolButton:checked { background: %5; color: %2; }"
              "QToolButton:disabled { color: %3; }"
              "QToolButton:focus { outline: 0; }")
-      .arg(theme::muted().name(), theme::text().name(), theme::faint().name());
+      .arg(theme::muted().name(), theme::text().name(), theme::faint().name(),
+           theme::rgbaCss(theme::hover()), theme::rgbaCss(theme::pressed()));
+}
+
+QString scrollAreaStyle(int minHandleHeight = 32, bool zeroBorder = false) {
+  return QStringLiteral(
+             "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent;%1 }"
+             "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
+             "QScrollBar::handle:vertical { background: %2; margin: 0 1px 0 5px; border-radius: 2px; min-height: %4px; }"
+             "QScrollBar::handle:vertical:hover { background: %3; }"
+             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; border: 0; background: transparent; }"
+             "QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical { width: 0; height: 0; background: transparent; }"
+             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: 0; }"
+             "QScrollArea::corner { background: transparent; border: 0; }")
+      .arg(zeroBorder ? QStringLiteral(" border: 0;") : QString(),
+           theme::rgbaCss(theme::scrollbarThumb()),
+           theme::rgbaCss(theme::scrollbarThumbHover()))
+      .arg(minHandleHeight);
 }
 
 QIcon strokeIcon(const QString& body, const QColor& colour = QColor(), int extent = 20) {
@@ -194,6 +218,9 @@ class Scrim : public QWidget {
     setFocusPolicy(Qt::StrongFocus);
     setCursor(Qt::ArrowCursor);
     if (parent) parent->installEventFilter(this);
+    if (auto* hints = QGuiApplication::styleHints()) {
+      connect(hints, &QStyleHints::colorSchemeChanged, this, [this] { update(); });
+    }
   }
 
   std::function<void()> onDismiss;
@@ -210,7 +237,7 @@ class Scrim : public QWidget {
   }
   void paintEvent(QPaintEvent*) override {
     QPainter painter(this);
-    painter.fillRect(rect(), QColor(11, 11, 11, 61));
+    painter.fillRect(rect(), theme::scrim());
   }
 
   void mousePressEvent(QMouseEvent* event) override {
@@ -277,6 +304,9 @@ SegmentedControl::SegmentedControl(QWidget* parent) : QWidget(parent) {
   animation_ = new QPropertyAnimation(this, "slider", this);
   animation_->setDuration(120);
   animation_->setEasingCurve(QEasingCurve(QEasingCurve::OutCubic));
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, [this] { update(); });
+  }
 }
 
 QSize SegmentedControl::sizeHint() const { return QSize(114, 32); }
@@ -356,23 +386,23 @@ void SegmentedControl::paintEvent(QPaintEvent*) {
   if (!isEnabled()) painter.setOpacity(0.4);
   painter.setRenderHint(QPainter::Antialiasing, true);
 
-  // Track: --control-hover (5% ink) on the toolbar surface, radius 8.
+  // Track: --control-hover on the toolbar surface, radius 8.
   painter.setPen(Qt::NoPen);
-  painter.setBrush(QColor(11, 11, 11, 13));
+  painter.setBrush(theme::hover());
   painter.drawRoundedRect(QRectF(0, 0, width(), height()), theme::radiusControl(),
                           theme::radiusControl());
 
   QRectF thumb = segmentRect(0);
   thumb.translate(slider_ * thumb.width(), 0);
-  // 0 1px 2px rgba(0,0,0,.06), 0 2px 6px -1px rgba(0,0,0,.05), inset ring .5px
-  painter.setBrush(QColor(0, 0, 0, 15));
+  const bool dark = theme::isDark();
+  painter.setBrush(QColor(0, 0, 0, dark ? 56 : 15));
   painter.drawRoundedRect(thumb.adjusted(-0.5, 1.0, 0.5, 2.0), 7.5, 7.5);
-  painter.setBrush(QColor(0, 0, 0, 10));
+  painter.setBrush(QColor(0, 0, 0, dark ? 34 : 10));
   painter.drawRoundedRect(thumb.adjusted(-1.0, 2.0, 1.0, 4.0), 8.0, 8.0);
   painter.setBrush(theme::raised());
   painter.drawRoundedRect(thumb, 7, 7);
   painter.setBrush(Qt::NoBrush);
-  painter.setPen(QPen(QColor(11, 11, 11, 26), 0.5));
+  painter.setPen(QPen(theme::border(), 0.5));
   painter.drawRoundedRect(thumb.adjusted(0.25, 0.25, -0.25, -0.25), 7, 7);
 
 
@@ -388,15 +418,7 @@ void SegmentedControl::paintEvent(QPaintEvent*) {
 
 SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   setObjectName("searchPanel");
-  setPalette(theme::selectionPalette(palette()));
   setAttribute(Qt::WA_StyledBackground, true);
-  setStyleSheet(QStringLiteral(
-                    "#searchPanel { background: %1; border: 1px solid %2; border-radius: 14px; }"
-                    "QLineEdit { border: 0; background: transparent; font-size: 14px; color: %3;"
-                    "  selection-background-color: %4; selection-color: %5; padding: 0; }"
-                    "QLineEdit:focus { outline: 0; }")
-                    .arg(theme::raised().name(), theme::border().name(QColor::HexArgb), theme::text().name(),
-                         theme::selectionBg().name(), theme::selectionText().name()));
 
   auto* outer = new QVBoxLayout(this);
   outer->setContentsMargins(0, 0, 0, 0);
@@ -419,24 +441,17 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
     button->setAutoRaise(true);
     button->setFixedSize(28, 28);
     button->setCursor(Qt::PointingHandCursor);
-    button->setStyleSheet(QStringLiteral(
-                              "QToolButton { border: 0; border-radius: 8px; background: transparent; }"
-                              "QToolButton:hover:enabled { background: rgba(11,11,11,0.05); }"
-                              "QToolButton:focus { outline: 0; }"));
     return button;
   };
 
   replaceToggle_ = smallButton(prefix);
-  replaceToggle_->setIcon(strokeIcon("<path d='M6 4l4 4-4 4'/>", QColor(), 16));
   replaceToggle_->setIconSize(QSize(16, 16));
   replaceToggle_->setAccessibleName(QStringLiteral("展开替换"));
   replaceToggle_->setToolTip(QStringLiteral("替换 (Ctrl+H)"));
   prefixLayout->addWidget(replaceToggle_);
 
-  auto* icon = new QLabel(prefix);
-  icon->setPixmap(strokeIcon("<circle cx='8.5' cy='8.5' r='5.25'/><path d='m12.5 12.5 4 4'/>")
-                      .pixmap(15, 15));
-  prefixLayout->addWidget(icon);
+  searchIcon_ = new QLabel(prefix);
+  prefixLayout->addWidget(searchIcon_);
   prefixLayout->addStretch(1);
   fieldLayout->addWidget(prefix);
 
@@ -446,11 +461,10 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   query_->setMinimumWidth(0);
   fieldLayout->addWidget(query_, 1);
 
-  auto* close = smallButton(fieldRow);
-  close->setIcon(strokeIcon("<path d='m5 5 6 6m0-6-6 6'/>", QColor(), 16));
-  close->setIconSize(QSize(16, 16));
-  close->setFixedSize(28, 28);
-  fieldLayout->addWidget(close);
+  closeButton_ = smallButton(fieldRow);
+  closeButton_->setIconSize(QSize(16, 16));
+  closeButton_->setFixedSize(28, 28);
+  fieldLayout->addWidget(closeButton_);
   outer->addWidget(fieldRow);
 
   // Replacement row: 40px, icon right-aligned in the 56px prefix column.
@@ -458,8 +472,6 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   replaceRow_->setFixedHeight(40);
   replaceRow_->setObjectName("replacementRow");
   replaceRow_->setAttribute(Qt::WA_StyledBackground, true);
-  replaceRow_->setStyleSheet(QStringLiteral(
-      "#replacementRow { background: transparent; border-top: 1px solid rgba(11,11,11,0.10); }"));
   auto* replaceLayout = new QHBoxLayout(replaceRow_);
   replaceLayout->setContentsMargins(6, 0, 6, 0);
   replaceLayout->setSpacing(6);
@@ -468,10 +480,8 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   auto* replacePrefixLayout = new QHBoxLayout(replacePrefix);
   replacePrefixLayout->setContentsMargins(0, 0, 8, 0);
   replacePrefixLayout->addStretch(1);
-  auto* replaceIcon = new QLabel(replacePrefix);
-  replaceIcon->setPixmap(strokeIcon("<path d='M4 6h12m-3-3 3 3-3 3M16 14H4m3-3-3 3 3 3'/>")
-                              .pixmap(16, 16));
-  replacePrefixLayout->addWidget(replaceIcon);
+  replaceIcon_ = new QLabel(replacePrefix);
+  replacePrefixLayout->addWidget(replaceIcon_);
   replaceLayout->addWidget(replacePrefix);
 
   replacement_ = new QLineEdit(replaceRow_);
@@ -490,21 +500,17 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   navRow_->setFixedHeight(32);
   navRow_->setObjectName("navigationRow");
   navRow_->setAttribute(Qt::WA_StyledBackground, true);
-  navRow_->setStyleSheet(QStringLiteral(
-      "#navigationRow { background: transparent; border-top: 1px solid rgba(11,11,11,0.10); }"));
   auto* navLayout = new QHBoxLayout(navRow_);
   navLayout->setContentsMargins(8, 2, 12, 2);
   navLayout->setSpacing(4);
 
   auto* previous = previous_ = smallButton(navRow_);
-  previous->setIcon(strokeIcon("<path d='M6 6l2-2 2 2M8 4v8'/>", QColor(), 16));
   previous->setIconSize(QSize(16, 16));
   previous->setAccessibleName(QStringLiteral("上一个匹配项"));
   previous->setToolTip(QStringLiteral("上一个匹配项"));
   navLayout->addWidget(previous);
 
   auto* next = next_ = smallButton(navRow_);
-  next->setIcon(strokeIcon("<path d='m6 10 2 2 2-2M8 12V4'/>", QColor(), 16));
   next->setIconSize(QSize(16, 16));
   next->setAccessibleName(QStringLiteral("下一个匹配项"));
   next->setToolTip(QStringLiteral("下一个匹配项"));
@@ -519,20 +525,11 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   for (QToolButton* button : {replaceOne_, replaceAll_}) {
     button->setCursor(Qt::PointingHandCursor);
     button->setFixedHeight(28);
-    button->setStyleSheet(QStringLiteral(
-                              "QToolButton { border: 0px solid %1; border-radius: 8px;"
-                              "  padding: 0 8px; color: %2; background: %3; font-size: 12px; }"
-                              "QToolButton:hover:enabled { background: rgba(11,11,11,0.05); }"
-                              "QToolButton:disabled { color: #b6b5b2; }"
-                              "QToolButton:focus { outline: 0; }")
-                              .arg(theme::border().name(QColor::HexArgb), theme::text().name(),
-                                   theme::raised().name()));
     button->hide();
     navLayout->addWidget(button);
   }
 
   counter_ = new QLabel(navRow_);
-  counter_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px;").arg(theme::muted().name()));
   counter_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
   counter_->setMinimumWidth(48);
   navLayout->insertWidget(2, counter_);
@@ -540,7 +537,6 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   feedback_ = new QLabel(this);
   feedback_->setWordWrap(true);
   feedback_->setTextFormat(Qt::PlainText);
-  feedback_->setStyleSheet(QStringLiteral("color: %1; font-size: 12px; padding: 0 12px 8px;").arg(theme::muted().name()));
   feedback_->hide();
   outer->addWidget(feedback_);
 
@@ -589,7 +585,7 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   replacement_->installEventFilter(this);
   query_->setAccessibleName(QStringLiteral("搜索当前文档"));
   replacement_->setAccessibleName(QStringLiteral("替换为"));
-  close->setAccessibleName(QStringLiteral("关闭查找"));
+  closeButton_->setAccessibleName(QStringLiteral("关闭查找"));
   connect(replacement_, &QLineEdit::textChanged, this, [this] { setFeedback(QString()); });
   connect(replacement_, &QLineEdit::returnPressed, this, [this] {
     if (!composing_ && replaceOne_->isEnabled()) emit replaceRequested();
@@ -597,7 +593,7 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   setCounter(0, 0);
   connect(previous, &QToolButton::clicked, this, [this] { emit navigateRequested(-1); });
   connect(next, &QToolButton::clicked, this, [this] { emit navigateRequested(1); });
-  connect(close, &QToolButton::clicked, this, [this] { emit closed(); });
+  connect(closeButton_, &QToolButton::clicked, this, [this] { emit closed(); });
   connect(replaceOne_, &QToolButton::clicked, this, [this] { emit replaceRequested(); });
   connect(replaceAll_, &QToolButton::clicked, this, [this] { emit replaceAllRequested(); });
   connect(replaceToggle_, &QToolButton::clicked, this, [this] {
@@ -608,7 +604,72 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   setGraphicsEffect(shadow);
 
   setFixedWidth(theme::searchWidth());
+  applyTheme();
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, &SearchPanel::applyTheme);
+  }
   hide();
+}
+
+void SearchPanel::applyTheme() {
+  const QString borderCss = theme::rgbaCss(theme::border());
+  const QString hoverCss = theme::rgbaCss(theme::hover());
+  setStyleSheet(QStringLiteral(
+                    "#searchPanel { background: %1; border: 1px solid %2; border-radius: 14px; }"
+                    "QLineEdit { border: 0; background: transparent; font-size: 14px; color: %3;"
+                    "  selection-background-color: %4; selection-color: %5; padding: 0; }"
+                    "QLineEdit:focus { outline: 0; }")
+                    .arg(theme::raised().name(), borderCss, theme::text().name(),
+                         theme::selectionBg().name(), theme::selectionText().name()));
+
+  const QPalette sel = theme::selectionPalette(palette());
+  setPalette(sel);
+  QPalette inputPalette = sel;
+  for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+    inputPalette.setColor(group, QPalette::Text, theme::text());
+    inputPalette.setColor(group, QPalette::PlaceholderText, theme::faint());
+  }
+  query_->setPalette(inputPalette);
+  replacement_->setPalette(inputPalette);
+
+  const QString smallCss = QStringLiteral(
+      "QToolButton { border: 0; border-radius: 8px; background: transparent; }"
+      "QToolButton:hover:enabled { background: %1; }"
+      "QToolButton:focus { outline: 0; }")
+      .arg(hoverCss);
+  for (QToolButton* button : {replaceToggle_, closeButton_, previous_, next_}) {
+    button->setStyleSheet(smallCss);
+  }
+
+  replaceToggle_->setIcon(strokeIcon(replaceMode_ ? "<path d='m4 6 4 4 4-4'/>"
+                                                  : "<path d='M6 4l4 4-4 4'/>", QColor(), 16));
+  searchIcon_->setPixmap(strokeIcon("<circle cx='8.5' cy='8.5' r='5.25'/><path d='m12.5 12.5 4 4'/>")
+                             .pixmap(15, 15));
+  closeButton_->setIcon(strokeIcon("<path d='m5 5 6 6m0-6-6 6'/>", QColor(), 16));
+  replaceIcon_->setPixmap(strokeIcon("<path d='M4 6h12m-3-3 3 3-3 3M16 14H4m3-3-3 3 3 3'/>")
+                              .pixmap(16, 16));
+  previous_->setIcon(strokeIcon("<path d='M6 6l2-2 2 2M8 4v8'/>", QColor(), 16));
+  next_->setIcon(strokeIcon("<path d='m6 10 2 2 2-2M8 12V4'/>", QColor(), 16));
+
+  replaceRow_->setStyleSheet(QStringLiteral(
+      "#replacementRow { background: transparent; border-top: 1px solid %1; }").arg(borderCss));
+  navRow_->setStyleSheet(QStringLiteral(
+      "#navigationRow { background: transparent; border-top: 1px solid %1; }").arg(borderCss));
+
+  const QString actionCss = QStringLiteral(
+      "QToolButton { border: 0px solid %1; border-radius: 8px;"
+      "  padding: 0 8px; color: %2; background: %3; font-size: 12px; }"
+      "QToolButton:hover:enabled { background: %4; }"
+      "QToolButton:disabled { color: %5; }"
+      "QToolButton:focus { outline: 0; }")
+      .arg(borderCss, theme::text().name(), theme::raised().name(), hoverCss,
+           theme::disabled().name());
+  replaceOne_->setStyleSheet(actionCss);
+  replaceAll_->setStyleSheet(actionCss);
+
+  counter_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px;").arg(theme::muted().name()));
+  feedback_->setStyleSheet(QStringLiteral("color: %1; font-size: 12px; padding: 0 12px 8px;").arg(theme::muted().name()));
+  update();
 }
 
 void SearchPanel::restyle() { update(); }
@@ -737,13 +798,6 @@ void SearchPanel::keyPressEvent(QKeyEvent* event) {
 OutlinePanel::OutlinePanel(QWidget* parent) : QFrame(parent) {
   setObjectName("outlinePanel");
   setAttribute(Qt::WA_StyledBackground, true);
-  setStyleSheet(QStringLiteral(
-                    "#outlinePanel { background: %1; border-right: 1px solid %2; }"
-                    "QPushButton { border: 0; border-radius: 8px; text-align: left;"
-                    "  padding: 0 8px; height: 32px; font-size: 13px; color: %3; background: transparent; }"
-                    "QPushButton:hover { background: rgba(11,11,11,0.05); }"
-                    "QPushButton:focus { outline: 0; }")
-                    .arg(theme::bg().name(), theme::border().name(QColor::HexArgb), theme::text().name()));
   setFixedWidth(232);
 
   auto* layout = new QVBoxLayout(this);
@@ -758,61 +812,85 @@ OutlinePanel::OutlinePanel(QWidget* parent) : QFrame(parent) {
   // Preserve the old close-control position: its 4px internal margin plus
   // the 8px outer padding now removed from the scroll area's right edge.
   headerLayout->setContentsMargins(8, 0, 12, 0);
-  auto* title = new QLabel(QStringLiteral("目录"), header);
-  title->setStyleSheet(QStringLiteral("color: %1; font-size: 12px;").arg(theme::muted().name()));
-  headerLayout->addWidget(title);
+  titleLabel_ = new QLabel(QStringLiteral("目录"), header);
+  headerLayout->addWidget(titleLabel_);
   headerLayout->addStretch(1);
-  auto* closeButton = new QToolButton(header);
-  closeButton->setAccessibleName(QStringLiteral("关闭目录"));
-  closeButton->setToolTip(QStringLiteral("关闭目录"));
-  closeButton->setText(QStringLiteral("×"));
-  closeButton->setCursor(Qt::PointingHandCursor);
-  closeButton->setFixedSize(28, 28);
-  closeButton->setStyleSheet(QStringLiteral(
-                                 "QToolButton { border: 0; border-radius: 6px; color: %1; font-size: 16px; }"
-                                 "QToolButton:hover:enabled { background: rgba(11,11,11,0.05); }"
-                              "QToolButton:disabled { color: #b6b5b2; }"
-                              "QToolButton:focus { outline: 0; }")
-                                 .arg(theme::muted().name()));
-  connect(closeButton, &QToolButton::clicked, this, &OutlinePanel::closeRequested);
-  headerLayout->addWidget(closeButton);
+  closeButton_ = new QToolButton(header);
+  closeButton_->setAccessibleName(QStringLiteral("关闭目录"));
+  closeButton_->setToolTip(QStringLiteral("关闭目录"));
+  closeButton_->setText(QStringLiteral("×"));
+  closeButton_->setCursor(Qt::PointingHandCursor);
+  closeButton_->setFixedSize(28, 28);
+  connect(closeButton_, &QToolButton::clicked, this, &OutlinePanel::closeRequested);
+  headerLayout->addWidget(closeButton_);
   layout->addWidget(header);
 
-  auto* scroll = new QScrollArea(this);
-  scroll->setWidgetResizable(true);
-  scroll->setFrameShape(QFrame::NoFrame);
-  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  scroll->setStyleSheet(QStringLiteral(
-      "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
-      "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
-      "QScrollBar::handle:vertical { background: rgba(11,11,11,0.20); margin: 0 1px 0 5px; border-radius: 2px; min-height: 32px; }"
-      "QScrollBar::handle:vertical:hover { background: rgba(11,11,11,0.35); }"
-      "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; border: 0; background: transparent; }"
-      "QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical { width: 0; height: 0; background: transparent; }"
-      "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: 0; }"
-      "QScrollArea::corner { background: transparent; border: 0; }"));
-  auto* contents = new QWidget(scroll);
+  scroll_ = new QScrollArea(this);
+  scroll_->setWidgetResizable(true);
+  scroll_->setFrameShape(QFrame::NoFrame);
+  scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  auto* contents = new QWidget(scroll_);
   list_ = new QVBoxLayout(contents);
   list_->setContentsMargins(0, 0, 8, 0);
   list_->setSpacing(0);
   list_->setAlignment(Qt::AlignTop);
-  scroll->setWidget(contents);
-  layout->addWidget(scroll, 1);
+  scroll_->setWidget(contents);
+  layout->addWidget(scroll_, 1);
+
+  applyTheme();
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, &OutlinePanel::applyTheme);
+  }
+}
+
+void OutlinePanel::applyTheme() {
+  const QString borderCss = theme::rgbaCss(theme::border());
+  const QString hoverCss = theme::rgbaCss(theme::hover());
+  const QString panelRule = floating_
+      ? QStringLiteral("#outlinePanel { background: %1; border: 1px solid %2; border-radius: 12px; }")
+            .arg(theme::raised().name(), borderCss)
+      : QStringLiteral("#outlinePanel { background: %1; border: 0; border-right: 1px solid %2; border-radius: 0; }")
+            .arg(theme::bg().name(), borderCss);
+  setStyleSheet(panelRule + QStringLiteral(
+      "QPushButton { border: 0; border-radius: 8px; text-align: left;"
+      "  padding: 0 8px; height: 32px; font-size: 13px; color: %1; background: transparent; }"
+      "QPushButton:hover { background: %2; }"
+      "QPushButton:focus { outline: 0; }")
+      .arg(theme::text().name(), hoverCss));
+  titleLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 12px;").arg(theme::muted().name()));
+  closeButton_->setStyleSheet(QStringLiteral(
+                                  "QToolButton { border: 0; border-radius: 6px; color: %1; font-size: 16px; }"
+                                  "QToolButton:hover:enabled { background: %2; }"
+                                  "QToolButton:disabled { color: %3; }"
+                                  "QToolButton:focus { outline: 0; }")
+                                  .arg(theme::muted().name(), hoverCss, theme::disabled().name()));
+  scroll_->setStyleSheet(scrollAreaStyle(32, false));
+  if (emptyLabel_) {
+    emptyLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; padding: 8px 12px;")
+                                   .arg(theme::muted().name()));
+  }
+  applyCurrentHeadingStyle();
+  update();
+}
+
+void OutlinePanel::applyCurrentHeadingStyle() {
+  const QString activeBg = theme::rgbaCss(theme::hover());
+  for (int i = 0; i < items_.size(); ++i) {
+    items_.at(i)->setProperty("currentHeading", i == current_);
+    items_.at(i)->setStyleSheet(QStringLiteral("padding-left: %1px; %2")
+                                    .arg(8 + (levels_.at(i) - 1) * 12)
+                                    .arg(i == current_
+                                             ? QStringLiteral("background: %1; font-weight: 500;").arg(activeBg)
+                                             : QString()));
+    items_.at(i)->update();
+  }
 }
 
 void OutlinePanel::setFloating(bool floating) {
   if (floating_ == floating) return;
   floating_ = floating;
   setFixedWidth(floating ? 248 : 232);
-  QString sheet = styleSheet();
-  const int end = sheet.indexOf(QLatin1Char('}'));
-  if (end >= 0) sheet.remove(0, end + 1);
-  const QString panel = floating
-      ? QStringLiteral("#outlinePanel { background: %1; border: 1px solid %2; border-radius: 12px; }")
-            .arg(theme::raised().name(), theme::border().name(QColor::HexArgb))
-      : QStringLiteral("#outlinePanel { background: %1; border: 0; border-right: 1px solid %2; border-radius: 0; }")
-            .arg(theme::bg().name(), theme::border().name(QColor::HexArgb));
-  setStyleSheet(panel + sheet);
+  applyTheme();
   if (floating) {
     auto* shadow = new SurfaceEnterEffect(this);
     setGraphicsEffect(shadow);
@@ -822,6 +900,7 @@ void OutlinePanel::setFloating(bool floating) {
 }
 
 void OutlinePanel::setHeadings(const QJsonArray& headings) {
+  emptyLabel_.clear();
   while (auto* item = list_->takeAt(0)) {
     delete item->widget();
     delete item;
@@ -831,9 +910,10 @@ void OutlinePanel::setHeadings(const QJsonArray& headings) {
   current_ = -1;
 
   if (headings.isEmpty()) {
-    auto* empty = new QLabel(QStringLiteral("没有标题"), this);
-    empty->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; padding: 8px 12px;").arg(theme::muted().name()));
-    list_->addWidget(empty);
+    emptyLabel_ = new QLabel(QStringLiteral("没有标题"), this);
+    emptyLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; padding: 8px 12px;")
+                                   .arg(theme::muted().name()));
+    list_->addWidget(emptyLabel_);
     return;
   }
 
@@ -853,14 +933,8 @@ void OutlinePanel::setHeadings(const QJsonArray& headings) {
 
 void OutlinePanel::setCurrentHeading(int index) {
   if (index == current_) return;
-  for (int i = 0; i < items_.size(); ++i) {
-    items_.at(i)->setProperty("currentHeading", i == index);
-    items_.at(i)->setStyleSheet(QStringLiteral("padding-left: %1px; %2")
-                                    .arg(8 + (levels_.at(i) - 1) * 12)
-                                    .arg(i == index ? QStringLiteral("background: rgba(11,11,11,0.05); font-weight: 500;")
-                                                    : QString()));
-  }
   current_ = index;
+  applyCurrentHeadingStyle();
 }
 
 // ---------------------------------------------------------------- Toolbar
@@ -868,34 +942,22 @@ void OutlinePanel::setCurrentHeading(int index) {
 Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
   setFixedHeight(theme::toolbarHeight());
   setAttribute(Qt::WA_StyledBackground, true);
-  setStyleSheet(QStringLiteral("Toolbar { background: %1; border-bottom: 1px solid rgba(11,11,11,0.10); }")
-                    .arg(theme::bg().name()));
-
-
 
   openButton_ = new QToolButton(this);
   openButton_->setAccessibleName(QStringLiteral("打开文件"));
   openButton_->setText(QStringLiteral("打开"));
-  openButton_->setIcon(strokeIcon("<path d='M2.5 6V4.5a1 1 0 0 1 1-1h4l2 2h6a1 1 0 0 1 1 1V8M3.5 16.5h12l2-8h-12l-2 8-1-10'/>"));
   openButton_->setIconSize(QSize(16, 16));
   openButton_->setFixedSize(64, 32);
   openButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   openButton_->setCursor(Qt::PointingHandCursor);
-  openButton_->setStyleSheet(toolButtonStyle());
   connect(openButton_, &QToolButton::clicked, this, &Toolbar::openRequested);
-
 
   auto* identity = identity_ = new QWidget(this);
 
   nameLabel_ = new QLabel(QStringLiteral("Vellora"), identity);
   nameLabel_->setTextFormat(Qt::PlainText);
-  nameLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; font-weight: 500;")
-                                .arg(theme::text().name()));
   statusLabel_ = new QLabel(QStringLiteral("未打开文件"), identity);
   statusLabel_->setTextFormat(Qt::PlainText);
-  statusLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(theme::faint().name()));
-
-
 
   // The stylesheet centres the switch in the toolbar's middle grid column, so it
   // is positioned manually instead of being part of the flex row.
@@ -903,63 +965,87 @@ Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
   connect(mode_, &SegmentedControl::currentChanged, this, &Toolbar::modeChanged);
   mode_->raise();
 
-
   saveButton_ = new CentredToolButton(this);
   saveButton_->setAccessibleName(QStringLiteral("保存"));
   saveButton_->setText(QStringLiteral("保存"));
-  saveIconMuted_ = strokeIcon(
-      "<path d='M5 3.5h8.5l3 3v8.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V5A1.5 1.5 0 0 1 5 3.5Z'/>"
-      "<path d='M7 3.5v4h5.5v-4M7 16.5v-5h6v5'/>");
-  saveIconLight_ = strokeIcon(
-      "<path d='M5 3.5h8.5l3 3v8.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V5A1.5 1.5 0 0 1 5 3.5Z'/>"
-      "<path d='M7 3.5v4h5.5v-4M7 16.5v-5h6v5'/>",
-      theme::surface());
-  saveIconFaint_ = strokeIcon(
-      "<path d='M5 3.5h8.5l3 3v8.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V5A1.5 1.5 0 0 1 5 3.5Z'/>"
-      "<path d='M7 3.5v4h5.5v-4M7 16.5v-5h6v5'/>",
-      QColor("#b6b5b2"));
-  saveButton_->setIcon(saveIconFaint_);
   saveButton_->setIconSize(QSize(16, 16));
   saveButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   saveButton_->setCursor(Qt::PointingHandCursor);
   saveButton_->setFixedSize(72, theme::controlHeight());
-  saveButton_->setStyleSheet(QStringLiteral(
-      "QToolButton { border: 0; border-radius: 8px; background: transparent; color: %1;"
-      "  font-size: 13px; font-weight: 500; padding: 0 6px; }"
-      "QToolButton:hover { background: rgba(11,11,11,0.05); color: %2; }"
-      "QToolButton:pressed { background: rgba(11,11,11,0.09); }"
-      "QToolButton:disabled { color: %3; }"
-      "QToolButton[primary=\"true\"] { background: %2; color: %4; }"
-      "QToolButton[primary=\"true\"]:hover { background: #2c2c2a; }")
-      .arg(theme::muted().name(), theme::text().name(), QStringLiteral("#b6b5b2"),
-           theme::surface().name()));
   connect(saveButton_, &QToolButton::clicked, this, &Toolbar::saveRequested);
-
 
   searchButton_ = new QToolButton(this);
   searchButton_->setAccessibleName(QStringLiteral("查找"));
   searchButton_->setToolTip(QStringLiteral("查找 (Ctrl+F)"));
   searchButton_->setCheckable(true);
-  searchButton_->setIcon(strokeIcon("<circle cx='8.5' cy='8.5' r='5.25'/><path d='m12.5 12.5 4 4'/>"));
   searchButton_->setIconSize(QSize(16, 16));
   searchButton_->setFixedSize(32, 32);
   searchButton_->setCursor(Qt::PointingHandCursor);
-  searchButton_->setStyleSheet(toolButtonStyle() + QStringLiteral("QToolButton { padding: 0; }"));
   connect(searchButton_, &QToolButton::clicked, this, &Toolbar::searchRequested);
-
 
   outlineButton_ = new QToolButton(this);
   outlineButton_->setAccessibleName(QStringLiteral("目录"));
   outlineButton_->setToolTip(QStringLiteral("目录"));
   outlineButton_->setCheckable(true);
-  outlineButton_->setIcon(strokeIcon("<rect x='2.5' y='3.5' width='15' height='13' rx='2'/><path d='M7.5 3.5v13M10.5 7h4M10.5 10h4M10.5 13h2'/>"));
   outlineButton_->setIconSize(QSize(16, 16));
   outlineButton_->setFixedSize(32, 32);
   outlineButton_->setCursor(Qt::PointingHandCursor);
-  outlineButton_->setStyleSheet(toolButtonStyle() + QStringLiteral("QToolButton { padding: 0; }"));
   connect(outlineButton_, &QToolButton::clicked, this, &Toolbar::outlineRequested);
+
+  applyTheme();
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, &Toolbar::applyTheme);
+  }
   layoutControls();
   updateAvailability();
+}
+
+void Toolbar::applyTheme() {
+  setStyleSheet(QStringLiteral("Toolbar { background: %1; border-bottom: 1px solid %2; }")
+                    .arg(theme::bg().name(), theme::rgbaCss(theme::border())));
+
+  const QString buttonCss = toolButtonStyle();
+  openButton_->setIcon(strokeIcon("<path d='M2.5 6V4.5a1 1 0 0 1 1-1h4l2 2h6a1 1 0 0 1 1 1V8M3.5 16.5h12l2-8h-12l-2 8-1-10'/>"));
+  openButton_->setStyleSheet(buttonCss);
+
+  nameLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; font-weight: 500;")
+                                .arg(theme::text().name()));
+  statusLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;")
+                                  .arg((statusMuted_ ? theme::muted() : theme::faint()).name()));
+
+  const QString saveBody = QStringLiteral(
+      "<path d='M5 3.5h8.5l3 3v8.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V5A1.5 1.5 0 0 1 5 3.5Z'/>"
+      "<path d='M7 3.5v4h5.5v-4M7 16.5v-5h6v5'/>");
+  saveIconMuted_ = strokeIcon(saveBody);
+  saveIconLight_ = strokeIcon(saveBody, theme::surface());
+  saveIconFaint_ = strokeIcon(saveBody, theme::disabled());
+  saveButton_->setStyleSheet(QStringLiteral(
+      "QToolButton { border: 0; border-radius: 8px; background: transparent; color: %1;"
+      "  font-size: 13px; font-weight: 500; padding: 0 6px; }"
+      "QToolButton:hover { background: %5; color: %2; }"
+      "QToolButton:pressed { background: %6; }"
+      "QToolButton:disabled { color: %3; }"
+      "QToolButton[primary=\"true\"] { background: %2; color: %4; }"
+      "QToolButton[primary=\"true\"]:hover { background: %7; }")
+      .arg(theme::muted().name(), theme::text().name(), theme::disabled().name(),
+           theme::surface().name(), theme::rgbaCss(theme::hover()),
+           theme::rgbaCss(theme::pressed()), theme::primaryHover().name()));
+  if (saveButton_->property("primary").toBool()) {
+    saveButton_->setIcon(saveButton_->isEnabled() ? saveIconLight_ : saveIconFaint_);
+  } else {
+    saveButton_->setIcon(saveButton_->isEnabled() ? saveIconMuted_ : saveIconFaint_);
+  }
+  saveButton_->style()->unpolish(saveButton_);
+  saveButton_->style()->polish(saveButton_);
+
+  searchButton_->setIcon(strokeIcon("<circle cx='8.5' cy='8.5' r='5.25'/><path d='m12.5 12.5 4 4'/>"));
+  searchButton_->setStyleSheet(buttonCss + QStringLiteral("QToolButton { padding: 0; }"));
+
+  outlineButton_->setIcon(strokeIcon("<rect x='2.5' y='3.5' width='15' height='13' rx='2'/><path d='M7.5 3.5v13M10.5 7h4M10.5 10h4M10.5 13h2'/>"));
+  outlineButton_->setStyleSheet(buttonCss + QStringLiteral("QToolButton { padding: 0; }"));
+
+  mode_->update();
+  update();
 }
 
 void Toolbar::resizeEvent(QResizeEvent* event) {
@@ -996,6 +1082,7 @@ void Toolbar::layoutControls() {
 void Toolbar::setDocumentName(const QString& name, const QString& status, bool unsaved) {
   documentName_ = name.isEmpty() ? QStringLiteral("Vellora") : name;
   documentStatus_ = (unsaved ? QStringLiteral("● ") : QString()) + status;
+  statusMuted_ = true;
   nameLabel_->setToolTip(name);
   layoutControls();
   statusLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;")
@@ -1038,20 +1125,6 @@ ModalDialog::ModalDialog(QWidget* parent, const QString& title, const QString& m
   setAttribute(Qt::WA_NoMousePropagation, true);
   setAttribute(Qt::WA_StyledBackground, true);
   setAttribute(Qt::WA_DeleteOnClose, false);
-  setStyleSheet(QStringLiteral(
-                    "#modal, #conflictModal { background: %1; border: 1px solid %2; border-radius: 16px; }"
-                    "QLabel#title { color: %3; font-size: 16px; font-weight: 600; }"
-                    "QLabel#message { color: %4; font-size: 14px; }"
-                    "QPushButton { border: 1px solid %2; border-radius: 8px; height: 32px; padding: 0 12px;"
-                    "  background: %1; color: %3; font-size: 13px; }"
-                    "QPushButton:hover { background: rgba(11,11,11,0.05); }"
-                    "QPushButton:focus { outline: 0; }"
-                    "QPushButton[primary=\"true\"] { background: %3; color: %5; border-color: %3; }"
-                    "QPushButton[primary=\"true\"]:hover { background: #2c2c2a; }"
-                    "QPushButton[destructive=\"true\"] { color: #a33125; background: #faeeeb; border-color: transparent; }"
-                    "QPushButton[destructive=\"true\"]:hover { background: #f5dfd9; }")
-                    .arg(theme::raised().name(), theme::border().name(QColor::HexArgb), theme::text().name(),
-                         theme::muted().name(), theme::raised().name()));
 
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(24, 24, 24, 24);
@@ -1069,15 +1142,6 @@ ModalDialog::ModalDialog(QWidget* parent, const QString& title, const QString& m
   bodyScroll_->setFrameShape(QFrame::NoFrame);
   bodyScroll_->setWidgetResizable(true);
   bodyScroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  bodyScroll_->setStyleSheet(QStringLiteral(
-      "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: 0; }"
-      "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
-      "QScrollBar::handle:vertical { background: rgba(11,11,11,0.20); margin: 0 1px 0 5px; border-radius: 2px; min-height: 32px; }"
-      "QScrollBar::handle:vertical:hover { background: rgba(11,11,11,0.35); }"
-      "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; border: 0; background: transparent; }"
-      "QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical { width: 0; height: 0; background: transparent; }"
-      "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: 0; }"
-      "QScrollArea::corner { background: transparent; border: 0; }"));
   bodyText_ = new QWidget;
   bodyText_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   bodyTextLayout_ = new QVBoxLayout(bodyText_);
@@ -1118,12 +1182,44 @@ ModalDialog::ModalDialog(QWidget* parent, const QString& title, const QString& m
   buttons->addWidget(primaryButton);
   layout->addLayout(buttons);
 
-  fitToParent();
   auto* shadow = new QGraphicsDropShadowEffect(this);
   shadow->setBlurRadius(48);
   shadow->setOffset(0, 16);
-  shadow->setColor(QColor(0, 0, 0, 48));
   setGraphicsEffect(shadow);
+  applyTheme();
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, &ModalDialog::applyTheme);
+  }
+  fitToParent();
+}
+
+void ModalDialog::applyTheme() {
+  const QString borderCss = theme::rgbaCss(theme::border());
+  const QString hoverCss = theme::rgbaCss(theme::hover());
+  setStyleSheet(QStringLiteral(
+                    "#modal, #conflictModal { background: %1; border: 1px solid %2; border-radius: 16px; }"
+                    "QLabel#title { color: %3; font-size: 16px; font-weight: 600; }"
+                    "QLabel#message { color: %4; font-size: 14px; }"
+                    "QPushButton { border: 1px solid %2; border-radius: 8px; height: 32px; padding: 0 12px;"
+                    "  background: %1; color: %3; font-size: 13px; }"
+                    "QPushButton:hover { background: %5; }"
+                    "QPushButton:focus { outline: 0; }"
+                    "QPushButton[primary=\"true\"] { background: %3; color: %1; border-color: %3; }"
+                    "QPushButton[primary=\"true\"]:hover { background: %6; }"
+                    "QPushButton[destructive=\"true\"] { color: %7; background: %8; border-color: transparent; }"
+                    "QPushButton[destructive=\"true\"]:hover { background: %9; }")
+                    .arg(theme::raised().name(), borderCss, theme::text().name(),
+                         theme::muted().name(), hoverCss, theme::primaryHover().name(),
+                         theme::dangerText().name(), theme::dangerBg().name(),
+                         theme::dangerBgHover().name()));
+  bodyScroll_->setStyleSheet(scrollAreaStyle(32, true));
+  if (auto* feedback = findChild<QLabel*>(QStringLiteral("conflictError"))) {
+    feedback->setStyleSheet(QStringLiteral("color: %1; margin-top: 12px;").arg(theme::dangerText().name()));
+  }
+  if (auto* shadow = qobject_cast<QGraphicsDropShadowEffect*>(graphicsEffect())) {
+    shadow->setColor(theme::modalShadowColor());
+  }
+  update();
 }
 
 void ModalDialog::fitToParent() {
@@ -1328,7 +1424,7 @@ int ModalDialog::resolveConflict(QWidget* parent, QJsonObject conflict,
   feedback->setTextFormat(Qt::PlainText);
   feedback->setWordWrap(true);
   feedback->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-  feedback->setStyleSheet(QStringLiteral("color: #a33125; margin-top: 12px;"));
+  feedback->setStyleSheet(QStringLiteral("color: %1; margin-top: 12px;").arg(theme::dangerText().name()));
   feedback->hide();
   dialog->bodyTextLayout_->addWidget(feedback);
   QObject::disconnect(confirm, nullptr, dialog, nullptr);

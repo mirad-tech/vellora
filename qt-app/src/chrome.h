@@ -6,6 +6,7 @@
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPointer>
 #include <functional>
 #include <QVector>
 #include <QWidget>
@@ -65,6 +66,7 @@ class SearchPanel : public QFrame {
   void setCounter(int current, int total);
   void setFeedback(const QString& text);
   void setReplaceVisible(bool visible);
+  void applyTheme();
 
  signals:
   void queryChanged(const QString& query);
@@ -84,6 +86,9 @@ class SearchPanel : public QFrame {
   bool eventFilter(QObject* watched, QEvent* event) override;
   QToolButton* previous_ = nullptr;
   QToolButton* next_ = nullptr;
+  QToolButton* closeButton_ = nullptr;
+  QLabel* searchIcon_ = nullptr;
+  QLabel* replaceIcon_ = nullptr;
   bool composing_ = false;
   int count_ = 0;
 
@@ -108,12 +113,18 @@ class OutlinePanel : public QFrame {
   void setHeadings(const QJsonArray& headings);
   void setCurrentHeading(int index);
   void setFloating(bool floating);
+  void applyTheme();
 
  signals:
   void headingSelected(int index);
   void closeRequested();
 
  private:
+  void applyCurrentHeadingStyle();
+  QLabel* titleLabel_ = nullptr;
+  QToolButton* closeButton_ = nullptr;
+  QScrollArea* scroll_ = nullptr;
+  QPointer<QLabel> emptyLabel_;
   QVBoxLayout* list_ = nullptr;
   QVector<int> levels_;
   bool floating_ = false;
@@ -132,6 +143,7 @@ class Toolbar : public QWidget {
   void setSaveEnabled(bool enabled);
   void setOutlineChecked(bool checked);
   void setSearchChecked(bool checked);
+  void applyTheme();
   SegmentedControl* modeSwitch() const { return mode_; }
 
  protected:
@@ -149,6 +161,7 @@ class Toolbar : public QWidget {
   void updateAvailability();
   bool busy_ = false;
   bool documentAvailable_ = false;
+  bool statusMuted_ = false;
   QWidget* identity_ = nullptr;
   QString documentName_;
   QString documentStatus_;
@@ -174,6 +187,7 @@ class ModalDialog : public QFrame {
                  const QString& tertiary = QString());
 
   void fitToParent();
+  void applyTheme();
 
   // One modal owns every conflict step, including recoverable failures.
   static int resolveConflict(QWidget* parent, QJsonObject conflict,

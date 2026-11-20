@@ -47,7 +47,21 @@ class FocusedUiFeedback : public QObject {
     QTest::keyClick(bar, Qt::Key_End); QCOMPARE(bar->value(), bar->maximum());
   }
  private slots:
-  void cleanup() { qApp->setProperty("velloraTestSurfaceMotion", QVariant()); }
+  void init() {
+    qApp->setProperty("velloraTestDark", false);
+    if (auto* hints = QGuiApplication::styleHints()) {
+      hints->setColorScheme(Qt::ColorScheme::Light);
+      QMetaObject::invokeMethod(hints, "colorSchemeChanged", Qt::DirectConnection,
+                                Q_ARG(Qt::ColorScheme, Qt::ColorScheme::Light));
+    }
+  }
+  void cleanup() {
+    qApp->setProperty("velloraTestSurfaceMotion", QVariant());
+    qApp->setProperty("velloraTestDark", QVariant());
+    if (auto* hints = QGuiApplication::styleHints()) {
+      hints->unsetColorScheme();
+    }
+  }
   void softSelectionIsConsistentWithoutChangingSearchColours() {
     QCOMPARE(theme::selectionBg(), QColor("#e8d8c8"));
     QCOMPARE(theme::selectionText(), QColor("#0b0b0b"));

@@ -33,6 +33,7 @@
 #include <QPainterPath>
 #include <QPalette>
 #include <QScrollBar>
+#include <QStyleHints>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFragment>
@@ -155,21 +156,79 @@ constexpr int LinkReferenceProperty = QTextFormat::UserProperty + 39;
 constexpr int ImageReferenceProperty = QTextFormat::UserProperty + 40;
 constexpr int ImageAltSourceProperty = QTextFormat::UserProperty + 41;
 constexpr int ImageAltOriginalProperty = QTextFormat::UserProperty + 42;
+constexpr int DisplayMutedProperty = QTextFormat::UserProperty + 43;
 constexpr int ListDelimiterProperty = QTextFormat::UserProperty + 31;
 constexpr int MissingImageProperty = QTextFormat::UserProperty + 32;
 constexpr int RawPreviewObjectType = QTextFormat::UserObject + 1;
 constexpr int SafeInlineImageObjectType = QTextFormat::UserObject + 2;
 constexpr int BlockImageObjectType = QTextFormat::UserObject + 3;
 
-class CodeSyntaxHighlighter final : public QSyntaxHighlighter {
+class DocumentThemeHighlighter final : public QSyntaxHighlighter {
  public:
-  explicit CodeSyntaxHighlighter(QTextDocument* document) : QSyntaxHighlighter(document) {}
+  explicit DocumentThemeHighlighter(QTextDocument* document) : QSyntaxHighlighter(document) {}
  protected:
   void highlightBlock(const QString& text) override {
-    const auto format = currentBlock().blockFormat();
-    if (format.intProperty(RoleProperty) != RoleCode || format.boolProperty(RawProperty)) return;
-    for (const auto& range : codehighlight::ranges(text, format.stringProperty(CodeLanguageProperty)))
-      setFormat(range.start, range.length, range.format);
+    if (text.isEmpty()) return;
+    const QTextBlock block = currentBlock();
+    const auto format = block.blockFormat();
+    const int role = format.intProperty(RoleProperty);
+    if (role == RoleCode) {
+      if (format.boolProperty(RawProperty)) {
+        QTextCharFormat muted;
+        muted.setForeground(theme::muted());
+        setFormat(0, text.size(), muted);
+        return;
+      }
+      for (const auto& range : codehighlight::ranges(text, format.stringProperty(CodeLanguageProperty)))
+        setFormat(range.start, range.length, range.format);
+      return;
+    }
+
+    const bool quoteMuted = format.intProperty(QuoteDepthProperty) > 0 ||
+                            format.boolProperty(DisplayMutedProperty);
+    const int blockPos = block.position();
+    if (quoteMuted) {
+      QTextCharFormat muted;
+      muted.setForeground(theme::muted());
+      for (auto it = block.begin(); !it.atEnd(); ++it) {
+        const auto fragment = it.fragment();
+        if (!fragment.isValid()) continue;
+        const auto cf = fragment.charFormat();
+        if (cf.hasProperty(QTextFormat::ForegroundBrush) && cf.foreground().color() == Qt::transparent) continue;
+        const int start = fragment.position() - blockPos;
+        const int len = fragment.length();
+        if (cf.isAnchor()) {
+          QTextCharFormat linkFmt;
+          linkFmt.setForeground(theme::accent());
+          if (!cf.boolProperty(InlineCodeProperty)) {
+            linkFmt.setFontUnderline(true);
+            linkFmt.setUnderlineColor(theme::linkUnderline());
+          }
+          setFormat(start, len, linkFmt);
+        } else if (cf.boolProperty(InlineCodeProperty)) {
+          QTextCharFormat codeFmt;
+          codeFmt.setForeground(theme::text());
+          setFormat(start, len, codeFmt);
+        } else {
+          setFormat(start, len, muted);
+        }
+      }
+      return;
+    }
+
+    for (auto it = block.begin(); !it.atEnd(); ++it) {
+      const auto fragment = it.fragment();
+      if (!fragment.isValid()) continue;
+      const auto cf = fragment.charFormat();
+      if (!cf.isAnchor()) continue;
+      QTextCharFormat linkFmt;
+      linkFmt.setForeground(theme::accent());
+      if (!cf.boolProperty(InlineCodeProperty)) {
+        linkFmt.setFontUnderline(true);
+        linkFmt.setUnderlineColor(theme::linkUnderline());
+      }
+      setFormat(fragment.position() - blockPos, fragment.length(), linkFmt);
+    }
   }
 };
 
@@ -310,7 +369,6 @@ QString fenced(QString text, QString language) {
 QTextCharFormat bodyFormat() {
   QTextCharFormat format;
   format.setFont(theme::uiFont(kBody));
-  format.setForeground(theme::text());
   return format;
 }
 
@@ -340,7 +398,6 @@ qreal chineseFirstLineIndent(const QString& text) {
 QTextCharFormat mutedFormat() {
   QTextCharFormat format;
   format.setFont(theme::uiFont(kBody));
-  format.setForeground(theme::muted());
   return format;
 }
 
@@ -366,7 +423,8 @@ void normalizeBlockImage(QTextCursor& cursor, bool forceInline = false) {
   }
   for(int i=images.size()-1;i>=0;--i) {
     const auto& image=images.at(i); auto format=image.format;
-    format.setFont(theme::uiFont(kBody)); format.setForeground(theme::text());
+    format.setFont(theme::uiFont(kBody));
+    format.clearProperty(QTextFormat::ForegroundBrush);
     format.setObjectType(SafeInlineImageObjectType);
     format.setProperty(ImagePathProperty,previous.stringProperty(ImagePathProperty));
     const qreal height=previous.doubleProperty(ImageHeightProperty);
@@ -466,7 +524,7 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
   document_->documentLayout()->registerHandler(BlockImageObjectType,blockImage);
   document_->setDocumentMargin(0);
   document_->setDefaultFont(theme::uiFont(kBody));
-  new CodeSyntaxHighlighter(document_);
+  highlighter_ = new DocumentThemeHighlighter(document_);
   document_->setUndoRedoEnabled(true);
 
   setAttribute(Qt::WA_InputMethodEnabled, true);
@@ -516,20 +574,38 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
     }
   });
 
-  QPalette pal = theme::selectionPalette(palette());
-  setPalette(pal);
-
-  setStyleSheet(QStringLiteral(
-      "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
-      "QScrollBar::handle:vertical { margin: 0 1px 0 5px; background: rgba(11,11,11,0.20);"
-      " border-radius: 2px; min-height: 40px; }"
-      "QScrollBar::handle:vertical:hover { background: rgba(11,11,11,0.35); }"
-      "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-      "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"));
+  applyTheme();
+  if (auto* hints = QGuiApplication::styleHints()) {
+    connect(hints, &QStyleHints::colorSchemeChanged, this, &DocumentView::applyTheme);
+  }
 
   connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
     viewport()->update(); layoutRawSurfaces(); emit viewportChanged();
   });
+}
+
+void DocumentView::applyTheme() {
+  setStyleSheet(QStringLiteral(
+      "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
+      "QScrollBar::handle:vertical { margin: 0 1px 0 5px; background: %1;"
+      " border-radius: 2px; min-height: 40px; }"
+      "QScrollBar::handle:vertical:hover { background: %2; }"
+      "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+      "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
+      .arg(theme::rgbaCss(theme::scrollbarThumb()),
+           theme::rgbaCss(theme::scrollbarThumbHover())));
+
+  QPalette pal = theme::selectionPalette(palette());
+  for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+    pal.setColor(group, QPalette::Text, theme::text());
+    pal.setColor(group, QPalette::WindowText, theme::text());
+    pal.setColor(group, QPalette::Base, theme::surface());
+    pal.setColor(group, QPalette::Window, theme::surface());
+  }
+  setPalette(pal);
+
+  if (!empty_ && highlighter_) highlighter_->rehighlight();
+  viewport()->update();
 }
 
 int DocumentView::contentWidth() const {
@@ -871,7 +947,6 @@ struct DocumentView::BuildContext {
     alt.setProperty(ImageAltProperty, run.value(QStringLiteral("alt")).toString());
     alt.setProperty(ImageTitleProperty, run.value(QStringLiteral("title")).toString());
     alt.setFont(theme::uiFont(13));
-    alt.setForeground(theme::danger());
     applyRunMarks(alt, run);
     alt.setObjectType(SafeInlineImageObjectType);
     alt.setProperty(MissingImageProperty, true);
@@ -890,7 +965,6 @@ struct DocumentView::BuildContext {
   void insertInlineCodeRun(QTextCursor& into, const QJsonObject& run, const QTextCharFormat& base) {
     QTextCharFormat code;
     code.setFont(theme::monoFont(kCode));
-    code.setForeground(theme::text());
     code.setProperty(InlineCodeProperty, true);
     if (base.fontWeight() >= QFont::DemiBold) code.setFontWeight(QFont::DemiBold);
     if (run.value(QStringLiteral("bold")).toBool()) code.setProperty(MarkBoldProperty, true);
@@ -907,7 +981,6 @@ struct DocumentView::BuildContext {
       code.setAnchor(true);
       code.setAnchorHref(link.value(QStringLiteral("href")).toString());
       code.setProperty(LinkTitleProperty, link.value(QStringLiteral("title")).toString());
-      code.setForeground(theme::accent());
     }
     applyRunMarks(code, run);
     into.insertText(run.value(QStringLiteral("text")).toString(), code);
@@ -936,9 +1009,6 @@ struct DocumentView::BuildContext {
         format.setProperty(LinkReferenceProperty,
                            link.value(QStringLiteral("reference")).toObject().toVariantMap());
       }
-      format.setForeground(theme::accent());
-      format.setFontUnderline(true);
-      format.setUnderlineColor(QColor("#86b6ef"));
     }
     into.insertText(run.value(QStringLiteral("text")).toString(), format);
   }
@@ -1045,7 +1115,6 @@ struct DocumentView::BuildContext {
     openBlock(format, segment);
     QTextCharFormat heading;
     heading.setFont(theme::uiFont(size, QFont::DemiBold));
-    heading.setForeground(theme::text());
     cursor.setBlockCharFormat(heading);
     insertRuns(cursor, block.value(QStringLiteral("runs")).toArray(), heading);
   }
@@ -1068,7 +1137,6 @@ struct DocumentView::BuildContext {
     openBlock(format, segment);
     QTextCharFormat code;
     code.setFont(theme::monoFont(raw ? 13 : kCode));
-    code.setForeground(raw ? theme::muted() : theme::text());
     cursor.setBlockCharFormat(code);
 
     if (raw && !view.previewMode_ &&
@@ -1213,7 +1281,6 @@ struct DocumentView::BuildContext {
 
     QTextCharFormat base;
     base.setFont(theme::uiFont(kBody, headerCell ? QFont::Bold : QFont::Normal));
-    base.setForeground(theme::text());
     cellCursor.setBlockCharFormat(base);
     cellCursor.setCharFormat(base);
     const int authoredStart = cellCursor.position();
@@ -1234,7 +1301,9 @@ struct DocumentView::BuildContext {
     const QJsonArray spanRows = block.value(QStringLiteral("spans")).toArray();
     const QJsonArray headerRows = block.value(QStringLiteral("cellHeaders")).toArray();
     if (tableSpansExceedLimits(spanRows, rows.size())) {
-      openBlock(bodyBlock(), segment);
+      QTextBlockFormat mutedBlock = bodyBlock();
+      mutedBlock.setProperty(DisplayMutedProperty, true);
+      openBlock(mutedBlock, segment);
       cursor.insertText(QStringLiteral("表格过大，请切换源码查看。"), mutedFormat());
       return;
     }
@@ -1895,7 +1964,7 @@ void DocumentView::paintTables(QPainter& painter) {
           painter.drawText(QPointF(tx, baseline), run.text);
           const qreal advance = metrics.horizontalAdvance(run.text);
           if (!run.href.isEmpty()) {
-            painter.setPen(QPen(QColor("#86b6ef"), 1));
+            painter.setPen(QPen(theme::linkUnderline(), 1));
             painter.drawLine(QPointF(tx, baseline + 2), QPointF(tx + advance, baseline + 2));
           }
           tx += advance;
@@ -1930,7 +1999,7 @@ void DocumentView::paintTables(QPainter& painter) {
 
     if (table.maxScroll > 0) {
       painter.setPen(Qt::NoPen);
-      painter.setBrush(QColor(11, 11, 11, 26));
+      painter.setBrush(theme::border());
       painter.drawRoundedRect(table.scrollThumb, 2, 2);
     }
     painter.restore();
@@ -2008,6 +2077,7 @@ void DocumentView::paintEvent(QPaintEvent*) {
 
   QAbstractTextDocumentLayout::PaintContext context;
   context.palette = palette();
+  context.palette.setColor(QPalette::Text, theme::text());
   context.clip = QRectF(0, scrollValue() - topPadding(), contentWidth(), viewport()->height());
   for (int index = 0; index < matches_.size() && index < 1000; ++index) {
     QAbstractTextDocumentLayout::Selection selection;
@@ -2112,10 +2182,10 @@ void DocumentView::paintEvent(QPaintEvent*) {
     if (region.maximum > 0) {
       painter.setPen(Qt::NoPen);
       if (region.blockPosition >= 0) {
-        painter.setBrush(QColor(11, 11, 11, 16));
+        painter.setBrush(theme::codeScrollTrack());
         painter.drawRoundedRect(region.track, 2, 2);
       }
-      painter.setBrush(QColor(11, 11, 11, 70));
+      painter.setBrush(theme::codeScrollThumb());
       painter.drawRoundedRect(region.thumb, 2, 2);
     }
     const bool hovered = region.rect.adjusted(0,-16,52,16).contains(pointer);
@@ -2496,7 +2566,6 @@ void restyleBlockFragments(const QTextBlock& block, const QTextBlockFormat& form
   const bool heading = format.intProperty(RoleProperty) == RoleHeading;
   const int size = heading ? headingFontSize(level) : kBody;
   const bool isCodeBlock = format.intProperty(RoleProperty) == RoleCode;
-  const QColor fg = format.intProperty(QuoteDepthProperty) > 0 ? theme::muted() : theme::text();
   for (auto it = block.begin(); !it.atEnd(); ++it) {
     const auto fragment = it.fragment();
     auto character = fragment.charFormat();
@@ -2507,7 +2576,10 @@ void restyleBlockFragments(const QTextBlock& block, const QTextBlockFormat& form
         heading || character.boolProperty(MarkBoldProperty) ? QFont::DemiBold : QFont::Normal);
     character.setFontItalic(character.boolProperty(MarkItalicProperty));
     character.setFontStrikeOut(character.boolProperty(MarkStrikeProperty));
-    character.setForeground(fg);
+    if (!(character.hasProperty(QTextFormat::ForegroundBrush) &&
+          character.foreground().color() == Qt::transparent)) {
+      character.clearProperty(QTextFormat::ForegroundBrush);
+    }
     QTextCursor span(block);
     span.setPosition(fragment.position());
     span.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
@@ -2647,6 +2719,11 @@ bool DocumentView::handleBlockStructureShortcut(QKeyEvent* event, bool editable)
     }
   }
   cursor_.endEditBlock();
+  if (highlighter_) {
+    for (const auto& block : blocks) {
+      if (block.isValid()) highlighter_->rehighlightBlock(block);
+    }
+  }
   resetCaretBlink();
   viewport()->update();
   return true;
@@ -3580,7 +3657,8 @@ void DocumentView::insertTyped(const QString& text) {
     format.clearProperty(LinkTitleProperty);
     format.clearProperty(LinkReferenceProperty);
     format.setFontUnderline(false);
-    format.setForeground(cursor_.blockFormat().intProperty(QuoteDepthProperty) > 0 ? theme::muted() : theme::text());
+    format.clearProperty(QTextFormat::ForegroundBrush);
+    format.clearProperty(QTextFormat::TextUnderlineColor);
   }
   if (format.boolProperty(ListMarkerProperty) || format.hasProperty(ImageSourceProperty)) format = bodyFormat();
   QString normalized = text;
@@ -3672,7 +3750,9 @@ void DocumentView::splitBlockAtCursor() {
     lifted.setProperty(QuoteDepthProperty,lifted.intProperty(QuoteDepthProperty)-1);
     lifted.setLeftMargin(qMax<qreal>(0,lifted.leftMargin()-18));lifted.setProperty(StructureChangedProperty,true);
     cursor_.setBlockFormat(lifted);cursor_.setCharFormat(lifted.intProperty(QuoteDepthProperty)>0?mutedFormat():bodyFormat());
-    cursor_.endEditBlock();resetCaretBlink();ensureCaretVisible();return;
+    cursor_.endEditBlock();
+    if (highlighter_) highlighter_->rehighlightBlock(cursor_.block());
+    resetCaretBlink();ensureCaretVisible();return;
   }
   const bool splitHeading = block.blockFormat().intProperty(RoleProperty)==RoleHeading && cursor_.position()<block.position()+block.length()-1;
   QTextBlockFormat format = splitHeading ? block.blockFormat() : bodyBlock();
@@ -3702,7 +3782,8 @@ void DocumentView::splitBlockAtCursor() {
     font.setWeight(continuation.boolProperty(MarkBoldProperty)?QFont::DemiBold:QFont::Normal);
     font.setItalic(continuation.boolProperty(MarkItalicProperty));font.setStrikeOut(continuation.boolProperty(MarkStrikeProperty));
     continuation.setFont(font);
-    continuation.setForeground(!continuation.anchorHref().isEmpty()?theme::accent():format.intProperty(QuoteDepthProperty)>0?theme::muted():theme::text());
+    continuation.clearProperty(QTextFormat::ForegroundBrush);
+    continuation.clearProperty(QTextFormat::TextUnderlineColor);
   }
   cursor_.insertBlock(format, continuation);
   if (list) {

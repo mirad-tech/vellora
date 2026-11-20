@@ -20,6 +20,7 @@ class SourceView : public QPlainTextEdit {
   QVector<QRectF> activeSearchMatchRects() const;
   void scrollSearchMatchDown(int pixels);
   bool isComposing() const { return composing_; }
+  void applyTheme();
 
  signals:
   void compositionStateChanged(bool composing);
