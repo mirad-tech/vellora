@@ -2299,6 +2299,51 @@ void DocumentView::copyCodeText(int node, const QString& text) {
   viewport()->update();
 }
 
+// The first block is the zero-height layout spacer inserted by
+// BuildContext::insertLeadingZeroHeightBlock; it has no segment. A caret or
+// selection end inside it lets an edit merge text into a block that belongs to no
+// segment, and that text is dropped on save. Returns 0 when there is no spacer.
+static int contentStartPosition(const QTextDocument* document) {
+  const QTextBlock first = document->begin();
+  const QTextBlock next = first.next();
+  if (!next.isValid() || first.blockFormat().hasProperty(SegmentProperty)) return 0;
+  return next.position();
+}
+
+static void clampToContent(QTextCursor& cursor, const QTextDocument* document) {
+  const int start = contentStartPosition(document);
+  if (start == 0 || (cursor.anchor() >= start && cursor.position() >= start)) return;
+  const int anchor = qMax(cursor.anchor(), start);
+  cursor.setPosition(anchor);
+  cursor.setPosition(qMax(cursor.position(), start), QTextCursor::KeepAnchor);
+}
+
+static bool isRuleBlock(const QTextBlock& block) {
+  return block.isValid() && block.blockFormat().intProperty(RoleProperty) == RoleRule;
+}
+
+// Code and visible raw-source blocks serialize as block.text(). Merging another
+// block into them turns images into U+FFFC and drops link targets and marks;
+// merging them into a paragraph rewrites their text as inline content.
+static bool keepsVerbatimText(const QTextBlock& block) {
+  if (!block.isValid()) return false;
+  const QTextBlockFormat format = block.blockFormat();
+  return format.intProperty(RoleProperty) == RoleCode || format.boolProperty(RawProperty);
+}
+
+// Deletes a horizontal rule as a whole. Merging across it would keep the rule's
+// block format (Qt keeps the earlier block's format), so the neighbouring text
+// would serialize as "---" and its own segment would come out empty.
+static bool removeRuleBlock(QTextDocument* document, const QTextBlock& rule) {
+  const QTextBlock before = rule.previous();
+  if (!isRuleBlock(rule) || !before.isValid() || QTextCursor(before).currentTable()) return false;
+  QTextCursor range(document);
+  range.setPosition(rule.position() - 1);  // the separator that ends `before`
+  range.setPosition(rule.position() + rule.length() - 1, QTextCursor::KeepAnchor);
+  range.removeSelectedText();
+  return true;
+}
+
 void DocumentView::mousePressEvent(QMouseEvent* event) {
   searchSelection_ = false;
   stopHeadingScroll();
@@ -2388,7 +2433,13 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   cursor.setPosition(position);
   if (doubleClickTimer_.isValid() && doubleClickTimer_.elapsed() <= QApplication::doubleClickInterval() &&
       cursor.block().position() == doubleClickedBlock_) {
-    cursor.select(QTextCursor::BlockUnderCursor); cursor_ = cursor; dragging_ = false;
+    // Select the block's own text only. BlockUnderCursor also takes the previous
+    // block's separator, so typing over it merged the text into that block.
+    const QTextBlock clicked = cursor.block();
+    cursor.setPosition(clicked.position());
+    cursor.setPosition(clicked.position() + clicked.length() - 1, QTextCursor::KeepAnchor);
+    clampToContent(cursor, document_);
+    cursor_ = cursor; dragging_ = false;
     doubleClickTimer_.invalidate(); setFocus(Qt::MouseFocusReason); viewport()->update(); return;
   }
   if (event->modifiers() & Qt::ShiftModifier) {
@@ -3580,6 +3631,7 @@ void DocumentView::moveCursor(QTextCursor::MoveOperation operation, QTextCursor:
       (operation == QTextCursor::Left || operation == QTextCursor::Right)) {
     next.setPosition(operation == QTextCursor::Left ? next.selectionStart() : next.selectionEnd());
   } else next.movePosition(operation, mode);
+  clampToContent(next, document_);
   cursor_ = next;
   resetCaretBlink();
   ensureCaretVisible();
@@ -3614,6 +3666,7 @@ bool DocumentView::protectNestedStructure(const QTextCursor& range) {
 
 void DocumentView::insertTyped(const QString& text) {
   if (text.isEmpty()) return;
+  clampToContent(cursor_, document_);
   const bool inlineNewlines = cursor_.blockFormat().intProperty(RoleProperty) == RoleCode ||
       cursor_.blockFormat().intProperty(RoleProperty) == RoleTable;
   if (replacesBlockStructure(cursor_, inlineNewlines ? QString() : text) && protectNestedStructure(cursor_)) return;
@@ -3674,6 +3727,7 @@ void DocumentView::insertTyped(const QString& text) {
 }
 
 void DocumentView::deleteBackward() {
+  clampToContent(cursor_, document_);
   QTextCursor affected = cursor_;
   if (!affected.hasSelection() && affected.position() == affected.block().position())
     affected.movePosition(QTextCursor::PreviousCharacter, QTextCursor::KeepAnchor);
@@ -3702,7 +3756,15 @@ void DocumentView::deleteBackward() {
     }
     cursor_.deletePreviousChar();
   } else if (blockEditable(block) && block.previous().isValid() && blockEditable(block.previous())) {
-    cursor_.deletePreviousChar();
+    const QTextBlock previous = block.previous();
+    const int previousEnd = previous.position() + previous.length() - 1;
+    if (isRuleBlock(previous) || isRuleBlock(block)) {
+      if (!removeRuleBlock(document_, isRuleBlock(previous) ? previous : block)) cursor_.setPosition(previousEnd);
+    } else if (keepsVerbatimText(previous) || keepsVerbatimText(block)) {
+      cursor_.setPosition(previousEnd);  // step into the neighbour instead of merging
+    } else {
+      cursor_.deletePreviousChar();
+    }
   }
   normalizeBlockImage(cursor_);
   cursor_.endEditBlock();
@@ -3717,8 +3779,24 @@ void DocumentView::deleteForward() {
   if (cursor_.hasSelection()) { deleteBackward(); return; }
   const QTextBlock block = cursor_.block();
   if (!blockEditable(block)) return;
-  if (cursor_.position() == block.position() + block.length() - 1 &&
-      (!block.next().isValid() || !blockEditable(block.next()))) return;
+  const bool atBlockEnd = cursor_.position() == block.position() + block.length() - 1;
+  if (atBlockEnd && (!block.next().isValid() || !blockEditable(block.next()))) return;
+  if (atBlockEnd) {
+    const QTextBlock following = block.next();
+    if (isRuleBlock(block) || isRuleBlock(following)) {
+      const bool ruleIsCurrent = isRuleBlock(block);
+      cursor_.beginEditBlock();
+      const bool removed = removeRuleBlock(document_, ruleIsCurrent ? block : following);
+      cursor_.endEditBlock();
+      if (!removed || ruleIsCurrent) moveCursor(QTextCursor::NextBlock, QTextCursor::MoveAnchor);
+      viewport()->update();
+      return;
+    }
+    if (keepsVerbatimText(block) || keepsVerbatimText(following)) {
+      moveCursor(QTextCursor::NextBlock, QTextCursor::MoveAnchor);
+      return;
+    }
+  }
   QTextCursor next = cursor_; next.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
   if (next.charFormat().boolProperty(ListMarkerProperty)) {
     moveCursor(QTextCursor::NextCharacter, QTextCursor::MoveAnchor); return;
@@ -3832,6 +3910,7 @@ void DocumentView::inputMethodEvent(QInputMethodEvent* event) {
       cursor_.setPosition(start);
       cursor_.setPosition(qBound(start, start + event->replacementLength(), document_->characterCount() - 1), QTextCursor::KeepAnchor);
     }
+    clampToContent(cursor_, document_);
     if (event->commitString().isEmpty()) cursor_.removeSelectedText(); else insertTyped(event->commitString());
     cursor_.endEditBlock();
   }
@@ -4603,6 +4682,7 @@ void DocumentView::restoreSelectionState(const QPair<int,int>& state) {
   const int maximum=qMax(0,document_->characterCount()-1);
   cursor_=QTextCursor(document_);cursor_.setPosition(qBound(0,state.first,maximum));
   cursor_.setPosition(qBound(0,state.second,maximum),QTextCursor::KeepAnchor);
+  clampToContent(cursor_, document_);
   viewport()->update();
 }
 

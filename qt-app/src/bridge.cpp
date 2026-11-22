@@ -9,8 +9,8 @@
 
 extern "C" {
 char* vellora_open(const char* path);
-char* vellora_plan(const char* content);
-char* vellora_save(const char* path, const char* content, const char* token);
+char* vellora_plan_n(const uint8_t* content, size_t contentLen);
+char* vellora_save_n(const char* path, const uint8_t* content, size_t contentLen, const char* token);
 char* vellora_image_read(const char* documentPath, const char* src, uint8_t** data, size_t* len);
 void vellora_free_bytes(uint8_t* data, size_t len);
 char* vellora_image_stat(const char* documentPath, const char* src);
@@ -20,7 +20,7 @@ char* vellora_open_link(const char* documentPath, const char* href);
 char* vellora_open_external(const char* url);
 char* vellora_session_matches(const char* path);
 char* vellora_version();
-char* vellora_splice_text(const char* content, const char* edits);
+char* vellora_splice_text_n(const uint8_t* content, size_t contentLen, const char* edits);
 void vellora_free(char* pointer);
 }
 
@@ -40,6 +40,12 @@ QJsonObject consume(char* raw) {
 }
 
 QByteArray utf8(const QString& value) { return value.toUtf8(); }
+
+// Document text crosses the ABI with an explicit length. U+0000 is valid Markdown
+// content: passing constData() alone would let Rust stop at the first NUL and
+// save a truncated file. Paths, tokens and JSON edits cannot contain NUL.
+const uint8_t* bytes(const QByteArray& value) { return reinterpret_cast<const uint8_t*>(value.constData()); }
+size_t length(const QByteArray& value) { return static_cast<size_t>(value.size()); }
 
 }  // namespace
 
@@ -73,12 +79,14 @@ QJsonObject openDocument(const QString& path) {
 }
 
 QJsonObject planFor(const QString& markdown) {
-  return consume(vellora_plan(utf8(markdown).constData()));
+  const QByteArray content = utf8(markdown);
+  return consume(vellora_plan_n(bytes(content), length(content)));
 }
 
 QJsonObject saveDocument(const QString& path, const QString& content, const QString& conflictToken) {
-  return consume(vellora_save(utf8(path).constData(), utf8(content).constData(),
-                              utf8(conflictToken).constData()));
+  const QByteArray text = utf8(content);
+  return consume(vellora_save_n(utf8(path).constData(), bytes(text), length(text),
+                                utf8(conflictToken).constData()));
 }
 
 ImageReadResult readImage(const QString& documentPath, const QString& source) {
@@ -115,7 +123,8 @@ QJsonObject openExternal(const QString& url) {
 
 QJsonObject spliceSegments(const QString& content, const QJsonArray& edits) {
   const QByteArray payload = QJsonDocument(edits).toJson(QJsonDocument::Compact);
-  return consume(vellora_splice_text(utf8(content).constData(), payload.constData()));
+  const QByteArray draft = utf8(content);
+  return consume(vellora_splice_text_n(bytes(draft), length(draft), payload.constData()));
 }
 
 QJsonObject sessionMatches(const QString& path) {

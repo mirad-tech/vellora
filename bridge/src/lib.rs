@@ -31,6 +31,22 @@ unsafe fn from_c(value: *const c_char) -> String {
   CStr::from_ptr(value).to_string_lossy().into_owned()
 }
 
+/// Reads `len` bytes of strict UTF-8 document text. Unlike [`from_c`], an
+/// embedded NUL is content, not a terminator: U+0000 is valid UTF-8, the core
+/// opens such files and the outbound JSON keeps it, so inbound text must too.
+unsafe fn from_c_len(value: *const u8, len: usize) -> Result<String, Value> {
+  if len == 0 {
+    return Ok(String::new());
+  }
+  if value.is_null() {
+    return Err(error_json("INVALID_ARGUMENT", "null buffer with a nonzero length"));
+  }
+  let bytes = unsafe { std::slice::from_raw_parts(value, len) };
+  std::str::from_utf8(bytes)
+    .map(str::to_owned)
+    .map_err(|_| error_json("INVALID_ARGUMENT", "document text is not valid UTF-8"))
+}
+
 fn error_json(code: &str, message: &str) -> Value {
   json!({ "ok": false, "code": code, "message": message })
 }
@@ -284,21 +300,55 @@ fn document_line_ending(source: &str) -> &'static str {
   }
 }
 
+fn plan_response(content: &str) -> Value {
+  let preserved = PreservedMarkdown::new(content);
+  json!({ "ok": true, "plan": plan_json(preserved.document()) })
+}
+
 /// Renders Markdown bytes into the neutral plan without touching the session.
+///
+/// Document text stops at the first NUL here; the Qt shell uses [`vellora_plan_n`].
 ///
 /// # Safety
 ///
 /// `content` must either be null or point to a valid NUL-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn vellora_plan(content: *const c_char) -> *mut c_char {
-  guarded(|| {
-    let content = unsafe { from_c(content) };
-    let preserved = PreservedMarkdown::new(&content);
-    json!({ "ok": true, "plan": plan_json(preserved.document()) })
+  guarded(|| plan_response(&unsafe { from_c(content) }))
+}
+
+/// Length-delimited [`vellora_plan`]: every byte of `content` is document text.
+///
+/// # Safety
+///
+/// `content` must point to `content_len` readable bytes, or be null when `content_len` is 0.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_plan_n(content: *const u8, content_len: usize) -> *mut c_char {
+  guarded(|| match unsafe { from_c_len(content, content_len) } {
+    Ok(content) => plan_response(&content),
+    Err(error) => error,
   })
 }
 
+fn save_response(path: &str, content: &str, token: String) -> Value {
+  let token = if token.is_empty() { None } else { Some(token) };
+  match session::save_document_session(state(), path, content, token.as_deref()) {
+    CommandResult::Ok { data, .. } => {
+      json!({ "ok": true, "document": data.document })
+    }
+    CommandResult::Err { ok: _, code, message, conflict_token } => json!({
+      "ok": false,
+      "code": code,
+      "message": message,
+      "conflictToken": conflict_token,
+    }),
+  }
+}
+
 /// Saves through the session; `token` may be empty for a first attempt.
+///
+/// `content` stops at the first NUL here, which would truncate the file on disk;
+/// the Qt shell must use [`vellora_save_n`].
 ///
 /// # Safety
 ///
@@ -314,18 +364,33 @@ pub unsafe extern "C" fn vellora_save(
     let path = unsafe { from_c(path) };
     let content = unsafe { from_c(content) };
     let token = unsafe { from_c(token) };
-    let token = if token.is_empty() { None } else { Some(token) };
-    match session::save_document_session(state(), &path, &content, token.as_deref()) {
-      CommandResult::Ok { data, .. } => {
-        json!({ "ok": true, "document": data.document })
-      }
-      CommandResult::Err { ok: _, code, message, conflict_token } => json!({
-        "ok": false,
-        "code": code,
-        "message": message,
-        "conflictToken": conflict_token,
-      }),
-    }
+    save_response(&path, &content, token)
+  })
+}
+
+/// Length-delimited [`vellora_save`]: every byte of `content` is written, including
+/// U+0000; invalid UTF-8 is rejected with `INVALID_ARGUMENT` instead of being replaced.
+///
+/// # Safety
+///
+/// `path` and `token` must each either be null or point to a valid NUL-terminated C
+/// string. `content` must point to `content_len` readable bytes, or be null when
+/// `content_len` is 0.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_save_n(
+  path: *const c_char,
+  content: *const u8,
+  content_len: usize,
+  token: *const c_char,
+) -> *mut c_char {
+  guarded(|| {
+    let content = match unsafe { from_c_len(content, content_len) } {
+      Ok(content) => content,
+      Err(error) => return error,
+    };
+    let path = unsafe { from_c(path) };
+    let token = unsafe { from_c(token) };
+    save_response(&path, &content, token)
   })
 }
 
@@ -354,6 +419,29 @@ pub unsafe extern "C" fn vellora_splice(content: *const c_char, edits: *const c_
 pub unsafe extern "C" fn vellora_splice_text(content: *const c_char, edits: *const c_char) -> *mut c_char {
   guarded(|| {
     let content = unsafe { from_c(content) };
+    let raw = unsafe { from_c(edits) };
+    splice_json_impl(&content, &raw, false)
+  })
+}
+
+/// Length-delimited [`vellora_splice_text`]. `edits` stays a C string: it is JSON,
+/// whose encoder escapes U+0000, so only the draft itself needs an explicit length.
+///
+/// # Safety
+///
+/// `content` must point to `content_len` readable bytes, or be null when `content_len`
+/// is 0. `edits` must either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_splice_text_n(
+  content: *const u8,
+  content_len: usize,
+  edits: *const c_char,
+) -> *mut c_char {
+  guarded(|| {
+    let content = match unsafe { from_c_len(content, content_len) } {
+      Ok(content) => content,
+      Err(error) => return error,
+    };
     let raw = unsafe { from_c(edits) };
     splice_json_impl(&content, &raw, false)
   })
@@ -863,6 +951,13 @@ mod session_splice_tests {
     let reopened = read_result(unsafe { vellora_open(cpath.as_ptr()) });
     assert_eq!(reopened["document"]["content"], expected);
     assert_eq!(reopened["plan"], result["plan"]);
+    // U+0000 is document content: the length-delimited save must keep every byte after it.
+    let with_nul = "before\0after\n\ntail\n";
+    let saved = read_result(unsafe {
+      vellora_save_n(cpath.as_ptr(), with_nul.as_ptr(), with_nul.len(), empty.as_ptr())
+    });
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(std::fs::read(&path).unwrap(), with_nul.as_bytes());
     let linked = path.with_extension("linked.md");
     std::fs::write(&linked, "linked\r\n\r\nbody\r\n").unwrap();
     let href = CString::new(linked.file_name().unwrap().to_str().unwrap()).unwrap();
@@ -1029,5 +1124,46 @@ mod image_read_tests {
     assert_eq!(stat_call("pic.png")["code"], "IMAGE_NOT_FOUND");
     std::fs::remove_file(&doc).unwrap();
     std::fs::remove_dir(&root).unwrap();
+  }
+}
+
+#[cfg(test)]
+mod length_delimited_tests {
+  use super::*;
+
+  fn read_result(raw: *mut c_char) -> Value {
+    let result = serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
+    unsafe { vellora_free(raw) };
+    result
+  }
+
+  #[test]
+  fn length_delimited_text_keeps_nul_and_rejects_invalid_utf8() {
+    let text = "a\0b\n";
+    assert_eq!(unsafe { from_c_len(text.as_ptr(), text.len()) }.unwrap(), text);
+    assert_eq!(unsafe { from_c_len(std::ptr::null(), 0) }.unwrap(), "");
+    assert!(unsafe { from_c_len(std::ptr::null(), 3) }.is_err());
+    let invalid = [b'a', 0xff];
+    let error = unsafe { from_c_len(invalid.as_ptr(), invalid.len()) }.unwrap_err();
+    assert_eq!(error["code"], "INVALID_ARGUMENT");
+  }
+
+  #[test]
+  fn plan_and_splice_see_text_after_nul() {
+    let text = "first\0tail\n\nsecond\n";
+    let plan = read_result(unsafe { vellora_plan_n(text.as_ptr(), text.len()) });
+    assert_eq!(plan["ok"], true, "{plan}");
+    let sources: String = plan["plan"]["blocks"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|block| block["source"].as_str().unwrap_or_default())
+      .collect();
+    assert_eq!(sources, text);
+
+    let edits = CString::new(r#"[{"index":1,"markdown":"changed"}]"#).unwrap();
+    let spliced = read_result(unsafe { vellora_splice_text_n(text.as_ptr(), text.len(), edits.as_ptr()) });
+    assert_eq!(spliced["ok"], true, "{spliced}");
+    assert_eq!(spliced["content"], "first\0tail\n\nchanged\n");
   }
 }

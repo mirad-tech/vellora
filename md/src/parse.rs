@@ -208,10 +208,13 @@ enum Frame {
 
 struct Builder {
   stack: Vec<Frame>,
+  /// Set when an event had no place in the model. The block then falls back to
+  /// `RawSource` instead of silently dropping the content (see `convert_block`).
+  lost: bool,
 }
 
 fn convert_block(events: &[(Event, std::ops::Range<usize>)], source: &str) -> Option<Block> {
-  let mut builder = Builder { stack: vec![Frame::Root(Vec::new())] };
+  let mut builder = Builder { stack: vec![Frame::Root(Vec::new())], lost: false };
   for (event, range) in events {
     builder.handle(event)?;
     let authored = &source[range.clone()];
@@ -237,6 +240,9 @@ fn convert_block(events: &[(Event, std::ops::Range<usize>)], source: &str) -> Op
         list.delimiter = marker.chars().find(|c| !c.is_ascii_digit()).filter(|c| *c == ')').unwrap_or('.');
       }
     }
+  }
+  if builder.lost {
+    return None;
   }
   match builder.stack.pop() {
     Some(Frame::Root(mut blocks)) if blocks.len() == 1 => blocks.pop(),
@@ -336,6 +342,10 @@ impl Builder {
         self.stack.push(Frame::Paragraph { inlines: Vec::new(), implicit: false })
       }
       Tag::Heading { level, .. } => {
+        // A heading may follow text in a tight list item; that text sits in an
+        // implicit paragraph that must close first, or End(Heading) finds the
+        // paragraph on top of the stack and the heading has nowhere to go.
+        self.close_implicit_paragraph();
         self.stack.push(Frame::Heading { level: heading_level(*level), content: Vec::new() })
       }
       Tag::BlockQuote(_) => {
@@ -526,7 +536,7 @@ impl Builder {
       Some(Frame::Root(blocks)) | Some(Frame::BlockQuote(blocks)) | Some(Frame::Item(blocks, _)) => {
         blocks.push(block)
       }
-      _ => {}
+      _ => self.lost = true,
     }
   }
 
@@ -605,6 +615,8 @@ impl Builder {
         let marks = self.current_marks();
         if let Some(inlines) = self.current_inlines() {
           push_text(inlines, text, &marks);
+        } else {
+          self.lost = true;
         }
       }
     }
