@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("Vellora"));
   app.setApplicationDisplayName(QStringLiteral("Vellora"));
-  app.setApplicationVersion(QStringLiteral("0.1.4"));
+  app.setApplicationVersion(QStringLiteral("0.1.5"));
   app.setOrganizationName(QStringLiteral("Vellora Contributors"));
   app.setFont(theme::uiFont(14));
   app.setStyle(QStringLiteral("Fusion"));
