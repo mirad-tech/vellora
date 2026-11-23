@@ -19,6 +19,9 @@ char* vellora_inspect_link(const char* documentPath, const char* href);
 char* vellora_open_link(const char* documentPath, const char* href);
 char* vellora_open_external(const char* url);
 char* vellora_session_matches(const char* path);
+char* vellora_rename(const char* path, const char* newName);
+char* vellora_create_markdown(const char* directory, const char* name);
+char* vellora_remove_empty_markdown(const char* path);
 char* vellora_version();
 char* vellora_splice_text_n(const uint8_t* content, size_t contentLen, const char* edits);
 void vellora_free(char* pointer);
@@ -129,6 +132,18 @@ QJsonObject spliceSegments(const QString& content, const QJsonArray& edits) {
 
 QJsonObject sessionMatches(const QString& path) {
   return consume(vellora_session_matches(utf8(path).constData()));
+}
+
+QJsonObject renameEntry(const QString& path, const QString& newName) {
+  return consume(vellora_rename(utf8(path).constData(), utf8(newName).constData()));
+}
+
+QJsonObject createMarkdown(const QString& directory, const QString& name) {
+  return consume(vellora_create_markdown(utf8(directory).constData(), utf8(name).constData()));
+}
+
+QJsonObject removeEmptyMarkdown(const QString& path) {
+  return consume(vellora_remove_empty_markdown(utf8(path).constData()));
 }
 
 QString version() {

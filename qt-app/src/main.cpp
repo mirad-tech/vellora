@@ -74,6 +74,12 @@ int main(int argc, char** argv) {
   }
 
   MainWindow window;
+#ifdef VELLORA_ENABLE_TEST_HOOKS
+  // Isolated automated launches must not read or change the user's workspace.
+  if (qEnvironmentVariable("VELLORA_TEST_INSTANCE").isEmpty()) window.restoreWorkspace();
+#else
+  window.restoreWorkspace();
+#endif
   QObject::connect(&server, &QLocalServer::newConnection, &window, [&] {
     while (auto* socket = server.nextPendingConnection()) {
       QObject::connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);

@@ -325,7 +325,8 @@ class NativeRegressions : public QObject {
   }
   void emptyStateDisablesDocumentActionsAndRetriesFailedOpen() {
     MainWindow w;w.show();QTest::qWait(10);auto* toolbar=w.findChild<Toolbar*>();auto* modes=toolbar->findChild<SegmentedControl*>();QVERIFY(modes);QVERIFY(!modes->isEnabled());
-    int tools=0;for(auto* button:toolbar->findChildren<QToolButton*>()){if(button->isCheckable()){++tools;QVERIFY(!button->isEnabled());}}QCOMPARE(tools,2);
+    // The sidebar toggle also opens the file panel, so it works without a document.
+    int tools=0;for(auto* button:toolbar->findChildren<QToolButton*>()){if(button->isCheckable()){++tools;QCOMPARE(button->isEnabled(),button->accessibleName()==QStringLiteral("侧边栏"));}}QCOMPARE(tools,2);
     mode(w,1);QVERIFY(!source(w)->isVisible());w.openSearchPanel(false);QVERIFY(!w.findChild<SearchPanel*>()->isVisible());
     const QImage empty=doc(w)->viewport()->grab().toImage();w.openPath(files_.filePath("does-not-exist.md"));waitIdle(w);QVERIFY(!modes->isEnabled());QVERIFY(doc(w)->viewport()->grab().toImage()!=empty);
     const QString error=bridge::openDocument(files_.filePath("does-not-exist.md")).value("message").toString();QVERIFY(!error.isEmpty());bool shown=false;for(auto* label:toolbar->findChildren<QLabel*>())if(label->text()==error)shown=true;QVERIFY(shown);
@@ -518,7 +519,7 @@ class NativeRegressions : public QObject {
     const QStringList markers={"# **Repeat**",QString::fromUtf8(u8"## 中文标题"),"<h3>","### Nested"};
     auto* outline=w.findChild<OutlinePanel*>(); QVERIFY(outline);
     for(int i=0;i<markers.size();++i) {
-      emit w.findChild<Toolbar*>()->outlineRequested();
+      emit w.findChild<Toolbar*>()->sidebarRequested();
       emit outline->headingSelected(i);
       QCOMPARE(source(w)->textCursor().position(),normalized.indexOf(markers.at(i)));
     }

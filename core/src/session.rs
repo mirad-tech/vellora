@@ -8,12 +8,18 @@
 //! * inspection never mutates session, dirty flag, or close intent;
 //! * a failed open never clears session, dirty flag, or a pending close prompt.
 
-use std::path::PathBuf;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use crate::file_access;
 use crate::path_policy;
 use crate::reliable_save::SaveBaseline;
-use crate::types::{CommandResult, DocumentPayload, EmptyPayload, LinkInspectData, MarkdownDocument};
+use crate::rename;
+use crate::types::{
+  CommandResult, DocumentPayload, EmptyPayload, LinkInspectData, MarkdownDocument, RenamePayload,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloseAction {
@@ -160,6 +166,125 @@ pub fn save_document_session(
   // The editor owns dirty state: input received while saving must not lose
   // close protection when an older revision finishes writing.
   baseline.save(session.to_string_lossy().as_ref(), content, conflict_token)
+}
+
+const RENAME_BUSY: &str = "无法重命名：文件或文件夹可能正被其他程序使用，或没有写入权限。";
+
+fn rename_failure<T>(error: &io::Error) -> CommandResult<T> {
+  match error.kind() {
+    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", "文件或文件夹不存在或已被移动。"),
+    io::ErrorKind::AlreadyExists => CommandResult::failure("TARGET_EXISTS", "已存在同名的文件或文件夹。"),
+    io::ErrorKind::PermissionDenied => CommandResult::failure("RENAME_FAILED", RENAME_BUSY),
+    // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION have no stable ErrorKind.
+    _ if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) => {
+      CommandResult::failure("RENAME_FAILED", RENAME_BUSY)
+    }
+    _ => CommandResult::failure("RENAME_FAILED", format!("无法重命名：{error}")),
+  }
+}
+
+/// `document` is inside `from` (checked case-insensitively on Windows), so its
+/// leading components name `from`; keep only the remainder under the new name.
+fn relocate(document: &Path, from: &Path, to: &Path) -> PathBuf {
+  let mut moved = to.to_path_buf();
+  for component in document.components().skip(from.components().count()) {
+    moved.push(component.as_os_str());
+  }
+  moved
+}
+
+/// Renames a Markdown file or a folder in place. When the entry is, or contains,
+/// the open document, the session moves to the new path inside the same critical
+/// section as saves, so a queued save can never target the old name. The save
+/// baseline and any pending conflict token are content digests, not paths: they
+/// stay valid, and the editor keeps its draft, undo history and dirty state.
+pub fn rename_entry_session(
+  state: &SessionState,
+  path: &str,
+  new_name: &str,
+) -> CommandResult<RenamePayload> {
+  let _operation = lock_mutex(&state.document_operation);
+  let trimmed = path.trim();
+  if trimmed.is_empty() {
+    return CommandResult::failure("INVALID_ARGUMENT", "路径无效。");
+  }
+  if Path::new(trimmed).file_name().is_none() {
+    return CommandResult::failure("INVALID_ARGUMENT", "不能重命名磁盘根目录。");
+  }
+  // The entry itself is never followed: renaming a symlink or junction renames
+  // the link, not the folder or file it points to.
+  let (source, own) = match rename::resolve_entry(Path::new(trimmed)) {
+    Ok(entry) => entry,
+    Err(error) => return rename_failure(&error),
+  };
+  let is_link = own.file_type().is_symlink();
+  // What a link points to decides only whether it is renamed as a file or a folder.
+  let metadata = if is_link {
+    match fs::metadata(&source) {
+      Ok(metadata) => metadata,
+      Err(error) => return rename_failure(&error),
+    }
+  } else {
+    own
+  };
+  let is_dir = metadata.is_dir();
+  let supported = is_dir || (metadata.is_file() && file_access::is_markdown_path(&source));
+  if !supported {
+    return CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能重命名 .md、.markdown 文件或文件夹。");
+  }
+  if let Err(message) = rename::validate_new_name(new_name, !is_dir) {
+    return CommandResult::failure("INVALID_NAME", message);
+  }
+  let (Some(parent), Some(old_name)) = (source.parent(), source.file_name()) else {
+    return CommandResult::failure("INVALID_ARGUMENT", "不能重命名磁盘根目录。");
+  };
+  if old_name == std::ffi::OsStr::new(new_name) {
+    return CommandResult::success(RenamePayload {
+      path: source.to_string_lossy().into_owned(),
+      name: new_name.to_string(),
+      is_dir,
+      session_path: None,
+    });
+  }
+
+  // Held across the rename so an open that bypasses `document_operation` cannot
+  // interleave between the disk change and the session update.
+  let mut current = lock_mutex(&state.current_document);
+  // The session holds the opened file with every link resolved, so renaming a
+  // link never moves it.
+  let moves_session = !is_link
+    && current.as_deref().is_some_and(|document| {
+      if is_dir {
+        path_policy::is_path_inside_directory(document, &source)
+      } else {
+        path_policy::paths_equal(document, &source)
+      }
+    });
+  let target = parent.join(new_name);
+  if let Err(error) = rename::rename_no_replace(&source, &target) {
+    return rename_failure(&error);
+  }
+  // The disk now spells the entry exactly as requested, including case-only
+  // renames. Not canonicalized: that would follow a renamed link.
+  let renamed = target;
+  let session_path = if moves_session {
+    current.as_deref().map(|document| relocate(document, &source, &renamed))
+  } else {
+    None
+  };
+  if let Some(moved) = &session_path {
+    *current = Some(moved.clone());
+  }
+  let name = renamed
+    .file_name()
+    .map(|name| name.to_string_lossy().into_owned())
+    .unwrap_or_else(|| new_name.to_string());
+  CommandResult::success(RenamePayload {
+    path: renamed.to_string_lossy().into_owned(),
+    name,
+    is_dir,
+    session_path: session_path.map(|moved| moved.to_string_lossy().into_owned()),
+  })
 }
 
 /// Returns `true` when the app is already interactive and the caller must handle
@@ -451,6 +576,247 @@ mod tests {
     assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "SESSION_MISMATCH"));
     assert_eq!(fs::read_to_string(&path).unwrap(), "original");
     assert_eq!(fs::read_to_string(&target).unwrap(), "target");
+  }
+
+  #[test]
+  fn renaming_the_open_file_moves_the_session_and_keeps_dirty_state() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "original");
+    *lock_mutex(&state.has_unsaved_changes) = true;
+    let renamed = match rename_entry_session(&state, &session, "renamed.md") {
+      CommandResult::Ok { data, .. } => data,
+      other => panic!("{other:?}"),
+    };
+    let moved = renamed.session_path.clone().expect("session moved");
+    assert_eq!(moved, renamed.path);
+    assert_eq!(renamed.name, "renamed.md");
+    assert!(!renamed.is_dir);
+    assert!(!path.exists());
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+    let stale = save_document_session(&state, &session, "draft", None);
+    assert!(matches!(stale, CommandResult::Err { ref code, .. } if code == "SESSION_MISMATCH"));
+    let saved = save_document_session(&state, &moved, "draft", None);
+    assert!(matches!(saved, CommandResult::Ok { .. }), "{saved:?}");
+    assert_eq!(fs::read_to_string(dir.path().join("renamed.md")).unwrap(), "draft");
+    assert!(!path.exists());
+  }
+
+  #[test]
+  fn rename_keeps_a_pending_conflict_token_usable_at_the_new_path() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "original");
+    fs::write(&path, "external").unwrap();
+    let token = match save_document_session(&state, &session, "draft", None) {
+      CommandResult::Err { conflict_token: Some(token), .. } => token,
+      other => panic!("{other:?}"),
+    };
+    let moved = match rename_entry_session(&state, &session, "moved.md") {
+      CommandResult::Ok { data, .. } => data.session_path.unwrap(),
+      other => panic!("{other:?}"),
+    };
+    let result = save_document_session(&state, &moved, "draft", Some(&token));
+    assert!(matches!(result, CommandResult::Ok { .. }), "{result:?}");
+    assert_eq!(fs::read_to_string(dir.path().join("moved.md")).unwrap(), "draft");
+  }
+
+  #[test]
+  fn renaming_a_parent_folder_moves_the_session_with_it() {
+    let dir = tempdir().unwrap();
+    let folder = dir.path().join("drafts");
+    fs::create_dir_all(folder.join("deep")).unwrap();
+    let path = folder.join("deep").join("note.md");
+    let state = SessionState::default();
+    open_session(&state, path.to_str().unwrap(), "original");
+    let renamed = match rename_entry_session(&state, folder.to_str().unwrap(), "published") {
+      CommandResult::Ok { data, .. } => data,
+      other => panic!("{other:?}"),
+    };
+    assert!(renamed.is_dir);
+    let moved = PathBuf::from(renamed.session_path.unwrap());
+    assert!(moved.ends_with(Path::new("published").join("deep").join("note.md")), "{moved:?}");
+    let saved = save_document_session(&state, moved.to_str().unwrap(), "next", None);
+    assert!(matches!(saved, CommandResult::Ok { .. }), "{saved:?}");
+    let published = dir.path().join("published").join("deep").join("note.md");
+    assert_eq!(fs::read_to_string(published).unwrap(), "next");
+    assert!(!folder.exists());
+  }
+
+  #[test]
+  fn rename_never_replaces_an_existing_entry_or_moves_the_session() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("a.md");
+    fs::write(dir.path().join("b.md"), "keep").unwrap();
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "mine");
+    let before = lock_mutex(&state.current_document).clone();
+    let result = rename_entry_session(&state, &session, "b.md");
+    assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "TARGET_EXISTS"), "{result:?}");
+    assert_eq!(fs::read_to_string(dir.path().join("b.md")).unwrap(), "keep");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "mine");
+    assert_eq!(*lock_mutex(&state.current_document), before);
+  }
+
+  #[test]
+  fn renaming_another_file_leaves_the_session_alone() {
+    let dir = tempdir().unwrap();
+    let other = dir.path().join("other.md");
+    fs::write(&other, "other").unwrap();
+    let state = SessionState::default();
+    let session = open_session(&state, dir.path().join("open.md").to_str().unwrap(), "open");
+    let result = rename_entry_session(&state, other.to_str().unwrap(), "elsewhere.md");
+    assert!(
+      matches!(result, CommandResult::Ok { ref data, .. } if data.session_path.is_none()),
+      "{result:?}"
+    );
+    assert_eq!(require_session_document(&state, &session).unwrap(), PathBuf::from(&session));
+    assert!(dir.path().join("elsewhere.md").exists());
+  }
+
+  #[test]
+  fn case_only_rename_of_the_open_file_is_allowed() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "body");
+    let moved = match rename_entry_session(&state, &session, "Note.md") {
+      CommandResult::Ok { data, .. } => data.session_path.unwrap(),
+      other => panic!("{other:?}"),
+    };
+    assert_eq!(Path::new(&moved).file_name().unwrap(), "Note.md");
+    let names: Vec<_> = fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert_eq!(names, vec![std::ffi::OsString::from("Note.md")]);
+    let saved = save_document_session(&state, &moved, "next", None);
+    assert!(matches!(saved, CommandResult::Ok { .. }), "{saved:?}");
+  }
+
+  #[test]
+  fn invalid_names_and_non_markdown_files_are_rejected_without_changes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "body");
+    for name in ["note.txt", "a/b.md", "con.md", "bad?.md", "trailing.md "] {
+      let result = rename_entry_session(&state, &session, name);
+      assert!(
+        matches!(result, CommandResult::Err { ref code, .. } if code == "INVALID_NAME"),
+        "{name}: {result:?}"
+      );
+    }
+    let text = dir.path().join("notes.txt");
+    fs::write(&text, "x").unwrap();
+    let result = rename_entry_session(&state, text.to_str().unwrap(), "notes.md");
+    assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "UNSUPPORTED_FILE_TYPE"));
+    assert!(path.exists() && text.exists());
+    assert_eq!(require_session_document(&state, &session).unwrap(), PathBuf::from(&session));
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn windows_rename_fails_when_file_is_open_without_delete_sharing() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("occupied.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "original");
+    let before = lock_mutex(&state.current_document).clone();
+    // FILE_SHARE_READ only (no FILE_SHARE_DELETE): MoveFileExW must fail with sharing violation.
+    let handle = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+    let result = rename_entry_session(&state, &session, "moved.md");
+    assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "RENAME_FAILED"), "{result:?}");
+    assert!(path.exists());
+    assert!(!dir.path().join("moved.md").exists());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    assert_eq!(*lock_mutex(&state.current_document), before);
+    drop(handle);
+  }
+
+  #[test]
+  fn renaming_an_unrelated_folder_leaves_the_session_alone() {
+    let dir = tempdir().unwrap();
+    let other_dir = dir.path().join("other");
+    fs::create_dir_all(&other_dir).unwrap();
+    let open_path = dir.path().join("open.md");
+    let state = SessionState::default();
+    let session = open_session(&state, open_path.to_str().unwrap(), "open");
+    let result = rename_entry_session(&state, other_dir.to_str().unwrap(), "renamed_dir");
+    assert!(
+      matches!(result, CommandResult::Ok { ref data, .. } if data.is_dir && data.session_path.is_none()),
+      "{result:?}"
+    );
+    assert!(!other_dir.exists());
+    assert!(dir.path().join("renamed_dir").is_dir());
+    assert_eq!(require_session_document(&state, &session).unwrap(), PathBuf::from(&session));
+  }
+
+  #[test]
+  fn renaming_a_prefix_named_folder_does_not_match_sibling_session() {
+    let dir = tempdir().unwrap();
+    let prefix_dir = dir.path().join("a");
+    let sibling_dir = dir.path().join("ab");
+    fs::create_dir_all(&prefix_dir).unwrap();
+    fs::create_dir_all(&sibling_dir).unwrap();
+    let doc_path = sibling_dir.join("doc.md");
+    let state = SessionState::default();
+    let session = open_session(&state, doc_path.to_str().unwrap(), "sibling");
+    let result = rename_entry_session(&state, prefix_dir.to_str().unwrap(), "a_new");
+    assert!(
+      matches!(result, CommandResult::Ok { ref data, .. } if data.is_dir && data.session_path.is_none()),
+      "{result:?}"
+    );
+    assert!(!prefix_dir.exists());
+    assert!(dir.path().join("a_new").is_dir());
+    assert!(doc_path.exists());
+    assert_eq!(require_session_document(&state, &session).unwrap(), PathBuf::from(&session));
+  }
+
+  #[test]
+  fn renaming_a_linked_folder_renames_the_link_not_its_target() {
+    let dir = tempdir().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir_all(&real).unwrap();
+    let doc = real.join("doc.md");
+    let link = dir.path().join("link");
+    if !rename::make_dir_link(&real, &link) {
+      eprintln!("skipped: this system cannot create a directory link");
+      return;
+    }
+    let state = SessionState::default();
+    // Opened through the link: the session reports the real file.
+    let session = open_session(&state, link.join("doc.md").to_str().unwrap(), "body");
+    let result = rename_entry_session(&state, link.to_str().unwrap(), "link2");
+    let data = match result {
+      CommandResult::Ok { data, .. } => data,
+      other => panic!("{other:?}"),
+    };
+    assert!(data.is_dir);
+    assert!(data.session_path.is_none());
+    assert!(Path::new(&data.path).ends_with("link2"), "{data:?}");
+    assert!(real.is_dir(), "the link's target was renamed");
+    assert!(!dir.path().join("real2").exists());
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert!(fs::symlink_metadata(dir.path().join("link2")).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read_to_string(&doc).unwrap(), "body");
+    let saved = save_document_session(&state, &session, "next", None);
+    assert!(matches!(saved, CommandResult::Ok { .. }), "{saved:?}");
+    assert_eq!(fs::read_to_string(&doc).unwrap(), "next");
+  }
+
+  #[test]
+  fn renaming_an_externally_deleted_path_returns_not_found() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("gone.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "original");
+    let before = lock_mutex(&state.current_document).clone();
+    fs::remove_file(&path).unwrap();
+    let result = rename_entry_session(&state, &session, "moved.md");
+    assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "NOT_FOUND"), "{result:?}");
+    assert!(!dir.path().join("moved.md").exists());
+    assert_eq!(*lock_mutex(&state.current_document), before);
   }
 
   #[test]

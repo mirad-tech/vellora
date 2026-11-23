@@ -11,7 +11,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use serde_json::{json, Value};
 use vellora_core::session::{self, SessionState};
 use vellora_core::types::{CommandResult, LinkInspectData};
-use vellora_core::{file_access, image_access, link_access};
+use vellora_core::{file_access, image_access, link_access, rename};
 use vellora_md::{Alignment, Block, Document, Inline, PreservedMarkdown, Table};
 
 static SESSION: std::sync::OnceLock<SessionState> = std::sync::OnceLock::new();
@@ -661,6 +661,73 @@ pub unsafe extern "C" fn vellora_open_external(url: *const c_char) -> *mut c_cha
       std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", target]).spawn().map(|_| ())
     });
     match result {
+      CommandResult::Ok { .. } => json!({ "ok": true }),
+      CommandResult::Err { code, message, .. } => error_json(&code, &message),
+    }
+  })
+}
+
+/// Renames a Markdown file or a folder in place, never replacing an existing entry.
+/// Returns `{ok, path, name, isDir, sessionPath}`; `sessionPath` is the open
+/// document's new path when the rename moved it, otherwise null.
+///
+/// # Safety
+///
+/// `path` and `new_name` must each either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_rename(path: *const c_char, new_name: *const c_char) -> *mut c_char {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    let new_name = unsafe { from_c(new_name) };
+    match session::rename_entry_session(state(), &path, &new_name) {
+      CommandResult::Ok { data, .. } => json!({
+        "ok": true,
+        "path": data.path,
+        "name": data.name,
+        "isDir": data.is_dir,
+        "sessionPath": data.session_path,
+      }),
+      CommandResult::Err { code, message, .. } => error_json(&code, &message),
+    }
+  })
+}
+
+/// Creates an empty Markdown file in `directory` without replacing anything. An
+/// empty `name` picks the first free "未命名.md", "未命名 2.md", ... Returns
+/// `{ok, path, name, realPath}`: `path` keeps the folder as given, links included;
+/// `realPath` is the same file as an opened document reports it.
+///
+/// # Safety
+///
+/// `directory` and `name` must each either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_create_markdown(
+  directory: *const c_char,
+  name: *const c_char,
+) -> *mut c_char {
+  guarded(|| {
+    let directory = unsafe { from_c(directory) };
+    let name = unsafe { from_c(name) };
+    match rename::create_markdown_entry(&directory, &name) {
+      CommandResult::Ok { data, .. } => {
+        json!({ "ok": true, "path": data.path, "name": data.name, "realPath": data.real_path })
+      }
+      CommandResult::Err { code, message, .. } => error_json(&code, &message),
+    }
+  })
+}
+
+/// Removes a Markdown file only while it is still an empty regular file. Used for
+/// a new file the user abandoned; anything with content is kept. Returns `{ok}`.
+///
+/// # Safety
+///
+/// `path` must either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_remove_empty_markdown(path: *const c_char) -> *mut c_char {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    match rename::remove_empty_markdown(&path) {
       CommandResult::Ok { .. } => json!({ "ok": true }),
       CommandResult::Err { code, message, .. } => error_json(&code, &message),
     }

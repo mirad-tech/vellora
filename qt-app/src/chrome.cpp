@@ -846,7 +846,9 @@ OutlinePanel::OutlinePanel(QWidget* parent) : QFrame(parent) {
 void OutlinePanel::applyTheme() {
   const QString borderCss = theme::rgbaCss(theme::border());
   const QString hoverCss = theme::rgbaCss(theme::hover());
-  const QString panelRule = floating_
+  const QString panelRule = embedded_
+      ? QStringLiteral("#outlinePanel { background: transparent; border: 0; }")
+      : floating_
       ? QStringLiteral("#outlinePanel { background: %1; border: 1px solid %2; border-radius: 12px; }")
             .arg(theme::raised().name(), borderCss)
       : QStringLiteral("#outlinePanel { background: %1; border: 0; border-right: 1px solid %2; border-radius: 0; }")
@@ -897,6 +899,21 @@ void OutlinePanel::setFloating(bool floating) {
   } else {
     setGraphicsEffect(nullptr);
   }
+}
+
+void OutlinePanel::setEmbedded(bool embedded) {
+  if (embedded_ == embedded) return;
+  embedded_ = embedded;
+  // Inside the sidebar its tabs name the panel and close it.
+  if (QWidget* header = closeButton_->parentWidget()) header->setVisible(!embedded);
+  if (embedded) {
+    setMinimumWidth(0);
+    setMaximumWidth(QWIDGETSIZE_MAX);
+  } else {
+    setFixedWidth(floating_ ? 248 : 232);
+  }
+  if (auto* box = layout()) box->setContentsMargins(embedded ? QMargins(0, 0, 0, 0) : QMargins(8, 12, 0, 12));
+  applyTheme();
 }
 
 void OutlinePanel::setHeadings(const QJsonArray& headings) {
@@ -984,13 +1001,13 @@ Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
   connect(searchButton_, &QToolButton::clicked, this, &Toolbar::searchRequested);
 
   outlineButton_ = new QToolButton(this);
-  outlineButton_->setAccessibleName(QStringLiteral("目录"));
-  outlineButton_->setToolTip(QStringLiteral("目录"));
+  outlineButton_->setAccessibleName(QStringLiteral("侧边栏"));
+  outlineButton_->setToolTip(QStringLiteral("侧边栏 (Ctrl+\\)"));
   outlineButton_->setCheckable(true);
   outlineButton_->setIconSize(QSize(16, 16));
   outlineButton_->setFixedSize(32, 32);
   outlineButton_->setCursor(Qt::PointingHandCursor);
-  connect(outlineButton_, &QToolButton::clicked, this, &Toolbar::outlineRequested);
+  connect(outlineButton_, &QToolButton::clicked, this, &Toolbar::sidebarRequested);
 
   applyTheme();
   if (auto* hints = QGuiApplication::styleHints()) {
@@ -1103,7 +1120,8 @@ void Toolbar::updateAvailability() {
   mode_->setEnabled(enabled);
   mode_->setCursor(enabled ? Qt::PointingHandCursor : Qt::ForbiddenCursor);
   searchButton_->setEnabled(enabled);
-  outlineButton_->setEnabled(enabled);
+  // The sidebar also holds the file panel, which works without a document.
+  outlineButton_->setEnabled(!busy_);
 }
 void Toolbar::setSaveEnabled(bool enabled) {
   saveButton_->setEnabled(enabled);
@@ -1113,7 +1131,7 @@ void Toolbar::setSaveEnabled(bool enabled) {
     saveButton_->setIcon(enabled ? saveIconMuted_ : saveIconFaint_);
   }
 }
-void Toolbar::setOutlineChecked(bool checked) { outlineButton_->setChecked(checked); }
+void Toolbar::setSidebarChecked(bool checked) { outlineButton_->setChecked(checked); }
 void Toolbar::setSearchChecked(bool checked) { searchButton_->setChecked(checked); }
 
 // ---------------------------------------------------------------- ModalDialog
@@ -1498,3 +1516,5 @@ int ModalDialog::resolveConflict(QWidget* parent, QJsonObject conflict,
   if (previousFocus && current()) previousFocus->setFocus(Qt::OtherFocusReason);
   return result;
 }
+
+QGraphicsEffect* createSurfaceEnterEffect(QWidget* owner) { return new SurfaceEnterEffect(owner); }

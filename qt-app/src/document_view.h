@@ -60,6 +60,12 @@ class DocumentView : public QAbstractScrollArea {
   explicit DocumentView(QWidget* parent = nullptr);
 
   void setPlan(const QJsonObject& plan, const QString& documentPath);
+  // Rebases image and link resolution after the open file, or a folder that
+  // contains it, was renamed in place. The document, undo history, selection
+  // and image caches stay: cache keys are identities only, and every read
+  // re-authorizes the original source against this path.
+  void setDocumentPath(const QString& documentPath);
+  QString documentPath() const { return documentPath_; }
   void setPreviewContext(const QString& markdown);
   void setReadOnly(bool readOnly);
   bool isReadOnly() const { return readOnly_; }

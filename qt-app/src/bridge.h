@@ -47,6 +47,12 @@ QJsonObject openLink(const QString& documentPath, const QString& href);
 QJsonObject openExternal(const QString& url);
 QJsonObject spliceSegments(const QString& content, const QJsonArray& edits);
 QJsonObject sessionMatches(const QString& path);
+// Renames a Markdown file or folder in place and moves the session with it.
+QJsonObject renameEntry(const QString& path, const QString& newName);
+// Creates an empty Markdown file; an empty name picks a free "未命名.md".
+QJsonObject createMarkdown(const QString& directory, const QString& name);
+// Removes an abandoned new file, only while it is still empty.
+QJsonObject removeEmptyMarkdown(const QString& path);
 QString version();
 
 }  // namespace bridge

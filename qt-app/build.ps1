@@ -87,7 +87,9 @@ if ($Test) {
     @{ Project = 'body_layout_regressions'; Output = 'body-layout-tests'; Exe = 'vellora-body-layout-regressions' },
     @{ Project = 'ime_raw_regressions'; Output = 'ime-raw-tests'; Exe = 'vellora-ime-raw-regressions' },
     @{ Project = 'fidelity_regressions'; Output = 'fidelity-tests'; Exe = 'vellora-fidelity-regressions' },
-    @{ Project = 'theme_regressions'; Output = 'theme-tests'; Exe = 'vellora-theme-regressions' }
+    @{ Project = 'theme_regressions'; Output = 'theme-tests'; Exe = 'vellora-theme-regressions' },
+    @{ Project = 'rename_regressions'; Output = 'rename-tests'; Exe = 'vellora-rename-regressions' },
+    @{ Project = 'file_tree_regressions'; Output = 'file-tree-tests'; Exe = 'vellora-file-tree-regressions' }
   )
   foreach ($suite in $suites) {
     Build-QtProject (Join-Path $project ("tests\" + $suite.Project + '.pro')) (Join-Path $BuildRoot $suite.Output)

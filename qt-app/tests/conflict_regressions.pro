@@ -24,3 +24,6 @@ win32-msvc* {
 }
 
 HEADERS += $$PWD/../src/image_decode.h
+
+SOURCES += $$PWD/../src/file_tree_panel.cpp
+HEADERS += $$PWD/../src/file_tree_panel.h

@@ -6,7 +6,9 @@
 #include <QCloseEvent>
 #include <QDragEnterEvent>
 #include <QFileDialog>
+#include <QDir>
 #include <QFileInfo>
+#include <QSettings>
 #include <QFutureWatcher>
 #include <QHash>
 #include <QUrl>
@@ -32,6 +34,7 @@
 #include "bridge.h"
 #include "chrome.h"
 #include "document_view.h"
+#include "file_tree_panel.h"
 #include "source_view.h"
 #include "theme.h"
 
@@ -106,9 +109,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (modalOpen_ || busy_ || opening_ || planning_ || compositionActive()) return;
     const QString path = std::exchange(pendingOpenPath_, QString());
     const bool source = pendingOpenSource_;
+    const bool offerSave = pendingOpenOfferSave_;
     pendingOpenTimer_.stop();
-    openPath(path, source);
+    openPath(path, source, offerSave);
   });
+  treeWorkTimer_.setInterval(40);
+  connect(&treeWorkTimer_, &QTimer::timeout, this, [this] { runTreeWork(true); });
   qApp->installEventFilter(this);
 }
 
@@ -125,9 +131,12 @@ void MainWindow::buildUi() {
   bodyLayout_ = bodyLayout;
   bodyLayout->setContentsMargins(0, 0, 0, 0);
   bodyLayout->setSpacing(0);
-  outline_ = new OutlinePanel(body);
-  outline_->hide();
-  bodyLayout->addWidget(outline_);
+  // Files and outline share one sidebar column behind two tabs.
+  side_ = new SidePanel(body);
+  side_->hide();
+  bodyLayout->addWidget(side_);
+  fileTree_ = side_->files();
+  outline_ = side_->outline();
   content_ = new QWidget(body);
   stack_ = new QStackedLayout(content_);
   stack_->setContentsMargins(0, 0, 0, 0);
@@ -149,7 +158,15 @@ void MainWindow::buildUi() {
   connect(toolbar_, &Toolbar::searchRequested, this, [this] {
     if (search_->isVisible()) closeSearch(); else openSearchPanel(false);
   });
-  connect(toolbar_, &Toolbar::outlineRequested, this, &MainWindow::toggleOutline);
+  connect(toolbar_, &Toolbar::sidebarRequested, this, &MainWindow::toggleSidebar);
+  connect(side_, &SidePanel::closeRequested, this, [this] { setSidebarVisible(false, true); });
+  connect(side_, &SidePanel::tabChosen, this, [this] { saveWorkspace(); });
+  // Queued: the outline tab becomes available from inside refreshIdentity().
+  connect(side_, &SidePanel::currentTabChanged, this, [this] { sidebarShown(); }, Qt::QueuedConnection);
+  connect(fileTree_, &FileTreePanel::openFolderRequested, this, &MainWindow::chooseFolder);
+  connect(fileTree_, &FileTreePanel::fileActivated, this, &MainWindow::openFromTree);
+  connect(fileTree_, &FileTreePanel::renameRequested, this, &MainWindow::renameFromTree);
+  connect(fileTree_, &FileTreePanel::newFileRequested, this, &MainWindow::createFileIn);
   connect(toolbar_, &Toolbar::modeChanged, this, &MainWindow::setMode);
   connect(documentView_, &DocumentView::openRequested, this, &MainWindow::chooseFile);
   connect(documentView_, &DocumentView::linkActivated, this, &MainWindow::openLink);
@@ -202,7 +219,6 @@ void MainWindow::buildUi() {
     positionSearchPanel();
   });
   connect(search_, &SearchPanel::closed, this, &MainWindow::closeSearch);
-  connect(outline_, &OutlinePanel::closeRequested, this, &MainWindow::toggleOutline);
   connect(outline_, &OutlinePanel::headingSelected, this, [this](int index) {
     if (index < 0 || index >= headings_.size()) return;
     if (documentMode_) documentView_->revealHeading(index);
@@ -213,7 +229,7 @@ void MainWindow::buildUi() {
       sourceView_->ensureCursorVisible();
     }
     outline_->setCurrentHeading(index);
-    if (outlineFloating_) { outline_->hide(); toolbar_->setOutlineChecked(false); }
+    if (sideFloating_) setSidebarVisible(false, false);
   });
   connect(documentView_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { updateActiveHeading(); });
   connect(sourceView_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { updateActiveHeading(); });
@@ -249,6 +265,16 @@ bool MainWindow::confirmDiscard() {
              QStringLiteral("放弃更改"), QStringLiteral("继续编辑"), true) == 2;
 }
 
+bool MainWindow::confirmSwitch() {
+  if (!collectDraft()) return false;
+  if (!dirty_) return true;
+  const int answer = ask(QStringLiteral("未保存更改"), QStringLiteral("当前文档有未保存更改。切换前要保存吗？"),
+                         QStringLiteral("保存并切换"), QStringLiteral("继续编辑"), false,
+                         QStringLiteral("放弃更改"));
+  if (answer == 2) return save();
+  return answer == 3;
+}
+
 void MainWindow::notifyIfAsyncIdle() {
   if (!isAsyncBusy()) emit asyncIdle();
 }
@@ -278,7 +304,7 @@ void MainWindow::chooseFile() {
   });
 }
 
-void MainWindow::openPath(const QString& path, bool sourceMode) {
+void MainWindow::openPath(const QString& path, bool sourceMode, bool offerSave) {
   if (path.isEmpty()) return;
   const quint64 request = ++openRequestId_;
   if (modalOpen_ || busy_ || opening_ || planning_) {
@@ -286,6 +312,7 @@ void MainWindow::openPath(const QString& path, bool sourceMode) {
     // before attempting the latest queued path, including when that path fails.
     pendingOpenPath_ = path;
     pendingOpenSource_ = sourceMode;
+    pendingOpenOfferSave_ = offerSave;
     pendingOpenTimer_.start();
     return;
   }
@@ -294,14 +321,14 @@ void MainWindow::openPath(const QString& path, bool sourceMode) {
   if (compositionActive()) {
     // Earlier IME-deferred actions may start a plan. Re-enter the open queue
     // when this request runs instead of dropping it through the generic gate.
-    compositionActions_.append([this, path, sourceMode, request] {
-      if (request == openRequestId_) openPath(path, sourceMode);
+    compositionActions_.append([this, path, sourceMode, offerSave, request] {
+      if (request == openRequestId_) openPath(path, sourceMode, offerSave);
     });
     compositionTimer_.start();
     if (QGuiApplication::inputMethod()) QGuiApplication::inputMethod()->commit();
     return;
   }
-  const bool discard = confirmDiscard();
+  const bool discard = offerSave ? confirmSwitch() : confirmDiscard();
   if (request != openRequestId_) return;
   if (!discard) {
     refreshIdentity();
@@ -309,6 +336,40 @@ void MainWindow::openPath(const QString& path, bool sourceMode) {
     return;
   }
   startOpen([path] { return bridge::openDocument(path); }, sourceMode);
+}
+
+QJsonObject MainWindow::renameEntry(const QString& path, const QString& newName) {
+  // A save, open, plan, prompt or IME composition owns the session path while it
+  // runs. Renaming underneath it would retarget work that has already started.
+  if (modalOpen_ || busy_ || isAsyncBusy() || compositionActive()) {
+    return QJsonObject{{"ok", false}, {"code", "BUSY"},
+                       {"message", QStringLiteral("当前文档正在处理中，请稍后再重命名。")}};
+  }
+  // Windows refuses to rename a folder the file panel is watching.
+  const bool folder = QFileInfo(path).isDir();
+  if (folder) fileTree_->suspendWatching();
+  const QJsonObject result = bridge::renameEntry(path, newName);
+  if (folder) {
+    const bool renamed = result.value("ok").toBool();
+    fileTree_->resumeWatching(renamed ? path : QString(), renamed ? result.value("path").toString() : QString());
+  }
+  const QString sessionPath = result.value("sessionPath").toString();
+  if (result.value("ok").toBool()) {
+    // A new file the user named, or moved with its folder, is theirs to keep.
+    freshFiles_.removeIf([&](const QString& fresh) {
+      return FileTreePanel::samePath(fresh, path) || FileTreePanel::isInside(fresh, path) ||
+             (!sessionPath.isEmpty() && FileTreePanel::samePath(fresh, documentPath_));
+    });
+  }
+  if (!result.value("ok").toBool() || sessionPath.isEmpty() || documentPath_.isEmpty()) return result;
+  // Only the identity changes. applyDocument() would rebuild the view and drop
+  // the draft, undo history and scroll position.
+  documentPath_ = sessionPath;
+  if (!result.value("isDir").toBool()) documentName_ = result.value("name").toString();
+  documentView_->setDocumentPath(sessionPath);
+  refreshIdentity();
+  fileTree_->revealFile(sessionPath);
+  return result;
 }
 
 void MainWindow::startOpen(std::function<QJsonObject()> openDocument, bool sourceMode) {
@@ -372,11 +433,20 @@ void MainWindow::applyDocument(const QJsonObject& payload) {
   searchQuery_.clear();
   sourceMatches_.clear();
   sourceSearchIndex_ = -1;
-  outline_->hide();
-  toolbar_->setOutlineChecked(false);
+  // The sidebar stays open: its file panel is how documents are switched.
   refreshOutline(plan);
+  updateActiveHeading();
   refreshIdentity();
   documentView_->setFocus();
+  fileTree_->revealFile(documentPath_);
+  // Switching away leaves a new file abandoned: remove it while still empty.
+  discardFreshFiles(true);
+  if (!pendingTreeRename_.isEmpty()) {
+    const QString created = std::exchange(pendingTreeRename_, QString());
+    const QString real = std::exchange(pendingTreeRenameReal_, QString());
+    // The tree lists the folder as the user opened it, links included.
+    if (FileTreePanel::samePath(real, documentPath_)) fileTree_->beginRename(created);
+  }
 }
 
 void MainWindow::showSourceMode() { setMode(kModeSource); }
@@ -575,6 +645,8 @@ void MainWindow::refreshIdentity() {
   documentView_->setReadOnly(isAsyncBusy());
   sourceView_->setReadOnly(isAsyncBusy());
   setWindowTitle(QStringLiteral("Vellora"));
+  if (fileTree_) fileTree_->setCurrentFile(documentPath_, dirty_);
+  if (side_) side_->setOutlineAvailable(!documentPath_.isEmpty());
 }
 
 void MainWindow::markDirtyIfNeeded() { collectDraft(false); }
@@ -610,6 +682,7 @@ bool MainWindow::save(QString conflictToken) {
       } else {
         savedMarkdown_ = content;
         savedFeedback_ = true;
+        freshFiles_.removeIf([this](const QString& fresh) { return FileTreePanel::samePath(fresh, documentPath_); });
         // Preserve both view histories and their original segment baselines.
         collectDraft(false);
         failure_.clear();
@@ -640,6 +713,9 @@ bool MainWindow::save(QString conflictToken) {
 }
 
 void MainWindow::showOpenError(const QString& message) {
+  pendingTreeRename_.clear();
+  pendingTreeRenameReal_.clear();
+  discardFreshFiles(true);
   failure_ = message;
   savedFeedback_ = false;
   refreshIdentity();
@@ -873,30 +949,191 @@ void MainWindow::closeSearch() {
   if(!applying_) {if(documentMode_)documentView_->setFocus();else sourceView_->setFocus();}
 }
 
-void MainWindow::toggleOutline() {
-  if(modalOpen_||documentPath_.isEmpty())return;
-  const bool visible=!outline_->isVisible();outline_->setVisible(visible);toolbar_->setOutlineChecked(visible);
-  if(visible){layoutOutline();collectDraft(false);refreshOutlineForDraft();updateActiveHeading();}
-  positionSearchPanel();
-}
-
-void MainWindow::layoutOutline() {
-  if (!body_ || !outline_ || !bodyLayout_) return;
+void MainWindow::layoutSidebar() {
+  if (!body_ || !side_ || !bodyLayout_) return;
+  // The original outline rule: below 1024 px the sidebar floats over the
+  // document, and switching between docked and floating keeps it open or shut.
   const bool floating = width() < 1024;
-  if (floating != outlineFloating_) {
-    const bool wasVisible = outline_->isVisible();
-    outlineFloating_ = floating;
-    if (floating) bodyLayout_->removeWidget(outline_);
-    else bodyLayout_->insertWidget(0, outline_);
-    outline_->setFloating(floating);
-    outline_->setVisible(wasVisible);
+  if (floating != sideFloating_) {
+    const bool wasVisible = !side_->isHidden();
+    sideFloating_ = floating;
+    if (floating) bodyLayout_->removeWidget(side_);
+    else bodyLayout_->insertWidget(0, side_);
+    side_->setFloating(floating);
+    side_->setVisible(wasVisible);
     bodyLayout_->activate();
   }
   if (floating) {
-    outline_->setGeometry(12, 8, qMin(248, qMax(0, body_->width() - 24)), qMax(0, body_->height() - 16));
-    if (outline_->isVisible()) outline_->raise();
+    side_->setGeometry(12, 8, qMin(248, qMax(0, body_->width() - 24)), qMax(0, body_->height() - 16));
+    if (side_->isVisible()) side_->raise();
   }
 }
+
+void MainWindow::setSidebarVisible(bool visible, bool remember) {
+  if (remember) sidePreferred_ = visible;
+  toolbar_->setSidebarChecked(visible);
+  if (side_->isHidden() == !visible) {
+    if (remember) saveWorkspace();
+    return;
+  }
+  if (!visible && side_->isAncestorOf(QApplication::focusWidget())) {
+    if (documentMode_) documentView_->setFocus();
+    else sourceView_->setFocus();
+  }
+  side_->setVisible(visible);
+  if (visible) {
+    layoutSidebar();
+    if (sideFloating_) {
+      side_->raise();
+      side_->focusCurrent();
+    }
+    sidebarShown();
+  }
+  positionSearchPanel();
+  if (remember) saveWorkspace();
+}
+
+void MainWindow::sidebarShown() {
+  // The outline is only kept current while it is on screen.
+  if (applying_ || !outline_->isVisible()) return;
+  collectDraft(false);
+  refreshOutlineForDraft();
+  updateActiveHeading();
+}
+
+void MainWindow::toggleSidebar() {
+  if (modalOpen_) return;
+  setSidebarVisible(side_->isHidden(), true);
+}
+
+void MainWindow::showFiles(bool focus) {
+  if (modalOpen_) return;
+  side_->setCurrentTab(SidePanel::Files);
+  setSidebarVisible(true, true);
+  if (focus) fileTree_->focusTree();
+}
+
+void MainWindow::openFolder(const QString& path) {
+  const QFileInfo info(path);
+  if (path.isEmpty() || !info.isDir()) return;
+  fileTree_->setRootPath(info.absoluteFilePath());
+  showFiles(false);
+  saveWorkspace();
+}
+
+void MainWindow::chooseFolder() {
+  if (modalOpen_) return;
+  QString folder;
+  {
+    QScopedValueRollback<bool> modal(modalOpen_, true);
+    QString start = fileTree_->rootPath();
+    if (start.isEmpty() && !documentPath_.isEmpty())
+      start = QFileInfo(FileTreePanel::normalizedPath(documentPath_)).absolutePath();
+    folder = QFileDialog::getExistingDirectory(this, QStringLiteral("打开文件夹"), start);
+  }
+  if (!folder.isEmpty()) openFolder(folder);
+}
+
+void MainWindow::openFromTree(const QString& path) {
+  if (path.isEmpty()) return;
+  if (sideFloating_) setSidebarVisible(false, false);
+  if (!documentPath_.isEmpty() && FileTreePanel::samePath(path, documentPath_)) return;
+  openPath(path, false, true);
+}
+
+void MainWindow::renameFromTree(const QString& path, const QString& newName) {
+  pendingRenames_.append({path, newName});
+  // Called from inside the rename field's key or focus handling: rename now if
+  // nothing is busy, but leave any dialog until that input event has finished.
+  runTreeWork(false);
+}
+
+void MainWindow::runTreeWork(bool showErrors) {
+  // A dialog, save, open or IME composition owns the session path right now.
+  // Keep the names the user typed and retry when that work ends.
+  while (!pendingRenames_.isEmpty() && !modalOpen_ && !busy_ && !isAsyncBusy() && !compositionActive()) {
+    const PendingRename next = pendingRenames_.takeFirst();
+    const QJsonObject result = renameEntry(next.path, next.name);
+    if (!result.value("ok").toBool()) pendingErrors_ << result.value("message").toString();
+  }
+  // ask() refuses to stack dialogs, so an error waits for any open one to close.
+  if (showErrors) {
+    while (!pendingErrors_.isEmpty() && !modalOpen_) showError(pendingErrors_.takeFirst());
+  }
+  if (pendingRenames_.isEmpty() && pendingErrors_.isEmpty()) {
+    treeWorkTimer_.stop();
+  } else if (!showErrors) {
+    QTimer::singleShot(0, this, [this] { runTreeWork(true); });
+  } else if (!treeWorkTimer_.isActive()) {
+    treeWorkTimer_.start();
+  }
+}
+
+void MainWindow::discardFreshFiles(bool keepCurrent) {
+  QStringList kept;
+  for (const QString& fresh : std::as_const(freshFiles_)) {
+    if (keepCurrent && FileTreePanel::samePath(fresh, documentPath_)) {
+      kept << fresh;
+      continue;
+    }
+    // The core removes it only while it is still an empty regular file.
+    bridge::removeEmptyMarkdown(fresh);
+  }
+  freshFiles_ = kept;
+}
+
+void MainWindow::createFileIn(const QString& directory) {
+  if (directory.isEmpty() || isAsyncBusy()) return;
+  const quint64 request = ++openRequestId_;
+  afterComposition([this, directory, request] {
+    pendingOpenPath_.clear();
+    pendingOpenTimer_.stop();
+    // Ask before anything touches the disk: a declined switch leaves no file.
+    if (!confirmSwitch() || request != openRequestId_) return;
+    const QJsonObject result = bridge::createMarkdown(directory, QString());
+    if (!result.value("ok").toBool()) {
+      showError(result.value("message").toString());
+      return;
+    }
+    const QString path = result.value("path").toString();
+    const QString real = result.value("realPath").toString(path);
+    // Removed again if it is left empty: switched away from, not opened, or closed.
+    freshFiles_ << real;
+    pendingTreeRename_ = path;
+    pendingTreeRenameReal_ = real;
+    // The switch was confirmed above, so open it directly, as chooseFile() does.
+    startOpen([path] { return bridge::openDocument(path); }, false);
+  });
+}
+
+void MainWindow::restoreWorkspace() {
+  settingsEnabled_ = true;
+  QSettings settings;
+  // Without the window size the sidebar would never be wide enough to dock.
+  restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
+  const QString folder = settings.value(QStringLiteral("sidebar/root")).toString();
+  if (!folder.isEmpty() && QFileInfo(folder).isDir()) fileTree_->setRootPath(folder);
+  side_->setCurrentTab(settings.value(QStringLiteral("sidebar/tab")).toString() == QStringLiteral("outline")
+                           ? SidePanel::Outline
+                           : SidePanel::Files);
+  sidePreferred_ = settings.value(QStringLiteral("sidebar/visible"), false).toBool();
+  layoutSidebar();
+  // Decided in showEvent(), once a maximised window has its real width. A
+  // remembered sidebar opens only where it docks, never over the document.
+  restoreSidebarPending_ = sidePreferred_;
+}
+
+void MainWindow::saveWorkspace() {
+  if (!settingsEnabled_) return;
+  QSettings settings;
+  settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
+  settings.setValue(QStringLiteral("sidebar/root"), fileTree_->rootPath());
+  settings.setValue(QStringLiteral("sidebar/visible"), sidePreferred_);
+  settings.setValue(QStringLiteral("sidebar/tab"), side_->preferredTab() == SidePanel::Outline
+                                                       ? QStringLiteral("outline")
+                                                       : QStringLiteral("files"));
+}
+
 void MainWindow::positionSearchPanel() {
   if(!search_->isVisible())return;
   search_->setMaximumWidth(qMax(200,content_->width()-32));
@@ -932,34 +1169,40 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
     QTimer::singleShot(0, this, [this] { avoidSearchPanel(); });
   }
   if ((widget == body_ || widget == content_) && event->type() == QEvent::Resize) {
-    QTimer::singleShot(0, this, [this] { layoutOutline(); positionSearchPanel(); });
+    QTimer::singleShot(0, this, [this] { layoutSidebar(); positionSearchPanel(); });
   }
   if(widget && widget->window()==this && event->type()==QEvent::KeyPress) {
     auto* key=static_cast<QKeyEvent*>(event);
     if(modalOpen_)return false;
     if(compositionActive()&&(key->key()==Qt::Key_Escape||key->key()==Qt::Key_Return))return false;
     if(key->matches(QKeySequence::Open)||key->matches(QKeySequence::Save)||key->matches(QKeySequence::Find)||
-       (key->modifiers()==Qt::ControlModifier&&key->key()==Qt::Key_H)||key->key()==Qt::Key_F6) {
+       (key->modifiers()==Qt::ControlModifier&&key->key()==Qt::Key_H)||key->key()==Qt::Key_F6||
+       (key->modifiers()==(Qt::ControlModifier|Qt::ShiftModifier)&&key->key()==Qt::Key_E)||
+       (key->modifiers()==Qt::ControlModifier&&key->key()==Qt::Key_Backslash)) {
       keyPressEvent(key);return true;
     }
-    if(key->key()==Qt::Key_Escape && !search_->isAncestorOf(widget) && (search_->isVisible()||outline_->isVisible())) {
+    // Esc in the rename field only cancels the rename. A docked sidebar stays.
+    if(key->key()==Qt::Key_Escape && !search_->isAncestorOf(widget) && widget!=fileTree_->renameEditor() &&
+       (search_->isVisible()||(sideFloating_&&side_->isVisible()))) {
       keyPressEvent(key);return true;
     }
   }
-  if(widget&&widget->window()==this&&event->type()==QEvent::MouseButtonPress&&outlineFloating_&&outline_->isVisible()&&!modalOpen_&&
-      !outline_->isAncestorOf(widget)&&widget!=outline_&&!toolbar_->isAncestorOf(widget)) {
-    outline_->hide();toolbar_->setOutlineChecked(false);
+  if(widget&&widget->window()==this&&event->type()==QEvent::MouseButtonPress&&sideFloating_&&side_->isVisible()&&!modalOpen_&&
+      !side_->isAncestorOf(widget)&&widget!=side_&&!toolbar_->isAncestorOf(widget)) {
+    setSidebarVisible(false,false);
   }
   return QMainWindow::eventFilter(watched,event);
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* event) {
   if(modalOpen_){event->ignore();return;}
-  if(event->key()==Qt::Key_Escape){if(compositionActive())return;if(search_->isVisible())closeSearch();else if(outline_->isVisible())toggleOutline();else QMainWindow::keyPressEvent(event);return;}
+  if(event->key()==Qt::Key_Escape){if(compositionActive())return;if(search_->isVisible())closeSearch();else if(sideFloating_&&side_->isVisible())setSidebarVisible(false,false);else QMainWindow::keyPressEvent(event);return;}
   if(event->matches(QKeySequence::Open)){chooseFile();return;}
   if(event->matches(QKeySequence::Save)){afterComposition([this]{save();});return;}
   if(event->matches(QKeySequence::Find)){openSearchPanel(false);return;}
   if(event->modifiers()==Qt::ControlModifier&&event->key()==Qt::Key_H){openSearchPanel(true);return;}
+  if(event->modifiers()==(Qt::ControlModifier|Qt::ShiftModifier)&&event->key()==Qt::Key_E){showFiles(true);return;}
+  if(event->modifiers()==Qt::ControlModifier&&event->key()==Qt::Key_Backslash){toggleSidebar();return;}
   if(event->key()==Qt::Key_F6){setMode(documentMode_?kModeSource:kModeDocument);return;}
   QMainWindow::keyPressEvent(event);
 }
@@ -978,12 +1221,15 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if(answer==2){if(!save()){event->ignore();return;}}
     else if(answer!=3){event->ignore();return;}
   }
+  saveWorkspace();
+  discardFreshFiles(false);
   event->accept();
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
   for(const auto& url:event->mimeData()->urls()) {
     const QString path=url.toLocalFile();
+    if(url.isLocalFile()&&QFileInfo(path).isDir()){event->acceptProposedAction();return;}
     if(url.isLocalFile()&&(path.endsWith(".md",Qt::CaseInsensitive)||path.endsWith(".markdown",Qt::CaseInsensitive))){event->acceptProposedAction();return;}
   }
 }
@@ -991,19 +1237,28 @@ void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
 void MainWindow::dropEvent(QDropEvent* event) {
   for(const auto& url:event->mimeData()->urls()) {
     const QString path=url.toLocalFile();
+    if(url.isLocalFile()&&QFileInfo(path).isDir()){openFolder(path);event->acceptProposedAction();return;}
     if(url.isLocalFile()&&(path.endsWith(".md",Qt::CaseInsensitive)||path.endsWith(".markdown",Qt::CaseInsensitive))){openPath(path);event->acceptProposedAction();return;}
   }
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
-  layoutOutline();
+  layoutSidebar();
   positionSearchPanel();
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
   QMainWindow::showEvent(event);
   syncWindowFrameTheme();
+  if (restoreSidebarPending_) {
+    // Restored geometry, maximised state included, is applied by now.
+    QTimer::singleShot(0, this, [this] {
+      if (!std::exchange(restoreSidebarPending_, false)) return;
+      layoutSidebar();
+      if (sidePreferred_ && !sideFloating_) setSidebarVisible(true, false);
+    });
+  }
 }
 
 void MainWindow::applyTheme() {

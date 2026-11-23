@@ -11,6 +11,7 @@
 #include <QVector>
 #include <QWidget>
 
+class QGraphicsEffect;
 class QLabel;
 class QPropertyAnimation;
 class QVariantAnimation;
@@ -19,6 +20,10 @@ class QPushButton;
 class QToolButton;
 class QVBoxLayout;
 class QScrollArea;
+
+// The floating outline's surface: drop shadow plus the 200 ms enter motion,
+// which respects the system's reduced-motion setting. Shared by the sidebar.
+QGraphicsEffect* createSurfaceEnterEffect(QWidget* owner);
 
 class SegmentedControl : public QWidget {
   Q_OBJECT
@@ -113,6 +118,8 @@ class OutlinePanel : public QFrame {
   void setHeadings(const QJsonArray& headings);
   void setCurrentHeading(int index);
   void setFloating(bool floating);
+  // Inside the sidebar: no own header, frame or fixed width.
+  void setEmbedded(bool embedded);
   void applyTheme();
 
  signals:
@@ -128,6 +135,7 @@ class OutlinePanel : public QFrame {
   QVBoxLayout* list_ = nullptr;
   QVector<int> levels_;
   bool floating_ = false;
+  bool embedded_ = false;
   QVector<QPushButton*> items_;
   int current_ = -1;
 };
@@ -141,7 +149,7 @@ class Toolbar : public QWidget {
   void setBusy(bool busy);
   void setDocumentAvailable(bool available);
   void setSaveEnabled(bool enabled);
-  void setOutlineChecked(bool checked);
+  void setSidebarChecked(bool checked);
   void setSearchChecked(bool checked);
   void applyTheme();
   SegmentedControl* modeSwitch() const { return mode_; }
@@ -153,7 +161,7 @@ class Toolbar : public QWidget {
   void openRequested();
   void saveRequested();
   void searchRequested();
-  void outlineRequested();
+  void sidebarRequested();
   void modeChanged(int mode);
 
  private:

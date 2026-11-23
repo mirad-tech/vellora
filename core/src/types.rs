@@ -111,6 +111,26 @@ pub enum LinkInspectData {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EmptyPayload {}
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EntryPayload {
+  /// The new entry as the caller named its folder, links included, so the file
+  /// tree finds it under the folder it shows.
+  pub path: String,
+  pub name: String,
+  /// The same file with every link resolved, as an opened document reports it.
+  pub real_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamePayload {
+  pub path: String,
+  pub name: String,
+  pub is_dir: bool,
+  /// The open document's new path when the rename moved it; `None` otherwise.
+  pub session_path: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

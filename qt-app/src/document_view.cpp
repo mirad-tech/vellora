@@ -368,7 +368,7 @@ QString fenced(QString text, QString language) {
 
 QTextCharFormat bodyFormat() {
   QTextCharFormat format;
-  format.setFont(theme::uiFont(kBody));
+  format.setFont(theme::bodyFont(kBody));
   return format;
 }
 
@@ -392,12 +392,12 @@ qreal chineseFirstLineIndent(const QString& text) {
   if (text.isEmpty() || text.front().isSpace()) return 0;
   bool chinese = false;
   for (const QChar ch : text) if (ch.script() == QChar::Script_Han) { chinese = true; break; }
-  return chinese ? QFontMetricsF(theme::uiFont(kBody)).horizontalAdvance(QString(2, QChar(0x3000))) : 0;
+  return chinese ? QFontMetricsF(theme::bodyFont(kBody)).horizontalAdvance(QString(2, QChar(0x3000))) : 0;
 }
 
 QTextCharFormat mutedFormat() {
   QTextCharFormat format;
-  format.setFont(theme::uiFont(kBody));
+  format.setFont(theme::bodyFont(kBody));
   return format;
 }
 
@@ -423,7 +423,7 @@ void normalizeBlockImage(QTextCursor& cursor, bool forceInline = false) {
   }
   for(int i=images.size()-1;i>=0;--i) {
     const auto& image=images.at(i); auto format=image.format;
-    format.setFont(theme::uiFont(kBody));
+    format.setFont(theme::bodyFont(kBody));
     format.clearProperty(QTextFormat::ForegroundBrush);
     format.setObjectType(SafeInlineImageObjectType);
     format.setProperty(ImagePathProperty,previous.stringProperty(ImagePathProperty));
@@ -492,7 +492,7 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
   inlineImage->measure = [this](const QTextFormat& format) {
     const QSize size=imageSizes_.value(normalizedImagePath(format.stringProperty(ImagePathProperty)));
     if (format.boolProperty(MissingImageProperty) && !size.isValid()) {
-      const QFontMetricsF metrics(theme::uiFont(13));
+      const QFontMetricsF metrics(theme::bodyFont(13));
       const QString label = QStringLiteral("图片缺失：%1").arg(format.stringProperty(ImageSourceProperty));
       return QSizeF(qMin<qreal>(contentWidth(), metrics.horizontalAdvance(label) + 16), metrics.height() + 8);
     }
@@ -506,7 +506,7 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
       painter->setRenderHint(QPainter::Antialiasing, true);
       painter->setPen(Qt::NoPen); painter->setBrush(theme::dangerBg());
       painter->drawRoundedRect(rect, kRadiusContent, kRadiusContent);
-      painter->setFont(theme::uiFont(13)); painter->setPen(theme::danger());
+      painter->setFont(theme::bodyFont(13)); painter->setPen(theme::danger());
       painter->drawText(rect.adjusted(8, 4, -8, -4), Qt::AlignVCenter | Qt::TextSingleLine,
                         QStringLiteral("图片缺失：%1").arg(format.stringProperty(ImageSourceProperty)));
       painter->restore(); return;
@@ -523,7 +523,7 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
   blockImage->measure=inlineImage->measure;
   document_->documentLayout()->registerHandler(BlockImageObjectType,blockImage);
   document_->setDocumentMargin(0);
-  document_->setDefaultFont(theme::uiFont(kBody));
+  document_->setDefaultFont(theme::bodyFont(kBody));
   highlighter_ = new DocumentThemeHighlighter(document_);
   document_->setUndoRedoEnabled(true);
 
@@ -648,6 +648,14 @@ void DocumentView::setEmptyState() {
 
 void DocumentView::setErrorState(const QString& message) {
   setEmptyState();errorMessage_=message;setAccessibleName(QStringLiteral("重新选择"));setAccessibleDescription(QStringLiteral("打开失败。")+message);viewport()->update();
+}
+
+void DocumentView::setDocumentPath(const QString& documentPath) {
+  if (empty_) return;
+  documentPath_ = documentPath;
+  for (auto& surface : rawSurfaces_) {
+    if (surface.preview) surface.preview->setDocumentPath(documentPath);
+  }
 }
 
 void DocumentView::setReadOnly(bool readOnly) {
@@ -833,7 +841,7 @@ void expandTableSpanGrid(const QJsonArray& spanRows, const QJsonArray& headerRow
 
 void insertInvisibleAnchorText(QTextCursor& target) {
   QTextCharFormat invisible;
-  invisible.setFont(theme::uiFont(1));
+  invisible.setFont(theme::bodyFont(1));
   invisible.setForeground(Qt::transparent);
   target.insertText(QString(QChar(0x200B)), invisible);
 }
@@ -946,7 +954,7 @@ struct DocumentView::BuildContext {
     alt.setProperty(ImageSourceProperty, src);
     alt.setProperty(ImageAltProperty, run.value(QStringLiteral("alt")).toString());
     alt.setProperty(ImageTitleProperty, run.value(QStringLiteral("title")).toString());
-    alt.setFont(theme::uiFont(13));
+    alt.setFont(theme::bodyFont(13));
     applyRunMarks(alt, run);
     alt.setObjectType(SafeInlineImageObjectType);
     alt.setProperty(MissingImageProperty, true);
@@ -1069,7 +1077,7 @@ struct DocumentView::BuildContext {
     format.setLineHeight(100, QTextBlockFormat::ProportionalHeight);
     openBlock(format, segment);
     QTextCharFormat spacer;
-    spacer.setFont(theme::uiFont(1));
+    spacer.setFont(theme::bodyFont(1));
     spacer.setForeground(Qt::transparent);
     spacer.setObjectType(BlockImageObjectType);
     spacer.setProperty(ImagePathProperty, path);
@@ -1114,7 +1122,7 @@ struct DocumentView::BuildContext {
     format.setProperty(HeadingLevelProperty, level);
     openBlock(format, segment);
     QTextCharFormat heading;
-    heading.setFont(theme::uiFont(size, QFont::DemiBold));
+    heading.setFont(theme::bodyFont(size, QFont::DemiBold));
     cursor.setBlockCharFormat(heading);
     insertRuns(cursor, block.value(QStringLiteral("runs")).toArray(), heading);
   }
@@ -1225,7 +1233,7 @@ struct DocumentView::BuildContext {
                                            : QStringLiteral("\u2610  "))
           : ordered ? QStringLiteral("%1. ").arg(start + index)
                     : (depth > 0 ? QStringLiteral("\u25e6  ") : QStringLiteral("\u2022  "));
-      format.setTextIndent(-QFontMetricsF(theme::uiFont(kBody)).horizontalAdvance(marker));
+      format.setTextIndent(-QFontMetricsF(theme::bodyFont(kBody)).horizontalAdvance(marker));
       item.setBlockFormat(format);
       QTextCharFormat markerFormat = bodyFormat();
       markerFormat.setProperty(ListMarkerProperty, true);
@@ -1280,7 +1288,7 @@ struct DocumentView::BuildContext {
     cellCursor.insertBlock(cellBlock);
 
     QTextCharFormat base;
-    base.setFont(theme::uiFont(kBody, headerCell ? QFont::Bold : QFont::Normal));
+    base.setFont(theme::bodyFont(kBody, headerCell ? QFont::Bold : QFont::Normal));
     cellCursor.setBlockCharFormat(base);
     cellCursor.setCharFormat(base);
     const int authoredStart = cellCursor.position();
@@ -1315,8 +1323,8 @@ struct DocumentView::BuildContext {
     }
     const int columns = qMax<qsizetype>(1, header.size());
 
-    QFontMetricsF bodyMetrics(theme::uiFont(kBody));
-    QFontMetricsF boldMetrics(theme::uiFont(kBody, QFont::Bold));
+    QFontMetricsF bodyMetrics(theme::bodyFont(kBody));
+    QFontMetricsF boldMetrics(theme::bodyFont(kBody, QFont::Bold));
     QVector<qreal> natural(columns, 96.0);  // stylesheet min-width: 96px
     auto measure = [&](const QJsonArray& cells) {
       for (int column = 0; column < cells.size() && column < columns; ++column) {
@@ -1549,10 +1557,10 @@ void DocumentView::relayout() {
         if (family.contains(QStringLiteral("Variable"))) variable << family;
       }
       out << "variable families=" << variable.join(QStringLiteral(" | ")) << "\n";
-      const QFontInfo info(theme::uiFont(16));
+      const QFontInfo info(theme::bodyFont(16));
       const QString sample = QStringLiteral(
           "Vellora 用于阅读、直接编辑与源码编辑。这份文档用于对照中文、English、数字 0123456789，以及 强");
-      out << "sample advance=" << QFontMetricsF(theme::uiFont(16)).horizontalAdvance(sample) << "\n";
+      out << "sample advance=" << QFontMetricsF(theme::bodyFont(16)).horizontalAdvance(sample) << "\n";
       out << "font=" << info.family() << " px=" << info.pixelSize() << " weight=" << info.weight()
           << "\n";
       out << "viewport=" << viewport()->width() << "x" << viewport()->height()
@@ -1954,7 +1962,7 @@ void DocumentView::paintTables(QPainter& painter) {
         qreal tx = cellRect.left() + 10;
         for (const TableRun& run : table.cells.at(row).at(column)) {
           QFont font = run.code ? theme::monoFont(14)
-                                : theme::uiFont(16, run.bold ? QFont::Bold : QFont::Normal);
+                                : theme::bodyFont(16, run.bold ? QFont::Bold : QFont::Normal);
           font.setItalic(run.italic);
           font.setStrikeOut(run.strike);
           const QFontMetricsF metrics(font);
@@ -2015,8 +2023,8 @@ void DocumentView::paintEmptyState(QPainter& painter) {
   const QString title = errorMessage_.isEmpty()?QStringLiteral("未打开文件"):QStringLiteral("打开失败");
   const QString hint = errorMessage_.isEmpty()?QStringLiteral("请选择 .md 或 .markdown 文件。"):errorMessage_;
 
-  QFont titleFont = theme::uiFont(15,QFont::DemiBold);
-  QFont hintFont = theme::uiFont(14);
+  QFont titleFont = theme::bodyFont(15,QFont::DemiBold);
+  QFont hintFont = theme::bodyFont(14);
   QFontMetricsF titleMetrics(titleFont);
   QFontMetricsF hintMetrics(hintFont);
   const int iconSize = errorMessage_.isEmpty()?56:0;
@@ -2045,7 +2053,7 @@ void DocumentView::paintEmptyState(QPainter& painter) {
   painter.drawText(QRectF(32,y,width-64,hintHeight),Qt::AlignHCenter|Qt::TextWrapAnywhere,hint);
   y += hintHeight+gap;
 
-  const QFont buttonFont = theme::uiFont(13);
+  const QFont buttonFont = theme::bodyFont(13);
   const QFontMetricsF buttonMetrics(buttonFont);
   const QString buttonText=errorMessage_.isEmpty()?QStringLiteral("打开"):QStringLiteral("重新选择");
   const qreal buttonWidth = buttonMetrics.horizontalAdvance(buttonText) + 24;
@@ -2129,7 +2137,7 @@ void DocumentView::paintEvent(QPaintEvent*) {
     hidden.format.setForeground(Qt::transparent);
     context.selections.append(hidden);
     const int markerEnd = fragment.position() + fragment.length() - block.position();
-    const QFontMetricsF metrics(theme::uiFont(kBody));
+    const QFontMetricsF metrics(theme::bodyFont(kBody));
     QColor colour = format.intProperty(QuoteDepthProperty) > 0 ? theme::muted() : theme::text();
     if (cursor_.hasSelection() && cursor_.selectionStart() <= fragment.position() &&
         cursor_.selectionEnd() > fragment.position()) colour = palette().color(QPalette::HighlightedText);
@@ -2622,7 +2630,7 @@ void restyleBlockFragments(const QTextBlock& block, const QTextBlockFormat& form
     auto character = fragment.charFormat();
     character.setFont(character.boolProperty(InlineCodeProperty) || isCodeBlock
                           ? theme::monoFont(kCode)
-                          : theme::uiFont(size));
+                          : theme::bodyFont(size));
     character.setFontWeight(
         heading || character.boolProperty(MarkBoldProperty) ? QFont::DemiBold : QFont::Normal);
     character.setFontItalic(character.boolProperty(MarkItalicProperty));
@@ -2761,7 +2769,7 @@ bool DocumentView::handleBlockStructureShortcut(QKeyEvent* event, bool editable)
       const QString marker =
           ordered ? QString::number(format.intProperty(ListNumberProperty)) + QStringLiteral(". ")
                   : QStringLiteral("\u2022  ");
-      format.setTextIndent(-QFontMetricsF(theme::uiFont(kBody)).horizontalAdvance(marker));
+      format.setTextIndent(-QFontMetricsF(theme::bodyFont(kBody)).horizontalAdvance(marker));
       QTextCursor item(block);
       item.setBlockFormat(format);
       auto mark = bodyFormat();
@@ -2798,7 +2806,7 @@ bool DocumentView::handleInlineMarkShortcut(QKeyEvent* event, bool editable) {
   const bool enabled = !cursor_.charFormat().boolProperty(property);
   format.setProperty(property, enabled);
   if (property == InlineCodeProperty) {
-    format.setFont(enabled ? theme::monoFont(kCode) : theme::uiFont(kBody));
+    format.setFont(enabled ? theme::monoFont(kCode) : theme::bodyFont(kBody));
     if (enabled) {
       for (int mark : {MarkBoldProperty, MarkItalicProperty, MarkStrikeProperty}) {
         format.setProperty(mark, false);
@@ -3856,7 +3864,7 @@ void DocumentView::splitBlockAtCursor() {
   QTextCharFormat continuation=cursor_.charFormat();
   continuation.clearProperty(ListMarkerProperty);
   if(!splitHeading) {
-    QFont font=continuation.boolProperty(InlineCodeProperty)?theme::monoFont(kCode):theme::uiFont(kBody);
+    QFont font=continuation.boolProperty(InlineCodeProperty)?theme::monoFont(kCode):theme::bodyFont(kBody);
     font.setWeight(continuation.boolProperty(MarkBoldProperty)?QFont::DemiBold:QFont::Normal);
     font.setItalic(continuation.boolProperty(MarkItalicProperty));font.setStrikeOut(continuation.boolProperty(MarkStrikeProperty));
     continuation.setFont(font);

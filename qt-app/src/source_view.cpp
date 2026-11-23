@@ -48,6 +48,9 @@ SourceView::SourceView(QWidget* parent) : QPlainTextEdit(parent) {
   // there is no syntax colouring. Keeping it plain is the 1:1 behaviour.
   document()->setDocumentMargin(0);
   document()->setDefaultFont(theme::monoFont(14));
+  // The stylesheet sets family and size only; hinting comes from the widget
+  // font, so source text follows monoFont() like code in the document.
+  setFont(theme::monoFont(14));
   applyTheme();
   if (auto* hints = QGuiApplication::styleHints()) {
     connect(hints, &QStyleHints::colorSchemeChanged, this, &SourceView::applyTheme);

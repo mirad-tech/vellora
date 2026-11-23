@@ -11,6 +11,7 @@ pub mod launch_args;
 pub mod link_access;
 pub mod path_policy;
 pub mod reliable_save;
+pub mod rename;
 pub mod session;
 pub mod types;
 

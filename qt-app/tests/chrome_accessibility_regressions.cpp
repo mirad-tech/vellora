@@ -35,7 +35,7 @@ class ChromeAccessibilityRegressions : public QObject {
   }
   void iconControlsExposeExactNamesAndStates() {
     Toolbar toolbar;toolbar.setDocumentAvailable(true);toolbar.show();
-    for(const auto& name:{QStringLiteral("查找"),QStringLiteral("目录"),QStringLiteral("打开文件"),QStringLiteral("保存")}) {
+    for(const auto& name:{QStringLiteral("查找"),QStringLiteral("侧边栏"),QStringLiteral("打开文件"),QStringLiteral("保存")}) {
       auto* control=button(toolbar,name);QVERIFY2(control,qPrintable(name));
       auto* ax=QAccessible::queryAccessibleInterface(control);QVERIFY(ax);QCOMPARE(ax->text(QAccessible::Name),name);
     }

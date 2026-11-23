@@ -43,7 +43,7 @@ class BodyLayoutRegressions : public QObject {
     const QString source = text + "\n"; DocumentView view; load(view, source, width);
     const auto block = view.document()->find(QStringLiteral("这是一段")).block(); QVERIFY(block.isValid());
     reportLines(block, QString("chinese-width-%1-indent-%2").arg(width).arg(indent));
-    const qreal twoCharacters = QFontMetricsF(theme::uiFont(16)).horizontalAdvance(QString(QChar(0x3000)).repeated(2));
+    const qreal twoCharacters = QFontMetricsF(theme::bodyFont(16)).horizontalAdvance(QString(QChar(0x3000)).repeated(2));
     QCOMPARE(block.text(), text);
     QVERIFY(qAbs(block.blockFormat().textIndent() - (indent ? 0 : twoCharacters)) <= 0.1);
     auto* layout = block.layout(); QVERIFY(layout->lineCount() > 1);
@@ -51,7 +51,7 @@ class BodyLayoutRegressions : public QObject {
     const qreal advance = first.cursorToX(indent ? 2 : 0) - first.cursorToX(0);
     qInfo() << "explicit-leading-advance" << advance << "contentLeft" << view.contentLeft();
     if (indent) {
-      const qreal expected = QFontMetricsF(theme::uiFont(16)).horizontalAdvance(QString(QChar(0x3000)).repeated(2));
+      const qreal expected = QFontMetricsF(theme::bodyFont(16)).horizontalAdvance(QString(QChar(0x3000)).repeated(2));
       QVERIFY(qAbs(advance - expected) <= 1);
     } else QCOMPARE(advance, qreal(0));
     for (int i = 1; i < layout->lineCount(); ++i) {
@@ -96,7 +96,7 @@ class BodyLayoutRegressions : public QObject {
   void automaticIndentIsLimitedToEligibleRootParagraphs() {
     const QString source = QStringLiteral("普通中文正文\n\n  原始空格中文\n\n&#32;&#32;实体空格中文\n\n　　全角空格中文\n\n# 中文标题\n\n- 中文列表\n\n> 中文引用\n\n```text\n中文代码\n```\n\n| 中文表头 |\n| --- |\n| 中文单元格 |\n\nPlain English paragraph\n");
     DocumentView view; load(view, source);
-    const qreal expected = QFontMetricsF(theme::uiFont(16)).horizontalAdvance(QString(QChar(0x3000)).repeated(2));
+    const qreal expected = QFontMetricsF(theme::bodyFont(16)).horizontalAdvance(QString(QChar(0x3000)).repeated(2));
     const auto ordinary = view.document()->find(QStringLiteral("普通中文正文")).block();
     QVERIFY(qAbs(ordinary.blockFormat().textIndent() - expected) <= 0.1);
     const auto syntaxSpaces = view.document()->find(QStringLiteral("原始空格中文")).block();
@@ -131,7 +131,7 @@ class BodyLayoutRegressions : public QObject {
     DocumentView view; load(view, original);
     QVERIFY(bridge::saveDocument(canonicalPath, draft(view, original), {}).value("ok").toBool()); QCOMPARE(bytes(path), original.toUtf8());
     const auto block = view.document()->find(QStringLiteral("中文正文")).block(); QVERIFY(block.isValid());
-    const qreal automaticIndent = QFontMetricsF(theme::uiFont(16)).horizontalAdvance(prefix);
+    const qreal automaticIndent = QFontMetricsF(theme::bodyFont(16)).horizontalAdvance(prefix);
     const qreal initialIndent = startsWithSpaces ? 0 : automaticIndent;
     QVERIFY(qAbs(block.blockFormat().textIndent() - initialIndent) <= 0.1);
     view.cursor_ = QTextCursor(block); view.setFocus(); view.ensureCaretVisible();
@@ -173,7 +173,7 @@ class BodyLayoutRegressions : public QObject {
     const QString prefix = QString(QChar(0x3000)).repeated(2);
     const QString text = (explicitSpaces ? prefix : QString()) + QStringLiteral("中文引用切换保留文字。");
     const QString original = text + "\n";
-    const qreal ordinaryIndent = explicitSpaces ? 0 : QFontMetricsF(theme::uiFont(16)).horizontalAdvance(prefix);
+    const qreal ordinaryIndent = explicitSpaces ? 0 : QFontMetricsF(theme::bodyFont(16)).horizontalAdvance(prefix);
     QTemporaryDir directory; QVERIFY(directory.isValid()); const QString path = directory.filePath("quote.md");
     QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(original.toUtf8()); file.close();
     const auto opened = bridge::openDocument(path); QVERIFY(opened.value("ok").toBool());

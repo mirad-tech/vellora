@@ -251,6 +251,54 @@ class ThemeRegressions : public QObject {
     const QImage lightModal = dialog.grab().toImage();
     QCOMPARE(lightModal.pixelColor(qRound(12 * dpr), qRound(40 * dpr)), QColor("#ffffff"));
   }
+
+  void readingTextKeepsDesignedOutlinesAcrossThemes() {
+    if (theme::legacyTextRendering()) QSKIP("VELLORA_TEXT_RENDERING=legacy keeps the old rendering");
+    // Reading text from 14 px keeps the designed outline; interface text and
+    // smaller reading text keep the default hinting.
+    QCOMPARE(theme::bodyFont(16).hintingPreference(), QFont::PreferNoHinting);
+    QCOMPARE(theme::bodyFont(14, QFont::DemiBold).hintingPreference(), QFont::PreferNoHinting);
+    QCOMPARE(theme::monoFont(14).hintingPreference(), QFont::PreferNoHinting);
+    QCOMPARE(theme::bodyFont(13).hintingPreference(), QFont::PreferDefaultHinting);
+    QCOMPARE(theme::monoFont(13).hintingPreference(), QFont::PreferDefaultHinting);
+    QCOMPARE(theme::uiFont(16).hintingPreference(), QFont::PreferDefaultHinting);
+    QCOMPARE(theme::uiFont(13).hintingPreference(), QFont::PreferDefaultHinting);
+
+    setScheme(Qt::ColorScheme::Light);
+    const QString original = QStringLiteral(
+        "# Rendering\n\nBody **bold** and `code` text.\n\n| A | B |\n| --- | --- |\n| cell | value |\n\n"
+        "```ts\nconst item = 1;\n```\n");
+    const QString path = fixture(original.toUtf8(), QStringLiteral("text-rendering.md"));
+    DocumentView view;
+    view.resize(820, 700);
+    view.show();
+    view.setPlan(bridge::planFor(original).value("plan").toObject(), path);
+    QCoreApplication::processEvents();
+    QCOMPARE(view.document()->defaultFont().hintingPreference(), QFont::PreferNoHinting);
+    // Every text fragment of 14 px or more is reading text, code included.
+    const auto readingFragmentsUnhinted = [&] {
+      int checked = 0;
+      for (QTextBlock block = view.document()->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+          const QFont font = it.fragment().charFormat().font();
+          if (font.pixelSize() < 14) continue;
+          if (font.hintingPreference() != QFont::PreferNoHinting) return false;
+          ++checked;
+        }
+      }
+      return checked > 3;
+    };
+    QVERIFY(readingFragmentsUnhinted());
+    SourceView source;
+    QCOMPARE(source.font().hintingPreference(), QFont::PreferNoHinting);
+
+    // A theme switch changes colours only.
+    setScheme(Qt::ColorScheme::Dark);
+    QVERIFY(readingFragmentsUnhinted());
+    QCOMPARE(source.font().hintingPreference(), QFont::PreferNoHinting);
+    setScheme(Qt::ColorScheme::Light);
+    QVERIFY(readingFragmentsUnhinted());
+  }
 };
 
 QTEST_MAIN(ThemeRegressions)

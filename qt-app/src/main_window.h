@@ -3,6 +3,7 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QStringList>
 #include <QMainWindow>
 #include <QTextCursor>
 #include <QTimer>
@@ -10,6 +11,8 @@
 #include <functional>
 
 class DocumentView;
+class FileTreePanel;
+class SidePanel;
 class OutlinePanel;
 class QStackedLayout;
 class QHBoxLayout;
@@ -21,7 +24,22 @@ class MainWindow : public QMainWindow {
   Q_OBJECT
  public:
   explicit MainWindow(QWidget* parent = nullptr);
-  void openPath(const QString& path, bool sourceMode = false);
+  // offerSave: the switch came from the file panel, so an unsaved document
+  // offers "保存并切换" next to discarding.
+  void openPath(const QString& path, bool sourceMode = false, bool offerSave = false);
+  // Renames a Markdown file or a folder in place. When it is, or contains, the
+  // open document, the session follows without reopening: the draft, undo
+  // history, dirty state, scroll and selection are kept. Returns the bridge
+  // result ({ok, path, name, isDir, sessionPath} or {ok: false, code, message}).
+  QJsonObject renameEntry(const QString& path, const QString& newName);
+  QString documentPath() const { return documentPath_; }
+  // Shows a folder in the file panel and remembers it for the next launch.
+  void openFolder(const QString& path);
+  void toggleSidebar();
+  // Restores the window size, last folder and sidebar preference. Only the
+  // application's main() calls it; a test that does isolates QSettings first,
+  // so test windows never read or write user settings.
+  void restoreWorkspace();
   void showSourceMode();
   bool splicePendingEdits(QString* content);
   void openSearchPanel(bool replaceMode);
@@ -65,8 +83,18 @@ class MainWindow : public QMainWindow {
   void replaceCurrent();
   void replaceAll();
   void closeSearch();
-  void toggleOutline();
-  void layoutOutline();
+  void layoutSidebar();
+  void setSidebarVisible(bool visible, bool remember);
+  void sidebarShown();
+  void showFiles(bool focus);
+  void chooseFolder();
+  void openFromTree(const QString& path);
+  void renameFromTree(const QString& path, const QString& newName);
+  void createFileIn(const QString& directory);
+  void saveWorkspace();
+  bool confirmSwitch();
+  void runTreeWork(bool showErrors);
+  void discardFreshFiles(bool keepCurrent);
   void positionSearchPanel();
   void avoidSearchPanel();
   void showError(const QString& message);
@@ -88,11 +116,29 @@ class MainWindow : public QMainWindow {
   DocumentView* documentView_ = nullptr;
   SourceView* sourceView_ = nullptr;
   SearchPanel* search_ = nullptr;
+  SidePanel* side_ = nullptr;
   OutlinePanel* outline_ = nullptr;
+  FileTreePanel* fileTree_ = nullptr;
   QWidget* content_ = nullptr;
   QWidget* body_ = nullptr;
   QHBoxLayout* bodyLayout_ = nullptr;
-  bool outlineFloating_ = false;
+  bool sideFloating_ = false;
+  bool sidePreferred_ = false;
+  bool settingsEnabled_ = false;
+  QString pendingTreeRename_;
+  QString pendingTreeRenameReal_;
+  // New files made from the file panel, as the core reports them, until the
+  // user names, saves or keeps working in them. Removed again while still empty.
+  QStringList freshFiles_;
+  bool restoreSidebarPending_ = false;
+  struct PendingRename {
+    QString path;
+    QString name;
+  };
+  // Renames typed in the file panel wait for busy work instead of being dropped.
+  QVector<PendingRename> pendingRenames_;
+  QStringList pendingErrors_;
+  QTimer treeWorkTimer_;
 
   QString documentPath_;
   QString documentName_;
@@ -120,6 +166,7 @@ class MainWindow : public QMainWindow {
   quint64 openRequestId_ = 0;
   QString pendingOpenPath_;
   bool pendingOpenSource_ = false;
+  bool pendingOpenOfferSave_ = false;
   int documentScroll_ = 0;
   int sourceScroll_ = 0;
   int sourceTopInset_ = 32;
