@@ -660,6 +660,7 @@ name = "vellora-core"
 version = "0.1.7"
 dependencies = [
  "base64",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

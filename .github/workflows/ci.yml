@@ -67,3 +67,71 @@ jobs:
       - name: Run full build and regression suites
         shell: pwsh
         run: ./tools/check.ps1 -Full
+
+  linux:
+    name: Linux (Qt 6.8.3 + Rust, AppImage)
+    # The oldest supported Ubuntu runner sets the AppImage's minimum glibc.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libgl1-mesa-dev libegl1 libfontconfig1 libfreetype6 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libdbus-1-3 fonts-noto-core fonts-noto-cjk fonts-dejavu-core file
+
+      - name: Install Qt 6.8.3 (gcc 64-bit)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: 'linux'
+          target: 'desktop'
+          arch: 'linux_gcc_64'
+          modules: 'qtimageformats'
+          cache: 'true'
+
+      - name: Rust formatting and Clippy
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Release packaging rules
+        run: |
+          python installer/tests/test_release_policy.py
+          python installer/tests/test_association_policy.py
+
+      - name: Build and run Rust + Qt regression suites
+        env:
+          QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
+          QT_QPA_PLATFORM: offscreen
+        run: ./qt-app/build.sh --test
+
+      - name: Package AppImage
+        env:
+          QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
+        run: SKIP_BUILD=0 ./installer/linux/package-appimage.sh "$GITHUB_WORKSPACE/dist"
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: vellora-linux-x86_64-appimage
+          path: dist/*.AppImage
+          if-no-files-found: error

@@ -27,10 +27,7 @@ HEADERS += \
     src/theme.h
 
 # Rust core + markdown engine, linked as a static library.
-isEmpty(BRIDGE_DIR): BRIDGE_DIR = $$PWD/../target/release
-PRE_TARGETDEPS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
-LIBS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
-LIBS += -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -loleaut32 -luuid -lsynchronization
+include($$PWD/bridge.pri)
 
 RC_ICONS = $$PWD/../installer/assets/vellora.ico
 VERSION = 0.1.7
@@ -55,3 +52,21 @@ HEADERS += $$PWD/src/file_tree_panel.h
 
 SOURCES += $$PWD/src/app_settings.cpp
 HEADERS += $$PWD/src/app_settings.h
+
+# Linux / BSD: `make install` (honours INSTALL_ROOT) lays out the binary,
+# desktop entry, MIME glob and hicolor icons under PREFIX (default /usr/local).
+unix:!macx {
+    isEmpty(PREFIX): PREFIX = /usr/local
+    target.path = $$PREFIX/bin
+    desktop.files = $$PWD/../installer/linux/vellora.desktop
+    desktop.path = $$PREFIX/share/applications
+    mime.files = $$PWD/../installer/linux/vellora-markdown.xml
+    mime.path = $$PREFIX/share/mime/packages
+    for(size, $$list(16 24 32 48 64 256)) {
+        icon_$${size}.path = $$PREFIX/share/icons/hicolor/$${size}x$${size}/apps
+        icon_$${size}.extra = mkdir -p $$shell_quote($(INSTALL_ROOT)$$PREFIX/share/icons/hicolor/$${size}x$${size}/apps) && $$QMAKE_COPY $$shell_quote($$PWD/../installer/linux/icons/vellora-$${size}.png) $$shell_quote($(INSTALL_ROOT)$$PREFIX/share/icons/hicolor/$${size}x$${size}/apps/vellora.png)
+        # Installed under the theme name "vellora" by the copy above.
+        INSTALLS += icon_$${size}
+    }
+    INSTALLS += target desktop mime
+}

@@ -91,6 +91,33 @@ Get-FileHash -Algorithm SHA256 .\Vellora-0.1.7-portable-x64.zip
 
 打包脚本为 `installer\package-qt.ps1`，另需官方 NSIS，并通过 `-MakeNsis` 指定 `makensis.exe`；Qt 安装须保留上述模块的 SBOM。脚本会生成携带运行依赖的便携目录、安装包和便携版 zip，不自动安装。具体命令、产物及升级规则见[打包与安装说明](installer/README.md)。
 
+### Linux
+
+需要 Rust（stable，`rustup` 或发行版自带 cargo 均可）、C++17 编译器、`make`，以及 Qt 6（qtbase、qtsvg；建议 6.8 LTS，发行版自带的 Qt 6.8 也可）。以 Debian / Ubuntu 为例：
+
+```sh
+sudo apt install build-essential qt6-base-dev qt6-base-dev-tools qt6-svg-dev qmake6
+./qt-app/build.sh --test
+```
+
+脚本优先使用 PATH 中的 `qmake6`，也可用 `QMAKE=/path/to/qt/bin/qmake` 指定其他 Qt。产物位于 `target/qt-release/app/vellora`；`--test` 会在无界面（offscreen）模式下运行 Rust 与 Qt 自动化测试，`--debug`、`--clean` 与 Windows 脚本含义相同。
+
+安装到系统（含 `.desktop` 启动项、`text/markdown` 关联与图标）：
+
+```sh
+PREFIX=/usr/local ./qt-app/build.sh
+sudo make -C target/qt-release/app install
+sudo update-desktop-database; sudo update-mime-database /usr/local/share/mime
+```
+
+打包 AppImage（自动下载 linuxdeploy 及其 Qt 插件，无需 FUSE）：
+
+```sh
+./installer/linux/package-appimage.sh            # 产物在 target/appimage/
+```
+
+AppImage 只能在 glibc 不低于构建机的发行版上运行；CI 在 Ubuntu 22.04 上用 Qt 6.8.3 构建，并上传 x86_64 AppImage 作为构建产物。
+
 ## 许可证
 
 项目使用 [MIT 许可证](LICENSE)。Qt 与其他第三方组件遵循各自许可证，相关声明随安装包提供。

@@ -4,3 +4,8 @@
 # Fixtures and goldens are byte-exact inputs: never normalise their line endings.
 tests/fixtures/** -text
 tests/golden/** -text
+
+# Shell scripts and Linux desktop files must keep LF to run on Linux.
+*.sh text eol=lf
+*.desktop text eol=lf
+installer/linux/icons/*.png binary

@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Vellora
+GenericName=Markdown Editor
+GenericName[zh_CN]=Markdown 编辑器
+Comment=Read and edit Markdown documents
+Comment[zh_CN]=阅读和编辑 Markdown 文档
+Exec=vellora %F
+Icon=vellora
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/markdown;text/x-markdown;
+Keywords=markdown;md;editor;notes;
+StartupNotify=true
+StartupWMClass=vellora

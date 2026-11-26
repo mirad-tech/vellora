@@ -89,10 +89,35 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 /// Renames `from` to `to` without replacing a different existing entry.
+///
+/// On Linux this is atomic: `renameat2(RENAME_NOREPLACE)` refuses an existing
+/// target in the kernel, so nothing can appear between a check and the rename.
+/// macOS uses `renamex_np(RENAME_EXCL)` the same way. Filesystems or kernels that
+/// lack the flag, and a case-only rename that names the same entry on a
+/// case-insensitive filesystem, use the portable check-then-rename below.
 #[cfg(not(windows))]
 pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-  // Portable fallback for a future Linux build. The check and the rename are not
-  // atomic: switch to renameat2(RENAME_NOREPLACE) when that target ships.
+  #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
+  match atomic_rename_no_replace(from, to) {
+    Ok(()) => return Ok(()),
+    // The target exists. Only a different name for the same entry (a case-only
+    // change on a case-insensitive filesystem) may still go ahead.
+    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+      let target = std::fs::symlink_metadata(to)?;
+      if !same_entry(&std::fs::symlink_metadata(from)?, &target) {
+        return Err(error);
+      }
+    }
+    Err(error) if atomic_rename_unsupported(&error) => {}
+    Err(error) => return Err(error),
+  }
+  check_then_rename(from, to)
+}
+
+/// Portable fallback. The check and the rename are not atomic, so it only runs
+/// where the kernel or filesystem cannot refuse an existing target itself.
+#[cfg(not(windows))]
+fn check_then_rename(from: &Path, to: &Path) -> io::Result<()> {
   match std::fs::symlink_metadata(to) {
     Ok(target) => {
       if !same_entry(&std::fs::symlink_metadata(from)?, &target) {
@@ -103,6 +128,54 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     Err(error) => return Err(error),
   }
   std::fs::rename(from, to)
+}
+
+#[cfg(unix)]
+fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
+  use std::os::unix::ffi::OsStrExt;
+  std::ffi::CString::new(path.as_os_str().as_bytes())
+    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
+}
+
+/// Errors that mean "this kernel or filesystem cannot do an exclusive rename",
+/// not "the rename itself failed".
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
+fn atomic_rename_unsupported(error: &io::Error) -> bool {
+  matches!(
+    error.raw_os_error(),
+    Some(code) if code == libc::ENOSYS || code == libc::EINVAL || code == libc::EXDEV
+      || code == libc::ENOTSUP || code == libc::EOPNOTSUPP
+  )
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn atomic_rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+  let (source, target) = (c_path(from)?, c_path(to)?);
+  // The raw syscall avoids depending on glibc 2.28's renameat2() wrapper, so the
+  // binary still loads on older distributions; old kernels answer ENOSYS.
+  let result = unsafe {
+    libc::syscall(
+      libc::SYS_renameat2,
+      libc::AT_FDCWD,
+      source.as_ptr(),
+      libc::AT_FDCWD,
+      target.as_ptr(),
+      libc::RENAME_NOREPLACE,
+    )
+  };
+  if result != 0 {
+    return Err(io::Error::last_os_error());
+  }
+  Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn atomic_rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+  let (source, target) = (c_path(from)?, c_path(to)?);
+  if unsafe { libc::renamex_np(source.as_ptr(), target.as_ptr(), libc::RENAME_EXCL) } != 0 {
+    return Err(io::Error::last_os_error());
+  }
+  Ok(())
 }
 
 #[cfg(unix)]
@@ -347,5 +420,41 @@ mod tests {
     let result = remove_empty_markdown(folder.to_str().unwrap());
     assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "NOT_A_FILE"), "{result:?}");
     assert!(folder.is_dir());
+  }
+
+  #[test]
+  fn rename_no_replace_moves_and_never_replaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.md");
+    let b = dir.path().join("b.md");
+    let c = dir.path().join("c.md");
+    fs::write(&a, "a").unwrap();
+    fs::write(&b, "b").unwrap();
+    let error = rename_no_replace(&a, &b).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{error:?}");
+    assert_eq!(fs::read_to_string(&a).unwrap(), "a");
+    assert_eq!(fs::read_to_string(&b).unwrap(), "b");
+    rename_no_replace(&a, &c).unwrap();
+    assert!(!a.exists());
+    assert_eq!(fs::read_to_string(&c).unwrap(), "a");
+    // A folder is never replaced either, even an empty one.
+    let folder = dir.path().join("folder");
+    fs::create_dir(&folder).unwrap();
+    assert_eq!(rename_no_replace(&c, &folder).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(&c).unwrap(), "a");
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn rename_no_replace_renames_a_link_as_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir(&real).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let renamed = dir.path().join("renamed");
+    rename_no_replace(&link, &renamed).unwrap();
+    assert!(fs::symlink_metadata(&renamed).unwrap().file_type().is_symlink());
+    assert!(real.is_dir());
   }
 }

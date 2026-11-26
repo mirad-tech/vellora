@@ -71,7 +71,7 @@ SourceView::SourceView(QWidget* parent) : QPlainTextEdit(parent) {
 void SourceView::applyTheme() {
   setStyleSheet(QStringLiteral(
                     "QPlainTextEdit { background: %1; color: %2; border: 0;"
-                    "  font-family: 'Cascadia Code', 'Consolas', 'Microsoft YaHei UI';"
+                    "  font-family: %5;"
                     "  font-size: 14px; }"
                     "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
                     "QScrollBar::handle:vertical { background: %3; border-radius: 2px; margin: 0 1px 0 5px; min-height: 32px; }"
@@ -80,7 +80,7 @@ void SourceView::applyTheme() {
                     "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
                     .arg(theme::surface().name(), theme::text().name(),
                          theme::rgbaCss(theme::scrollbarThumb()),
-                         theme::rgbaCss(theme::scrollbarThumbHover())));
+                         theme::rgbaCss(theme::scrollbarThumbHover()), theme::cssFamilies(theme::monoFamilies())));
   updateSelectionPalette();
   viewport()->update();
 }

@@ -4,9 +4,11 @@
 
 #include <QColor>
 #include <QFont>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QPalette>
 #include <QString>
+#include <QStringList>
 #include <QStyleHints>
 #include <QVariant>
 #include <QtGlobal>
@@ -123,12 +125,83 @@ inline int searchWidth() { return 360; }
 inline int documentMaxWidth() { return 800; }
 inline int documentPaddingInline() { return 32; }
 
+// Font families per platform. Windows keeps the designed Segoe UI / Cascadia
+// stack unchanged. Elsewhere the list prefers common open fonts with full CJK
+// coverage and ends with the desktop's own font from QFontDatabase, so a system
+// without any listed family still renders with its configured default.
+// The desktop's configured family (fontconfig / the platform theme), or an
+// empty string before a QGuiApplication exists. Empty entries are dropped.
+inline QString systemFamily(QFontDatabase::SystemFont type) {
+  if (QGuiApplication::instance() == nullptr) return {};
+  return QFontDatabase::systemFont(type).family();
+}
+
+inline QStringList withoutEmpty(QStringList families) {
+  families.removeAll(QString());
+  families.removeDuplicates();
+  return families;
+}
+
+inline QStringList uiFamilies() {
+#if defined(Q_OS_WIN)
+  // Windows exposes the optical-size family as "Segoe UI Variable Text" to
+  // DirectWrite, but Qt's database only knows the base family. Listing the base
+  // family first is what keeps the metrics identical to the legacy stylesheet.
+  return {QStringLiteral("Segoe UI Variable"), QStringLiteral("Segoe UI Variable Text"),
+          QStringLiteral("Segoe UI"), QStringLiteral("Microsoft YaHei UI")};
+#elif defined(Q_OS_MACOS)
+  return {QStringLiteral(".AppleSystemUIFont"), QStringLiteral("Helvetica Neue"),
+          QStringLiteral("PingFang SC"), systemFamily(QFontDatabase::GeneralFont)};
+#else
+  return {QStringLiteral("Noto Sans"),        QStringLiteral("Noto Sans CJK SC"),
+          QStringLiteral("Source Han Sans SC"), QStringLiteral("Cantarell"),
+          QStringLiteral("Ubuntu"),           QStringLiteral("DejaVu Sans"),
+          QStringLiteral("WenQuanYi Micro Hei"),
+          systemFamily(QFontDatabase::GeneralFont)};
+#endif
+}
+
+inline QStringList monoFamilies() {
+#if defined(Q_OS_WIN)
+  return {QStringLiteral("Cascadia Code"), QStringLiteral("Consolas"), QStringLiteral("Microsoft YaHei UI")};
+#elif defined(Q_OS_MACOS)
+  return {QStringLiteral("SF Mono"), QStringLiteral("Menlo"), QStringLiteral("PingFang SC"),
+          systemFamily(QFontDatabase::FixedFont)};
+#else
+  return {QStringLiteral("Cascadia Code"),       QStringLiteral("JetBrains Mono"),
+          QStringLiteral("DejaVu Sans Mono"),    QStringLiteral("Noto Sans Mono"),
+          QStringLiteral("Liberation Mono"),     QStringLiteral("Noto Sans Mono CJK SC"),
+          QStringLiteral("Noto Sans CJK SC"),
+          systemFamily(QFontDatabase::FixedFont)};
+#endif
+}
+
+// The same stacks as CSS font-family values, for style sheets.
+inline QString cssFamilies(const QStringList& families) {
+  QStringList quoted;
+  for (const QString& family : families) {
+    if (family.isEmpty()) continue;
+    QString escaped = family;
+    escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\")).replace(QLatin1Char('\''), QLatin1String("\\'"));
+    quoted << QLatin1Char('\'') + escaped + QLatin1Char('\'');
+  }
+  return quoted.join(QStringLiteral(", "));
+}
+
 inline QString uiFamily() {
+#if defined(Q_OS_WIN)
   return QStringLiteral("Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI");
+#else
+  return withoutEmpty(uiFamilies()).join(QStringLiteral(", "));
+#endif
 }
 
 inline QString monoFamily() {
+#if defined(Q_OS_WIN)
   return QStringLiteral("Cascadia Code, Consolas, Microsoft YaHei UI");
+#else
+  return withoutEmpty(monoFamilies()).join(QStringLiteral(", "));
+#endif
 }
 
 // Text rendering. Full hinting snaps every stem and curve to the pixel grid,
@@ -153,11 +226,7 @@ inline QFont::HintingPreference textHinting(bool reading, int pixelSize) {
 
 inline QFont proportionalFont(int pixelSize, int weight, bool reading) {
   QFont font;
-  // Windows exposes the optical-size family as "Segoe UI Variable Text" to
-  // DirectWrite, but Qt's database only knows the base family. Listing the base
-  // family first is what keeps the metrics identical to the legacy stylesheet.
-  font.setFamilies({QStringLiteral("Segoe UI Variable"), QStringLiteral("Segoe UI Variable Text"),
-                    QStringLiteral("Segoe UI"), QStringLiteral("Microsoft YaHei UI")});
+  font.setFamilies(withoutEmpty(uiFamilies()));
   font.setPixelSize(pixelSize);
   font.setWeight(static_cast<QFont::Weight>(weight));
   font.setHintingPreference(textHinting(reading, pixelSize));
@@ -176,8 +245,7 @@ inline QFont bodyFont(int pixelSize = 16, int weight = QFont::Normal) {
 
 inline QFont monoFont(int pixelSize = 14) {
   QFont font;
-  font.setFamilies({QStringLiteral("Cascadia Code"), QStringLiteral("Consolas"),
-                    QStringLiteral("Microsoft YaHei UI")});
+  font.setFamilies(withoutEmpty(monoFamilies()));
   font.setPixelSize(pixelSize);
   // Code is read like the document: same rules as bodyFont().
   font.setHintingPreference(textHinting(true, pixelSize));

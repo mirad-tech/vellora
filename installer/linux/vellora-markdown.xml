@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Makes sure .md / .markdown resolve to text/markdown on systems whose
+     shared-mime-info predates that type. Current databases already define it;
+     merging an identical glob is harmless. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/markdown">
+    <comment>Markdown document</comment>
+    <sub-class-of type="text/plain"/>
+    <alias type="text/x-markdown"/>
+    <glob pattern="*.md"/>
+    <glob pattern="*.markdown"/>
+  </mime-type>
+</mime-info>
