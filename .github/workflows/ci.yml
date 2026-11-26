@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - linux-port
   pull_request:
 
 permissions:
@@ -152,3 +153,52 @@ jobs:
           name: vellora-linux-${{ matrix.arch }}-appimage
           path: dist/*.AppImage
           if-no-files-found: error
+
+  # One-off helper: attaches the Linux AppImages built by the `linux` job to an
+  # existing GitHub release. Inert unless a push to linux-port carries the
+  # [upload-linux-release] marker in its head commit message, and it never
+  # replaces assets that are already on the release (no --clobber).
+  release-linux:
+    name: Attach Linux AppImages to release v0.1.7
+    needs: linux
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/linux-port' &&
+      contains(github.event.head_commit.message, '[upload-linux-release]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v0.1.7
+    steps:
+      - name: Download AppImage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vellora-linux-*-appimage
+          path: appimages
+          merge-multiple: true
+
+      - name: Upload AppImages to release
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(appimages/*.AppImage)
+          if [ "${#files[@]}" -ne 2 ]; then
+            echo "Expected 2 AppImages, found ${#files[@]}:"; ls -la appimages; exit 1
+          fi
+          ls -la "${files[@]}"
+          existing="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          to_upload=()
+          for f in "${files[@]}"; do
+            name="$(basename "$f")"
+            if grep -Fxq "$name" <<<"$existing"; then
+              echo "Asset $name already on $RELEASE_TAG; skipping."
+            else
+              to_upload+=("$f")
+            fi
+          done
+          if [ "${#to_upload[@]}" -eq 0 ]; then
+            echo "Nothing to upload."; exit 0
+          fi
+          gh release upload "$RELEASE_TAG" "${to_upload[@]}" --repo "$GITHUB_REPOSITORY"
