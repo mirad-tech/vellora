@@ -2,6 +2,7 @@
 #include "image_decode.h"
 #include "document_accessibility.h"
 
+#include <cmath>
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QClipboard>
@@ -1329,9 +1330,15 @@ struct DocumentView::BuildContext {
     auto measure = [&](const QJsonArray& cells) {
       for (int column = 0; column < cells.size() && column < columns; ++column) {
         const QString text = runText(cells.at(column).toArray());
-        const qreal width = (column < header.size() ? boldMetrics : bodyMetrics)
-                                .horizontalAdvance(text) +
-                            20;  // 10px padding each side
+        qreal advance = (column < header.size() ? boldMetrics : bodyMetrics).horizontalAdvance(text);
+#ifndef Q_OS_WIN
+        // Qt lays text out in 26.6 fixed point; a column exactly as wide as the
+        // fractional advance can wrap its last word (seen with Noto Sans bold
+        // headers). Round up and keep one pixel of slack. Windows keeps the
+        // measured width so its layout stays identical to the reference.
+        advance = std::ceil(advance) + 1;
+#endif
+        const qreal width = advance + 20;  // 10px padding each side
         natural[column] = qMax(natural[column], width);
       }
     };

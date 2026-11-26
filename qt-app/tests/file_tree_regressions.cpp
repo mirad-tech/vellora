@@ -148,7 +148,13 @@ class FileTreeRegressions : public QObject {
   }
 
   void pathsFromTheCoreCompareEqual() {
+#ifdef Q_OS_WIN
     QVERIFY(FileTreePanel::samePath(QStringLiteral("\\\\?\\C:\\Notes\\a.md"), QStringLiteral("C:/Notes/a.md")));
+#else
+    QVERIFY(FileTreePanel::samePath(QStringLiteral("/home/u/Notes/./a.md"), QStringLiteral("/home/u/Notes/a.md")));
+    QVERIFY(FileTreePanel::isInside(QStringLiteral("/home/u/Notes/sub/a.md"), QStringLiteral("/home/u/Notes")));
+    QVERIFY(!FileTreePanel::isInside(QStringLiteral("/home/u/Notes2/a.md"), QStringLiteral("/home/u/Notes")));
+#endif
     QVERIFY(FileTreePanel::isInside(QStringLiteral("C:/Notes/sub/a.md"), QStringLiteral("C:/Notes")));
     QVERIFY(!FileTreePanel::isInside(QStringLiteral("C:/Notes2/a.md"), QStringLiteral("C:/Notes")));
     QVERIFY(!FileTreePanel::isInside(QStringLiteral("C:/Notes"), QStringLiteral("C:/Notes")));
@@ -795,6 +801,8 @@ class FileTreeRegressions : public QObject {
     write(QDir(program).filePath(QStringLiteral("portable.txt")), QByteArray());
     app_settings::configure(program);
     QVERIFY(app_settings::isPortable());
+#ifdef Q_OS_WIN
+    // Drive letters and UNC shares exist only on Windows.
     const QChar drive = program.at(0).toUpper();
     const QString other = QStringLiteral("%1:/notes").arg(drive == QLatin1Char('Z') ? QLatin1Char('Y') : QLatin1Char('Z'));
     QCOMPARE(app_settings::storePath(other), other);
@@ -802,6 +810,7 @@ class FileTreeRegressions : public QObject {
     const QString share = QStringLiteral("//server/share/notes");
     QCOMPARE(app_settings::storePath(share), share);
     QCOMPARE(app_settings::resolvePath(share), share);
+#endif
     QCOMPARE(app_settings::storePath(program), QStringLiteral("."));
     QVERIFY(FileTreePanel::samePath(app_settings::resolvePath(QStringLiteral(".")), program));
     QVERIFY(FileTreePanel::samePath(app_settings::resolvePath(app_settings::storePath(QDir(program).filePath(QStringLiteral("../sibling")))),

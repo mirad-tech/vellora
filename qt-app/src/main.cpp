@@ -36,7 +36,14 @@ int main(int argc, char** argv) {
   QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, &app, [&app] {
     app.setPalette(theme::appPalette(app.style()->standardPalette()));
   });
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+  // Matches vellora.desktop, so Wayland compositors and docks group the window
+  // with its launcher, and prefers the installed theme icon.
+  QGuiApplication::setDesktopFileName(QStringLiteral("vellora"));
+  app.setWindowIcon(QIcon::fromTheme(QStringLiteral("vellora"), QIcon(QStringLiteral(":/vellora/icon.ico"))));
+#else
   app.setWindowIcon(QIcon(QStringLiteral(":/vellora/icon.ico")));
+#endif
   const QStringList args = app.arguments();
   QString initialPath;
   for (int i = 1; i < args.size(); ++i) {

@@ -7,10 +7,7 @@ DEFINES += NOMINMAX WIN32_LEAN_AND_MEAN
 INCLUDEPATH += $$PWD/../src
 SOURCES += fidelity_regressions.cpp ../src/bridge.cpp ../src/code_highlight.cpp ../src/document_view.cpp ../src/document_accessibility.cpp
 HEADERS += ../src/bridge.h ../src/code_highlight.h ../src/document_view.h ../src/document_accessibility.h ../src/theme.h
-isEmpty(BRIDGE_DIR): BRIDGE_DIR = $$PWD/../../target/release
-PRE_TARGETDEPS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
-LIBS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
-LIBS += -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -loleaut32 -luuid -lsynchronization
+include($$PWD/../bridge.pri)
 RESOURCES += $$PWD/../resources.qrc
 win32-msvc* {
     QMAKE_LFLAGS += /MANIFESTINPUT:$$shell_quote($$shell_path($$PWD/../windows.manifest))

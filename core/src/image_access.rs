@@ -97,7 +97,7 @@ fn open_authorized_local_image<T>(
     ));
   };
 
-  let file = match fs::File::open(&image_path) {
+  let file = match open_image_file(&image_path) {
     Ok(file) => file,
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
       return Err(CommandResult::failure("IMAGE_NOT_FOUND", "Image no longer exists."));
@@ -220,11 +220,54 @@ fn opened_image_matches(file: &fs::File, expected: &Path) -> bool {
   }
 }
 
-#[cfg(not(windows))]
+// Unix has no handle-to-path call, so check the opened object from both sides:
+// the canonical path must still name exactly the inode that was opened (device
+// and inode match), and on Linux /proc/self/fd must report that same path for
+// the descriptor. A file or parent swapped for a symlink after canonicalize()
+// fails one of the two checks.
+#[cfg(unix)]
+fn opened_image_matches(file: &fs::File, expected: &Path) -> bool {
+  use std::os::unix::fs::MetadataExt;
+  let Ok(opened) = file.metadata() else {
+    return false;
+  };
+  if !fs::canonicalize(expected).is_ok_and(|actual| actual == expected) {
+    return false;
+  }
+  let Ok(named) = fs::metadata(expected) else {
+    return false;
+  };
+  if opened.dev() != named.dev() || opened.ino() != named.ino() {
+    return false;
+  }
+  #[cfg(any(target_os = "linux", target_os = "android"))]
+  {
+    use std::os::unix::io::AsRawFd;
+    // /proc may be absent in a minimal container; the inode check above holds.
+    if let Ok(actual) = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())) {
+      return actual == expected;
+    }
+  }
+  true
+}
+
+#[cfg(not(any(unix, windows)))]
 fn opened_image_matches(_file: &fs::File, expected: &Path) -> bool {
-  // The native Qt target is Windows. Keep the existing portable path check;
-  // Unix callers retain their platform's original race characteristics.
   fs::canonicalize(expected).is_ok_and(|actual| actual == expected)
+}
+
+/// Opens an image for reading. On Unix, O_NONBLOCK keeps a FIFO or device that
+/// carries an image extension from blocking the open (the caller then rejects
+/// anything that is not a regular file); it has no effect on regular files.
+#[cfg(unix)]
+fn open_image_file(path: &Path) -> std::io::Result<fs::File> {
+  use std::os::unix::fs::OpenOptionsExt;
+  fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)
+}
+
+#[cfg(not(unix))]
+fn open_image_file(path: &Path) -> std::io::Result<fs::File> {
+  fs::File::open(path)
 }
 
 /// Data-URL form used by the frozen baseline and by parity tests.
@@ -393,5 +436,37 @@ mod tests {
     let file = fs::File::open(&image).unwrap();
     assert!(opened_image_matches(&file, &fs::canonicalize(&image).unwrap()));
     assert!(!opened_image_matches(&file, &fs::canonicalize(&other).unwrap()));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn fifo_with_an_image_name_is_rejected_without_blocking() {
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("doc.md");
+    fs::write(&doc, "").unwrap();
+    let fifo = dir.path().join("pipe.png");
+    let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    if unsafe { libc::mkfifo(name.as_ptr(), 0o600) } != 0 {
+      eprintln!("skipped: mkfifo is not available here");
+      return;
+    }
+    let result = read_local_image(doc.to_str().unwrap(), "pipe.png", None);
+    assert!(matches!(result, CommandResult::Err { ref code, .. } if code == "IMAGE_NOT_FOUND"), "{result:?}");
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn opened_file_must_be_the_inode_the_path_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("a.png");
+    let other = dir.path().join("b.png");
+    fs::write(&image, b"a").unwrap();
+    fs::write(&other, b"b").unwrap();
+    let expected = fs::canonicalize(&image).unwrap();
+    let file = fs::File::open(&expected).unwrap();
+    assert!(opened_image_matches(&file, &expected));
+    // Swap another file in under the authorized name after the open.
+    fs::rename(&other, &image).unwrap();
+    assert!(!opened_image_matches(&file, &expected));
   }
 }
