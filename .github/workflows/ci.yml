@@ -80,7 +80,9 @@ jobs:
             arch: x86_64
             qt_host: linux
             qt_arch: linux_gcc_64
-          - os: ubuntu-22.04-arm
+          # Qt's own 6.8.3 linux_gcc_arm64 binaries are built on Ubuntu 24.04
+          # (libQt6Gui needs GLIBC_2.38), so the aarch64 build can't run on 22.04.
+          - os: ubuntu-24.04-arm
             arch: aarch64
             qt_host: linux_arm64
             qt_arch: linux_gcc_arm64
