@@ -1,12 +1,60 @@
 #include <QtWidgets>
 #include <QtTest>
 #include <QScopeGuard>
+#ifdef Q_OS_WIN
 #include <qt_windows.h>
+#endif
 #include "bridge.h"
 #include "chrome.h"
 #include "document_view.h"
 #include "main_window.h"
 #include "source_view.h"
+
+namespace {
+// A directory link the document session must not follow: an NTFS junction on
+// Windows (no privilege needed), a symbolic link elsewhere. Returns an error.
+QString makeDirLink(const QString& link, const QString& target) {
+#ifdef Q_OS_WIN
+  auto literal = [](QString value) { return "'" + value.replace("'", "''") + "'"; };
+  const QString command = "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path "
+      + literal(QDir::toNativeSeparators(link)) + " -Target " + literal(QDir::toNativeSeparators(target)) + " | Out-Null";
+  const QByteArray encoded(reinterpret_cast<const char*>(command.utf16()), command.size() * 2);
+  QProcess process;
+  process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
+    args->flags |= CREATE_NO_WINDOW;
+  });
+  const QString powershell = QDir(qEnvironmentVariable("SystemRoot"))
+      .filePath("System32/WindowsPowerShell/v1.0/powershell.exe");
+  process.start(powershell, {"-NoProfile", "-NonInteractive", "-EncodedCommand", QString::fromLatin1(encoded.toBase64())});
+  if (!process.waitForStarted(5000)) return process.errorString();
+  if (!process.waitForFinished(10000)) {
+    process.kill(); process.waitForFinished(5000); return "Junction creation timed out";
+  }
+  if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    return "Junction creation failed: " + QString::fromLocal8Bit(process.readAllStandardError());
+  const DWORD attributes = GetFileAttributesW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(link).utf16()));
+  if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+    return "Fixture directory is not a reparse point";
+  return {};
+#else
+  if (!QFile::link(target, link)) return "Cannot create the fixture symlink";
+  if (!QFileInfo(link).isSymLink()) return "Fixture directory is not a symlink";
+  return {};
+#endif
+}
+
+bool removeDirLink(const QString& link) {
+#ifdef Q_OS_WIN
+  if (RemoveDirectoryW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(link).utf16()))) return true;
+  qWarning() << "Cannot remove test junction" << link << GetLastError();
+  return false;
+#else
+  if (QFile::remove(link)) return true;
+  qWarning() << "Cannot remove test symlink" << link;
+  return false;
+#endif
+}
+}  // namespace
 
 class ConflictRegressions : public QObject {
   Q_OBJECT
@@ -181,8 +229,7 @@ class ConflictRegressions : public QObject {
     QVERIFY(view->hasPendingEdits()); QVERIFY(view->document()->isUndoAvailable());
     QString junction;
     auto cleanup = qScopeGuard([&] {
-      if (!junction.isEmpty() && !RemoveDirectoryW(reinterpret_cast<LPCWSTR>(junction.utf16())))
-        qWarning() << "Cannot remove test junction" << junction << GetLastError();
+      if (!junction.isEmpty()) removeDirLink(junction);
     });
     QString fixtureError;
     int stage = 0;
@@ -196,29 +243,11 @@ class ConflictRegressions : public QObject {
           if (!QDir().rename(sub, originalSub)) {
             fixtureError = "Cannot rename the real fixture directory";
           } else {
-            junction = QDir::toNativeSeparators(sub);
-            auto literal = [](QString value) { return "'" + value.replace("'", "''") + "'"; };
-            const QString command = "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path "
-                + literal(junction) + " -Target " + literal(QDir::toNativeSeparators(outside)) + " | Out-Null";
-            const QByteArray encoded(reinterpret_cast<const char*>(command.utf16()), command.size() * 2);
-            QProcess process;
-            process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
-              args->flags |= CREATE_NO_WINDOW;
-            });
-            const QString powershell = QDir(qEnvironmentVariable("SystemRoot"))
-                .filePath("System32/WindowsPowerShell/v1.0/powershell.exe");
-            process.start(powershell, {"-NoProfile", "-NonInteractive", "-EncodedCommand", QString::fromLatin1(encoded.toBase64())});
-            if (!process.waitForStarted(5000)) fixtureError = process.errorString();
-            else if (!process.waitForFinished(10000)) {
-              fixtureError = "Junction creation timed out"; process.kill(); process.waitForFinished(5000);
-            } else if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-              fixtureError = "Junction creation failed: " + QString::fromLocal8Bit(process.readAllStandardError());
-            } else {
-              const DWORD attributes = GetFileAttributesW(reinterpret_cast<LPCWSTR>(junction.utf16()));
+            fixtureError = makeDirLink(sub, outside);
+            if (QFileInfo(sub).isSymLink() || QFileInfo::exists(sub)) junction = sub;
+            if (fixtureError.isEmpty()) {
               QFile redirected(sub + "/target.md");
-              if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_REPARSE_POINT))
-                fixtureError = "Fixture directory is not a reparse point";
-              else if (!redirected.open(QIODevice::ReadOnly) || redirected.readAll() != outsideBytes)
+              if (!redirected.open(QIODevice::ReadOnly) || redirected.readAll() != outsideBytes)
                 fixtureError = "Junction did not read the isolated outside target";
             }
           }
@@ -248,7 +277,7 @@ class ConflictRegressions : public QObject {
     for (const auto& entry : {qMakePair(originalSub + "/target.md", insideBytes), qMakePair(outside + "/target.md", outsideBytes)}) {
       QFile target(entry.first); QVERIFY(target.open(QIODevice::ReadOnly)); QCOMPARE(target.readAll(), entry.second);
     }
-    QVERIFY(RemoveDirectoryW(reinterpret_cast<LPCWSTR>(junction.utf16())));
+    QVERIFY(removeDirLink(junction));
     junction.clear();
     QVERIFY(QFileInfo::exists(outside + "/target.md"));
   }
