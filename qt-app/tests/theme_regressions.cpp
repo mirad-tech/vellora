@@ -36,6 +36,32 @@ int countColour(const QImage& image, const QColor& target) {
   return count;
 }
 
+// Link text is thin and anti-aliased, so how many pixels land on the exact
+// accent colour depends on the platform's fonts and rasteriser (Ubuntu 24.04
+// arm64 renders far fewer than Windows or Debian). Count pixels within a small
+// per-channel tolerance of the accent instead; the light and dark accents are
+// far apart, so this still tells which palette the links were drawn with.
+int countNearColour(const QImage& image, const QColor& target, int tolerance = 40) {
+  int count = 0;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor c = image.pixelColor(x, y);
+      if (qAbs(c.red() - target.red()) <= tolerance &&
+          qAbs(c.green() - target.green()) <= tolerance &&
+          qAbs(c.blue() - target.blue()) <= tolerance)
+        ++count;
+    }
+  }
+  return count;
+}
+
+QByteArray accentCounts(const QImage& image) {
+  return QStringLiteral("exact accent pixels: %1, near accent pixels: %2")
+      .arg(countColour(image, theme::accent()))
+      .arg(countNearColour(image, theme::accent()))
+      .toUtf8();
+}
+
 void setScheme(Qt::ColorScheme scheme) {
   qApp->setProperty("velloraTestDark", scheme == Qt::ColorScheme::Dark);
   if (auto* hints = QGuiApplication::styleHints()) {
@@ -127,7 +153,7 @@ class ThemeRegressions : public QObject {
     const QImage docImage = doc->viewport()->grab().toImage();
     QVERIFY(countColour(docImage, theme::surface()) > 5000);
     QVERIFY(countColour(docImage, theme::codeBg()) > 200);
-    QVERIFY(countColour(docImage, theme::accent()) > 20);
+    QVERIFY2(countNearColour(docImage, theme::accent()) > 20, accentCounts(docImage).constData());
     QVERIFY(countColour(docImage, theme::danger()) > 10);
 
     const QImage toolbarImage = toolbar->grab().toImage();
@@ -176,7 +202,7 @@ class ThemeRegressions : public QObject {
     QVERIFY(countColour(darkImage, QColor("#1e1e1c")) > 5000);
     QCOMPARE(countColour(darkImage, QColor("#fcfcfb")), 0);
     QVERIFY(countColour(darkImage, theme::codeBg()) > 200);
-    QVERIFY(countColour(darkImage, theme::accent()) > 15);
+    QVERIFY2(countNearColour(darkImage, theme::accent()) > 15, accentCounts(darkImage).constData());
     QCOMPARE(view.palette().color(QPalette::Text), theme::text());
     QCOMPARE(view.palette().color(QPalette::Highlight), theme::selectionBg());
     bool foundDarkLinkFormat = false;
