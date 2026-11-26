@@ -18,7 +18,14 @@
 #include "source_view.h"
 #include "theme.h"
 
-// Hold the shared worker pool at a known boundary without production test hooks.
+// Hold the shared worker pool at a known boundary without production test hooks.
+// The hook-enabled app built beside the suites by build.ps1 / build.sh.
+#ifdef Q_OS_WIN
+static const char* const testAppPath = "../test-app/vellora.exe";
+#else
+static const char* const testAppPath = "../test-app/vellora";
+#endif
+
 class ThreadPoolBarrier {
   QThreadPool* pool_ = QThreadPool::globalInstance();
   int previousMaximum_ = pool_->maxThreadCount();
@@ -983,7 +990,7 @@ class NativeRegressions : public QObject {
     const QString token=QUuid::createUuid().toString();const QString statePath=files_.filePath(token+".json");QProcessEnvironment env=QProcessEnvironment::systemEnvironment();
     env.insert("VELLORA_TEST_INSTANCE",token);env.insert("QT_QPA_PLATFORM","offscreen");env.insert("VELLORA_SCREENSHOT",files_.filePath(token+".png"));env.insert("VELLORA_TEST_STATE",statePath);
     env.remove("VELLORA_DIALOG");env.remove("VELLORA_SEARCH");env.remove("VELLORA_DEBUG_TREE");env.remove("VELLORA_TEST_OBSERVE");
-    QProcess process;process.setProcessEnvironment(env);process.start(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../test-app/vellora.exe"),{path});QVERIFY(process.waitForStarted(5000));
+    QProcess process;process.setProcessEnvironment(env);process.start(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(testAppPath),{path});QVERIFY(process.waitForStarted(5000));
     QVERIFY2(process.waitForFinished(10000),"Structured 2MiB fixture test process did not finish within 10 seconds");QCOMPARE(process.exitStatus(),QProcess::NormalExit);QCOMPARE(process.exitCode(),0);
     const QJsonObject state=QJsonDocument::fromJson(read(statePath)).object();
     QCOMPARE(state.value("title").toString(),QString("Vellora"));
@@ -1249,7 +1256,7 @@ class NativeRegressions : public QObject {
   }
   void singleInstanceForwardsDocument() {
     QFETCH(QString, sourceFlag);
-    const QString executable = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../test-app/vellora.exe");
+    const QString executable = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(testAppPath);
     QVERIFY2(QFileInfo::exists(executable), qPrintable(executable));
     const auto a = fixture("# FIRST_PROCESS\n"); const auto b = fixture("# FORWARDED_DOCUMENT\n");
     const QString token = QUuid::createUuid().toString();

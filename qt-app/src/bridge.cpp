@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include <QStandardPaths>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -182,7 +183,13 @@ int deleteOnDisk(const char* path, int permanent) {
 #ifdef Q_OS_WIN
   return shellDelete(target, permanent != 0);
 #else
-  if (permanent == 0) return QFile::moveToTrash(target) ? 0 : 1;
+  if (permanent == 0) {
+    // QFile::moveToTrash() creates $XDG_DATA_HOME/Trash but not its parent; a
+    // fresh account may not have ~/.local/share yet.
+    const QString dataHome = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (!dataHome.isEmpty()) QDir().mkpath(dataHome);
+    return QFile::moveToTrash(target) ? 0 : 1;
+  }
   const bool removed = QFileInfo(target).isDir() ? QDir(target).removeRecursively() : QFile::remove(target);
   return removed ? 0 : -1;
 #endif
