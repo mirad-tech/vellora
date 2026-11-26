@@ -158,6 +158,8 @@ jobs:
   # existing GitHub release. Inert unless a push to linux-port carries the
   # [upload-linux-release] marker in its head commit message, and it never
   # replaces assets that are already on the release (no --clobber).
+  # v0.1.7 AppImages were attached by run 45857352278 (commit e097d6a); the job
+  # stays here, inert, for reuse with a future release.
   release-linux:
     name: Attach Linux AppImages to release v0.1.7
     needs: linux
