@@ -2,6 +2,8 @@
 // the UI renders or reports; the UI never reads files or opens links itself.
 #pragma once
 
+#include <functional>
+
 #include <QByteArray>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -53,6 +55,24 @@ QJsonObject renameEntry(const QString& path, const QString& newName);
 QJsonObject createMarkdown(const QString& directory, const QString& name);
 // Removes an abandoned new file, only while it is still empty.
 QJsonObject removeEmptyMarkdown(const QString& path);
+// Describes moving `path` into `directory` before it happens: {ok, path, name,
+// isDir, target, sameFolder, containsSession, relativeReferences, examples}.
+// `draft` is the open document's unsaved text, or null. Changes nothing.
+QJsonObject inspectMove(const QString& path, const QString& directory, const QString* draft);
+// Moves a Markdown file or folder into `directory` on the same drive and moves
+// the session with it: {ok, path, name, isDir, sessionPath}.
+QJsonObject moveEntry(const QString& path, const QString& directory);
+// Describes a file or folder before it is deleted: {ok, path, name, isDir,
+// containsSession}. Changes nothing.
+QJsonObject inspectDelete(const QString& path);
+// Deletes a Markdown file or folder and closes the session when the open
+// document goes with it. `permanent` false moves it to the recycle bin and fails
+// with RECYCLE_UNAVAILABLE, touching nothing, where that is not possible.
+QJsonObject deleteEntry(const QString& path, bool permanent);
+// Tests only: replaces the shell for deleteEntry(). Returns 0 when deleted, 1
+// when the entry cannot be recycled, otherwise an HRESULT. Empty restores it.
+using DiskDeleter = std::function<int(const QString& path, bool permanent)>;
+void setDiskDeleterForTesting(DiskDeleter deleter);
 QString version();
 
 }  // namespace bridge

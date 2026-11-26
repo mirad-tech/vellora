@@ -2,11 +2,13 @@
 #include <QtTest>
 #include <QScopeGuard>
 #include <QSettings>
+#include "app_settings.h"
 #include "bridge.h"
 #include "chrome.h"
 #include "document_view.h"
 #include "file_tree_panel.h"
 #include "main_window.h"
+#include "theme.h"
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -21,6 +23,11 @@ class FileTreeRegressions : public QObject {
   QTimer dialogTimer_;
   QStringList dialogs_;
   QString answer_;
+  // Answers for the next dialogs, in order; answer_ applies once these run out.
+  QStringList answers_;
+  // Every deletion handed to the shell, which tests replace.
+  QVector<QPair<QString, bool>> deletes_;
+  bool notRecyclable_ = false;
 
   QString folder() {
     const QString path = files_.filePath(QStringLiteral("case%1").arg(++sequence_));
@@ -76,12 +83,35 @@ class FileTreeRegressions : public QObject {
     QTest::keyClicks(view, "LOCAL");
   }
   static QString draft(MainWindow& w) { QString text; w.splicePendingEdits(&text); return text; }
+  // Drags `source` over the row of `onto` (below the last row when empty) and
+  // drops it there, as the panel's own drag does. True when the drop was taken.
+  static bool dropOn(MainWindow& w, const QString& source, const QString& onto,
+                     const QString& format = FileTreePanel::moveMimeType()) {
+    QTreeView* tree = panel(w)->tree();
+    QPoint position(20, tree->viewport()->height() - 4);
+    if (!onto.isEmpty()) {
+      const QModelIndex index = panel(w)->indexForPath(onto);
+      if (!index.isValid()) qFatal("drop target is not listed");
+      tree->scrollTo(index);
+      position = tree->visualRect(index).center();
+    }
+    QMimeData data;
+    data.setData(format, source.toUtf8());
+    QDragEnterEvent enter(position, Qt::MoveAction, &data, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(tree->viewport(), &enter);
+    QDragMoveEvent hover(position, Qt::MoveAction, &data, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(tree->viewport(), &hover);
+    const bool accepted = hover.isAccepted();
+    QDropEvent drop(QPointF(position), Qt::MoveAction, &data, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(tree->viewport(), &drop);
+    return accepted && drop.isAccepted();
+  }
 
  private slots:
   void initTestCase() {
     QVERIFY(files_.isValid());
     QApplication::setQuitOnLastWindowClosed(false);
-    // Answers each modal once: the button named by answer_, otherwise Esc.
+    // Answers each modal once: the button named by answers_ or answer_, otherwise Esc.
     connect(&dialogTimer_, &QTimer::timeout, this, [this] {
       for (auto* widget : QApplication::allWidgets()) {
         auto* dialog = qobject_cast<ModalDialog*>(widget);
@@ -89,9 +119,10 @@ class FileTreeRegressions : public QObject {
         dialog->setProperty("answered", true);
         QStringList labels;
         QPushButton* target = nullptr;
+        const QString wanted = answers_.isEmpty() ? answer_ : answers_.takeFirst();
         for (auto* button : dialog->findChildren<QPushButton*>()) {
           labels << button->text();
-          if (button->text() == answer_) target = button;
+          if (button->text() == wanted) target = button;
         }
         dialogs_ << labels.join(QLatin1Char('|'));
         if (target) target->click();
@@ -99,8 +130,22 @@ class FileTreeRegressions : public QObject {
       }
     });
     dialogTimer_.start(10);
+    // Never the real recycle bin: deletions are recorded and carried out here.
+    bridge::setDiskDeleterForTesting([this](const QString& path, bool permanent) {
+      deletes_.append({path, permanent});
+      if (notRecyclable_ && !permanent) return 1;
+      const bool removed = QFileInfo(path).isDir() ? QDir(path).removeRecursively() : QFile::remove(path);
+      return removed ? 0 : static_cast<int>(0x80004005u);
+    });
   }
-  void init() { dialogs_.clear(); answer_.clear(); }
+  void cleanupTestCase() { bridge::setDiskDeleterForTesting({}); }
+  void init() {
+    dialogs_.clear();
+    answer_.clear();
+    answers_.clear();
+    deletes_.clear();
+    notRecyclable_ = false;
+  }
 
   void pathsFromTheCoreCompareEqual() {
     QVERIFY(FileTreePanel::samePath(QStringLiteral("\\\\?\\C:\\Notes\\a.md"), QStringLiteral("C:/Notes/a.md")));
@@ -488,25 +533,30 @@ class FileTreeRegressions : public QObject {
     QVERIFY(FileTreePanel::samePath(w.documentPath(), b));
   }
 
-  void openingAFileOutsideTheFolderKeepsTheFolder() {
+  void openingAFileOutsideTheFolderSwitchesToItsFolder() {
     const QString dir = folder();
     const QString other = folder();
     write(dir + "/a.md", "# A\n\nbody\n");
+    write(dir + "/sub/b.md", "# B\n");
     write(other + "/x.md", "# X\n");
     MainWindow w; start(w);
     w.openFolder(dir);
     w.openPath(dir + "/a.md"); waitIdle(w);
     QTRY_VERIFY_WITH_TIMEOUT(listed(w, dir + "/a.md"), 5000);
-    // Ctrl+O, a drop or another window opens a file elsewhere: the folder stays.
+    // Inside the open folder, even in a subfolder: the folder stays.
+    w.openPath(dir + "/sub/b.md"); waitIdle(w);
+    QVERIFY2(FileTreePanel::samePath(panel(w)->rootPath(), dir), qPrintable(panel(w)->rootPath()));
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, dir + "/sub/b.md"), 5000);
+    // Ctrl+O, a drop or another window opens a file elsewhere: the panel follows it.
     w.openPath(other + "/x.md"); waitIdle(w);
     QVERIFY(FileTreePanel::samePath(w.documentPath(), other + "/x.md"));
-    QVERIFY2(FileTreePanel::samePath(panel(w)->rootPath(), dir), qPrintable(panel(w)->rootPath()));
-    QVERIFY(!panel(w)->isCurrentIndex(panel(w)->indexForPath(dir + "/a.md")));
+    QVERIFY2(FileTreePanel::samePath(panel(w)->rootPath(), other), qPrintable(panel(w)->rootPath()));
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, other + "/x.md"), 5000);
+    QVERIFY(panel(w)->isCurrentIndex(panel(w)->indexForPath(other + "/x.md")));
     // The same while the sidebar is closed.
     w.toggleSidebar();
     QVERIFY(!side(w)->isVisible());
     w.openPath(dir + "/a.md"); waitIdle(w);
-    w.openPath(other + "/x.md"); waitIdle(w);
     QVERIFY2(FileTreePanel::samePath(panel(w)->rootPath(), dir), qPrintable(panel(w)->rootPath()));
   }
 
@@ -636,6 +686,479 @@ class FileTreeRegressions : public QObject {
       QVERIFY(!side(w)->isVisible());
       QVERIFY(!named(w.findChild<Toolbar*>(), QStringLiteral("侧边栏"))->isChecked());
     }
+  }
+
+  void portableMarkerKeepsSettingsBesideTheProgram() {
+    const auto reset = qScopeGuard([] { app_settings::configure(QString()); });
+    const QString stick = folder();
+    const QString program = QDir(stick).filePath(QStringLiteral("Vellora"));
+    QVERIFY(QDir().mkpath(program));
+    const QString ini = QDir(program).filePath(QStringLiteral("Vellora.ini"));
+
+    // Without the marker the copy keeps the per-user store and writes nothing here.
+    app_settings::configure(program);
+    QVERIFY(!app_settings::isPortable());
+    QVERIFY(!QFileInfo::exists(ini));
+
+    write(QDir(program).filePath(QStringLiteral("portable.txt")), QByteArray());
+    app_settings::configure(program);
+    QVERIFY(app_settings::isPortable());
+    QVERIFY(FileTreePanel::samePath(app_settings::iniPath(), ini));
+
+    const QString notes = QDir(program).filePath(QStringLiteral("笔记"));
+    write(QDir(notes).filePath(QStringLiteral("a.md")), "# a\n");
+    {
+      MainWindow w;
+      w.restoreWorkspace();
+      w.openFolder(notes);
+    }
+    {
+      // Stored relative to the program, and as written for a program that moves.
+      QSettings stored(ini, QSettings::IniFormat);
+      QCOMPARE(stored.value(QStringLiteral("sidebar/rootRelative")).toString(), QStringLiteral("笔记"));
+      QVERIFY(FileTreePanel::samePath(stored.value(QStringLiteral("sidebar/root")).toString(), notes));
+      QVERIFY(stored.value(QStringLiteral("sidebar/visible")).toBool());
+    }
+
+    // The whole folder moves, as a stick does when it gets another drive letter.
+    const QString moved = QDir(stick).filePath(QStringLiteral("Moved"));
+    QVERIFY(QDir().rename(program, moved));
+    app_settings::configure(moved);
+    QVERIFY(app_settings::isPortable());
+    MainWindow w;
+    w.restoreWorkspace();
+    QVERIFY(FileTreePanel::samePath(panel(w)->rootPath(), QDir(moved).filePath(QStringLiteral("笔记"))));
+  }
+
+  void portableSettingsFindTheFolderAfterTheProgramMovesOnItsDrive() {
+    const auto reset = qScopeGuard([] { app_settings::configure(QString()); });
+    const QString disk = folder();
+    const QString program = QDir(disk).filePath(QStringLiteral("Vellora"));
+    const QString notes = QDir(disk).filePath(QStringLiteral("Notes"));
+    QVERIFY(QDir().mkpath(program));
+    write(QDir(program).filePath(QStringLiteral("portable.txt")), QByteArray());
+    write(QDir(notes).filePath(QStringLiteral("a.md")), "# a\n");
+    app_settings::configure(program);
+    QVERIFY(app_settings::isPortable());
+    {
+      MainWindow w;
+      w.restoreWorkspace();
+      w.openFolder(notes);
+    }
+    {
+      QSettings stored(QDir(program).filePath(QStringLiteral("Vellora.ini")), QSettings::IniFormat);
+      QCOMPARE(stored.value(QStringLiteral("sidebar/rootRelative")).toString(), QStringLiteral("../Notes"));
+    }
+    // Deeper on the same drive: "../Notes" now misses, the folder as written does not.
+    const QString apps = QDir(disk).filePath(QStringLiteral("apps"));
+    QVERIFY(QDir().mkpath(apps));
+    const QString moved = QDir(apps).filePath(QStringLiteral("Vellora"));
+    QVERIFY(QDir().rename(program, moved));
+    app_settings::configure(moved);
+    QVERIFY(app_settings::isPortable());
+    MainWindow w;
+    w.restoreWorkspace();
+    QVERIFY2(FileTreePanel::samePath(panel(w)->rootPath(), notes), qPrintable(panel(w)->rootPath()));
+  }
+
+  void portableMarkerFallsBackWhenSettingsCannotBeSaved() {
+    const auto reset = qScopeGuard([] { app_settings::configure(QString()); });
+    {
+      const QString program = folder();
+      write(QDir(program).filePath(QStringLiteral("portable.txt")), QByteArray());
+      // Something that is not a writable file already holds the name.
+      QVERIFY(QDir(program).mkdir(QStringLiteral("Vellora.ini")));
+      app_settings::configure(program);
+      QVERIFY(!app_settings::isPortable());
+      QVERIFY(app_settings::iniPath().isEmpty());
+    }
+    {
+      const QString program = folder();
+      write(QDir(program).filePath(QStringLiteral("portable.txt")), QByteArray());
+      const QString ini = QDir(program).filePath(QStringLiteral("Vellora.ini"));
+      write(ini, "[sidebar]\nvisible=true\n");
+      QVERIFY(QFile::setPermissions(ini, QFileDevice::ReadOwner | QFileDevice::ReadUser));
+      const auto writable = qScopeGuard([ini] {
+        QFile::setPermissions(ini, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadUser | QFileDevice::WriteUser);
+      });
+      app_settings::configure(program);
+      QVERIFY(!app_settings::isPortable());
+      QCOMPARE(readAll(ini), QStringLiteral("[sidebar]\nvisible=true\n"));
+    }
+  }
+
+  void portableSettingsKeepOtherDrivesAndSharesAbsolute() {
+    const auto reset = qScopeGuard([] { app_settings::configure(QString()); });
+    const QString program = folder();
+    // Outside portable mode every path is stored exactly as written.
+    QCOMPARE(app_settings::storePath(program), program);
+    write(QDir(program).filePath(QStringLiteral("portable.txt")), QByteArray());
+    app_settings::configure(program);
+    QVERIFY(app_settings::isPortable());
+    const QChar drive = program.at(0).toUpper();
+    const QString other = QStringLiteral("%1:/notes").arg(drive == QLatin1Char('Z') ? QLatin1Char('Y') : QLatin1Char('Z'));
+    QCOMPARE(app_settings::storePath(other), other);
+    QCOMPARE(app_settings::resolvePath(other), other);
+    const QString share = QStringLiteral("//server/share/notes");
+    QCOMPARE(app_settings::storePath(share), share);
+    QCOMPARE(app_settings::resolvePath(share), share);
+    QCOMPARE(app_settings::storePath(program), QStringLiteral("."));
+    QVERIFY(FileTreePanel::samePath(app_settings::resolvePath(QStringLiteral(".")), program));
+    QVERIFY(FileTreePanel::samePath(app_settings::resolvePath(app_settings::storePath(QDir(program).filePath(QStringLiteral("../sibling")))),
+                                    QDir::cleanPath(QDir(program).filePath(QStringLiteral("../sibling")))));
+  }
+
+  void openRowIsOneFullWidthStripWithoutFocusRing() {
+    const QString dir = folder();
+    const QString deep = dir + "/sub/deep.md";
+    write(dir + "/a.md", "# A\n");
+    write(deep, "# Deep\n\nbody\n");
+    MainWindow w; start(w);
+    // Open the parent first: opening the file alone would make sub/ the root
+    // and list deep.md at the top level, with no indentation to check.
+    w.openFolder(dir);
+    w.openPath(deep); waitIdle(w);
+    QVERIFY(FileTreePanel::samePath(panel(w)->rootPath(), dir));
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, deep), 5000);
+    QTreeView* tree = panel(w)->tree();
+    const QModelIndex index = panel(w)->indexForPath(deep);
+    QVERIFY(panel(w)->isCurrentIndex(index));
+    // Keyboard focus on the open row: the case that used to draw a ring.
+    tree->setFocus(Qt::OtherFocusReason);
+    tree->setCurrentIndex(index);
+    QTRY_VERIFY(tree->hasFocus());
+    QTest::qWait(30);
+    const QRect item = tree->visualRect(index);
+    // Nested one level below the root: the item starts after two indentation steps.
+    QVERIFY2(item.left() >= 20, qPrintable(QString::number(item.left())));
+    const QImage image = tree->viewport()->grab().toImage();
+    const qreal ratio = image.devicePixelRatio();
+    const auto at = [&](int x, int y) { return image.pixelColor(qRound(x * ratio), qRound(y * ratio)); };
+    const auto sameColour = [](const QColor& a, const QColor& b) {
+      return qAbs(a.red() - b.red()) <= 4 && qAbs(a.green() - b.green()) <= 4 && qAbs(a.blue() - b.blue()) <= 4;
+    };
+    const int y = item.top() + 4;
+    const QColor strip = theme::selectionBg();
+    for (const int x : {4, item.left() / 2, item.left() - 2, item.left() + 2, tree->viewport()->width() - 12}) {
+      QVERIFY2(sameColour(at(x, y), strip), qPrintable(QStringLiteral("x=%1 %2").arg(x).arg(at(x, y).name())));
+    }
+    // No focus ring anywhere on the row.
+    const QColor ring = theme::focusRing();
+    for (int yy = item.top(); yy <= item.bottom(); ++yy) {
+      for (int x = 0; x < tree->viewport()->width(); ++x) {
+        QVERIFY2(!sameColour(at(x, yy), ring), qPrintable(QStringLiteral("ring at %1,%2").arg(x).arg(yy)));
+      }
+    }
+    // Another row under keyboard focus shows only the light tint, never the warm strip.
+    const QModelIndex other = panel(w)->indexForPath(dir + "/a.md");
+    QVERIFY(other.isValid());
+    tree->setCurrentIndex(other);
+    QTest::qWait(30);
+    const QImage after = tree->viewport()->grab().toImage();
+    const QRect otherRect = tree->visualRect(other);
+    const QColor tint = after.pixelColor(qRound(4 * ratio), qRound((otherRect.top() + 4) * ratio));
+    QVERIFY2(!sameColour(tint, strip), qPrintable(tint.name()));
+    QVERIFY(sameColour(after.pixelColor(qRound(4 * ratio), qRound(y * ratio)), strip));
+  }
+
+  void renameFieldCancelsWhenItsRowIsHiddenAndSurvivesScrolling() {
+    const QString dir = folder();
+    const QString nested = dir + "/sub/nested.md";
+    write(nested, "# N\n");
+    for (int i = 0; i < 40; ++i) write(dir + QStringLiteral("/f%1.md").arg(i, 2, 10, QLatin1Char('0')), "# F\n");
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    QTreeView* tree = panel(w)->tree();
+
+    // Collapsing the folder hides the row: the field goes and nothing is renamed.
+    QTRY_VERIFY_WITH_TIMEOUT(panel(w)->indexForPath(dir + "/sub").isValid(), 5000);
+    tree->expand(panel(w)->indexForPath(dir + "/sub"));
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, nested), 5000);
+    panel(w)->beginRename(nested);
+    QTRY_VERIFY_WITH_TIMEOUT(panel(w)->renameEditor(), 5000);
+    QLineEdit* editor = panel(w)->renameEditor();
+    editor->selectAll();
+    QTest::keyClicks(editor, "renamed.md");
+    tree->collapse(panel(w)->indexForPath(dir + "/sub"));
+    QTRY_VERIFY(!panel(w)->renameEditor());
+    QTest::qWait(50);
+    QCOMPARE(dialogs_, QStringList());
+    QVERIFY(QFileInfo::exists(nested));
+    QVERIFY(!QFileInfo::exists(dir + "/sub/renamed.md"));
+    // Focus returns to the list, not to nowhere (only checkable in an active window).
+    if (w.isActiveWindow()) QVERIFY(tree->hasFocus());
+
+    // Scrolling the row away keeps the field and what was typed.
+    const QString first = dir + "/f00.md";
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, first), 5000);
+    tree->scrollToTop();
+    panel(w)->beginRename(first);
+    QTRY_VERIFY_WITH_TIMEOUT(panel(w)->renameEditor(), 5000);
+    editor = panel(w)->renameEditor();
+    editor->selectAll();
+    QTest::keyClicks(editor, "kept.md");
+    tree->scrollToBottom();
+    QTest::qWait(50);
+    QVERIFY(!tree->viewport()->rect().intersects(tree->visualRect(panel(w)->indexForPath(first))));
+    QCOMPARE(panel(w)->renameEditor(), editor);
+    QCOMPARE(editor->text(), QStringLiteral("kept.md"));
+    QVERIFY(QFileInfo::exists(first));
+    tree->scrollToTop();
+    QTest::qWait(50);
+    QVERIFY(editor->isVisible());
+    QTest::keyClick(editor, Qt::Key_Return);
+    QVERIFY(!panel(w)->renameEditor());
+    QCOMPARE(dialogs_, QStringList());
+    QVERIFY(QFileInfo::exists(dir + "/kept.md"));
+    QVERIFY(!QFileInfo::exists(first));
+  }
+
+  void deletingAsksEveryTimeAndMovesTheFileToTheRecycleBin() {
+    const QString dir = folder();
+    const QString a = dir + "/a.md", b = dir + "/b.md";
+    write(a, "# A\n\nbody\n");
+    write(b, "# B\n");
+    MainWindow w; start(w);
+    w.openPath(a); waitIdle(w);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, b), 5000);
+    QTreeView* tree = panel(w)->tree();
+    tree->setCurrentIndex(panel(w)->indexForPath(b));
+
+    // Cancelled: nothing reaches the shell.
+    QTest::keyClick(tree, Qt::Key_Delete);
+    QTRY_COMPARE(dialogs_.size(), 1);
+    QVERIFY2(dialogs_.first().contains(QStringLiteral("删除")), qPrintable(dialogs_.first()));
+    QVERIFY(dialogs_.first().contains(QStringLiteral("取消")));
+    QTest::qWait(50);
+    QVERIFY(deletes_.isEmpty());
+    QVERIFY(QFileInfo::exists(b));
+
+    answer_ = QStringLiteral("删除");
+    QTest::keyClick(tree, Qt::Key_Delete);
+    QTRY_VERIFY(!QFileInfo::exists(b));
+    QCOMPARE(dialogs_.size(), 2);
+    QCOMPARE(deletes_.size(), 1);
+    QVERIFY2(FileTreePanel::samePath(deletes_.first().first, b), qPrintable(deletes_.first().first));
+    QVERIFY(!deletes_.first().second);
+    // Another file was deleted: the open document stays as it was.
+    QVERIFY(FileTreePanel::samePath(w.documentPath(), a));
+    QVERIFY(side(w)->isVisible());
+    QTRY_VERIFY(!panel(w)->indexForPath(b).isValid());
+  }
+
+  void deletingTheOpenDocumentWarnsAboutUnsavedChangesAndCloses() {
+    const QString dir = folder();
+    const QString a = dir + "/a.md", b = dir + "/b.md";
+    write(a, "# A\n\nbody\n");
+    write(b, "# B\n");
+    MainWindow w; start(w);
+    w.openPath(a); waitIdle(w);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, a), 5000);
+    editBody(w);
+    QTreeView* tree = panel(w)->tree();
+    tree->setCurrentIndex(panel(w)->indexForPath(a));
+    answer_ = QStringLiteral("放弃更改并删除");
+    QTest::keyClick(tree, Qt::Key_Delete);
+    QTRY_VERIFY(!QFileInfo::exists(a));
+    QCOMPARE(dialogs_.size(), 1);
+    QVERIFY2(dialogs_.first().contains(QStringLiteral("放弃更改并删除")), qPrintable(dialogs_.first()));
+    QVERIFY(w.documentPath().isEmpty());
+    QVERIFY(!bridge::sessionMatches(a).value("matches").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, b), 5000);
+    // The discarded draft went with the file: closing asks nothing, writes nothing.
+    QVERIFY(w.close());
+    QCOMPARE(dialogs_.size(), 1);
+    QVERIFY(!QFileInfo::exists(a));
+  }
+
+  void unrecyclableEntriesAskAgainBeforeDeletingPermanently() {
+    const QString dir = folder();
+    const QString notes = dir + "/notes";
+    write(notes + "/x.md", "# X\n");
+    write(notes + "/picture.png", "png");
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, notes), 5000);
+    QTreeView* tree = panel(w)->tree();
+    notRecyclable_ = true;
+
+    // Confirmed once, then the permanent deletion is declined: all of it stays.
+    tree->setCurrentIndex(panel(w)->indexForPath(notes));
+    answers_ = {QStringLiteral("删除")};
+    QTest::keyClick(tree, Qt::Key_Delete);
+    QTRY_COMPARE(dialogs_.size(), 2);
+    QVERIFY2(!dialogs_.at(0).contains(QStringLiteral("永久删除")), qPrintable(dialogs_.at(0)));
+    QVERIFY2(dialogs_.at(1).contains(QStringLiteral("永久删除")), qPrintable(dialogs_.at(1)));
+    QTest::qWait(50);
+    QCOMPARE(deletes_.size(), 1);
+    QVERIFY(!deletes_.at(0).second);
+    QVERIFY(QFileInfo::exists(notes + "/x.md"));
+    QVERIFY(QFileInfo::exists(notes + "/picture.png"));
+
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, notes), 5000);
+    tree->setCurrentIndex(panel(w)->indexForPath(notes));
+    answers_ = {QStringLiteral("删除"), QStringLiteral("永久删除")};
+    QTest::keyClick(tree, Qt::Key_Delete);
+    QTRY_VERIFY(!QFileInfo::exists(notes));
+    QCOMPARE(dialogs_.size(), 4);
+    QCOMPARE(deletes_.size(), 3);
+    QVERIFY(!deletes_.at(1).second);
+    QVERIFY(deletes_.at(2).second);
+    // The panel watches its folder again after a folder was deleted.
+    write(dir + "/after.md", "# After\n");
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, dir + "/after.md"), 5000);
+  }
+
+  void deletingAFolderClosesTheDocumentInsideIt() {
+    const QString dir = folder();
+    const QString inner = dir + "/sub/inner.md", keep = dir + "/keep.md";
+    write(inner, "# Inner\n");
+    write(keep, "# Keep\n");
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    w.openPath(inner); waitIdle(w);
+    QVERIFY(FileTreePanel::samePath(w.documentPath(), inner));
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, dir + "/sub"), 5000);
+    QTreeView* tree = panel(w)->tree();
+    tree->setCurrentIndex(panel(w)->indexForPath(dir + "/sub"));
+    answer_ = QStringLiteral("删除");
+    QTest::keyClick(tree, Qt::Key_Delete);
+    QTRY_VERIFY(!QFileInfo::exists(dir + "/sub"));
+    QCOMPARE(dialogs_.size(), 1);
+    QCOMPARE(deletes_.size(), 1);
+    QVERIFY(w.documentPath().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, keep), 5000);
+    QVERIFY(QFileInfo::exists(keep));
+  }
+
+  void draggingAFileOntoAFolderMovesItAndKeepsTheDraft() {
+    const QString dir = folder();
+    const QString a = dir + "/a.md", b = dir + "/b.md", sub = dir + "/sub";
+    write(a, "# A\n\nbody\n");
+    write(b, "# B\n");
+    write(sub + "/x.md", "# X\n");
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    w.openPath(a); waitIdle(w);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, sub), 5000);
+    editBody(w);
+    const QString local = draft(w);
+
+    QVERIFY(dropOn(w, a, sub));
+    QTRY_VERIFY(QFileInfo::exists(sub + "/a.md"));
+    QVERIFY(!QFileInfo::exists(a));
+    QCOMPARE(dialogs_, QStringList());
+    // The open document followed without reopening: same draft, new session path.
+    QVERIFY2(FileTreePanel::samePath(w.documentPath(), sub + "/a.md"), qPrintable(w.documentPath()));
+    QCOMPARE(draft(w), local);
+    QVERIFY(bridge::sessionMatches(w.documentPath()).value("matches").toBool());
+
+    // Dropped on a file row: it goes into that file's folder.
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, sub + "/x.md"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, b), 5000);
+    QVERIFY(dropOn(w, b, sub + "/x.md"));
+    QTRY_VERIFY(QFileInfo::exists(sub + "/b.md"));
+    QCOMPARE(dialogs_, QStringList());
+    QVERIFY(FileTreePanel::samePath(w.documentPath(), sub + "/a.md"));
+  }
+
+  void dropsIntoTheSameFolderOrBelowThemselvesAreRefused() {
+    const QString dir = folder();
+    const QString notes = dir + "/notes", top = dir + "/top.md";
+    write(notes + "/inner/i.md", "# I\n");
+    write(notes + "/n.md", "# N\n");
+    write(top, "# Top\n");
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    QTreeView* tree = panel(w)->tree();
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, notes), 5000);
+    tree->expand(panel(w)->indexForPath(notes));
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, notes + "/inner"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, notes + "/n.md"), 5000);
+    QVERIFY(!dropOn(w, notes, notes));
+    QVERIFY(!dropOn(w, notes, notes + "/inner"));
+    QVERIFY(!dropOn(w, notes + "/n.md", notes));
+    QVERIFY(!dropOn(w, top, QString()));
+    // Only the panel's own drag moves anything.
+    QVERIFY(!dropOn(w, top, notes, QStringLiteral("text/plain")));
+    QTest::qWait(50);
+    QCOMPARE(dialogs_, QStringList());
+    QVERIFY(QFileInfo::exists(notes + "/inner/i.md"));
+    QVERIFY(QFileInfo::exists(notes + "/n.md"));
+    QVERIFY(QFileInfo::exists(top));
+
+    // Below the last row is the open folder itself.
+    QVERIFY(dropOn(w, notes + "/n.md", QString()));
+    QTRY_VERIFY(QFileInfo::exists(dir + "/n.md"));
+    QVERIFY(!QFileInfo::exists(notes + "/n.md"));
+  }
+
+  void relativeLinksAskBeforeAFileMoves() {
+    const QString dir = folder();
+    const QString b = dir + "/b.md", sub = dir + "/sub";
+    write(b, "# B\n\n![p](img/p.png) [o](other.md) [web](https://example.com)\n");
+    QVERIFY(QDir().mkpath(sub));
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, b), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, sub), 5000);
+    const QJsonObject info = bridge::inspectMove(b, sub, nullptr);
+    QCOMPARE(info.value("relativeReferences").toInt(), 2);
+    QCOMPARE(info.value("examples").toArray().size(), 2);
+
+    // Esc on the warning: nothing moves.
+    QVERIFY(dropOn(w, b, sub));
+    QTRY_COMPARE(dialogs_.size(), 1);
+    QVERIFY2(dialogs_.first().contains(QStringLiteral("仍然移动")), qPrintable(dialogs_.first()));
+    QVERIFY(dialogs_.first().contains(QStringLiteral("取消")));
+    QTest::qWait(50);
+    QVERIFY(QFileInfo::exists(b));
+
+    answer_ = QStringLiteral("仍然移动");
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, b), 5000);
+    QVERIFY(dropOn(w, b, sub));
+    QTRY_VERIFY(QFileInfo::exists(sub + "/b.md"));
+    QCOMPARE(dialogs_.size(), 2);
+    QVERIFY(!QFileInfo::exists(b));
+  }
+
+  void movingAFolderTakesTheOpenDocumentAlongWithoutAsking() {
+    const QString dir = folder();
+    const QString drafts = dir + "/drafts", archive = dir + "/archive";
+    const QString note = drafts + "/deep/note.md";
+    write(note, "# Note\n\n![p](p.png)\n");
+    QVERIFY(QDir().mkpath(archive));
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    w.openPath(note); waitIdle(w);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, drafts), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, archive), 5000);
+    QVERIFY(dropOn(w, drafts, archive));
+    const QString moved = archive + "/drafts/deep/note.md";
+    QTRY_VERIFY(QFileInfo::exists(moved));
+    QCOMPARE(dialogs_, QStringList());
+    QVERIFY(!QFileInfo::exists(drafts));
+    QVERIFY2(FileTreePanel::samePath(w.documentPath(), moved), qPrintable(w.documentPath()));
+    QVERIFY(bridge::sessionMatches(w.documentPath()).value("matches").toBool());
+    // The panel watches its folder again after a folder moved.
+    write(dir + "/after.md", "# After\n");
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, dir + "/after.md"), 5000);
+  }
+
+  void movingOntoAnExistingNameReportsItAndChangesNothing() {
+    const QString dir = folder();
+    const QString a = dir + "/a.md", sub = dir + "/sub";
+    write(a, "mine");
+    write(sub + "/a.md", "keep");
+    MainWindow w; start(w);
+    w.openFolder(dir);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, a), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(listed(w, sub), 5000);
+    QVERIFY(dropOn(w, a, sub));
+    QTRY_COMPARE(dialogs_.size(), 1);
+    QVERIFY2(dialogs_.first().contains(QStringLiteral("知道了")), qPrintable(dialogs_.first()));
+    QCOMPARE(readAll(a), QStringLiteral("mine"));
+    QCOMPARE(readAll(sub + "/a.md"), QStringLiteral("keep"));
   }
 };
 QTEST_MAIN(FileTreeRegressions)

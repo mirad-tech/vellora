@@ -15,6 +15,7 @@
 #include <QStyleHints>
 #include <QTimer>
 
+#include "app_settings.h"
 #include "chrome.h"
 #include "document_view.h"
 #include "main_window.h"
@@ -25,8 +26,10 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("Vellora"));
   app.setApplicationDisplayName(QStringLiteral("Vellora"));
-  app.setApplicationVersion(QStringLiteral("0.1.6"));
+  app.setApplicationVersion(QStringLiteral("0.1.7"));
   app.setOrganizationName(QStringLiteral("Vellora Contributors"));
+  // portable.txt beside vellora.exe keeps settings in Vellora.ini there.
+  app_settings::configure(QCoreApplication::applicationDirPath());
   app.setFont(theme::uiFont(14));
   app.setStyle(QStringLiteral("Fusion"));
   app.setPalette(theme::appPalette(app.style()->standardPalette()));

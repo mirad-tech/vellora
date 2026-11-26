@@ -1,0 +1,5 @@
+﻿Vellora 便携模式标记
+
+vellora.exe 所在的文件夹里有这个文件时，Vellora 把设置保存在同一文件夹的 Vellora.ini 中，不写入注册表。
+删除这个文件，Vellora 就改回把设置保存在注册表中。
+文件内容不影响功能。

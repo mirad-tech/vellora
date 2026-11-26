@@ -36,9 +36,10 @@ class MainWindow : public QMainWindow {
   // Shows a folder in the file panel and remembers it for the next launch.
   void openFolder(const QString& path);
   void toggleSidebar();
-  // Restores the window size, last folder and sidebar preference. Only the
-  // application's main() calls it; a test that does isolates QSettings first,
-  // so test windows never read or write user settings.
+  // Restores the window size, last folder and sidebar preference from the
+  // per-user store, or from Vellora.ini in portable mode (app_settings). Only
+  // the application's main() calls it; a test that does isolates QSettings
+  // first, so test windows never read or write user settings.
   void restoreWorkspace();
   void showSourceMode();
   bool splicePendingEdits(QString* content);
@@ -91,6 +92,17 @@ class MainWindow : public QMainWindow {
   void openFromTree(const QString& path);
   void renameFromTree(const QString& path, const QString& newName);
   void createFileIn(const QString& directory);
+  void deleteFromTree(const QString& path);
+  void moveFromTree(const QString& path, const QString& directory);
+  // Warns first when a file uses relative links or images, then moves through
+  // the core. The open document keeps its draft, undo history and scroll.
+  void moveEntry(const QString& path, const QString& directory);
+  // Asks, then deletes through the core; a second prompt before anything is
+  // destroyed where the recycle bin cannot take it.
+  void deleteEntry(const QString& path);
+  QJsonObject removeEntry(const QString& path, bool permanent);
+  // The core closed the session because the open document was deleted.
+  void closeDeletedDocument();
   void saveWorkspace();
   bool confirmSwitch();
   void runTreeWork(bool showErrors);
@@ -138,6 +150,11 @@ class MainWindow : public QMainWindow {
   // Renames typed in the file panel wait for busy work instead of being dropped.
   QVector<PendingRename> pendingRenames_;
   QStringList pendingErrors_;
+  // A deletion asked for from the file panel, waiting for busy work and prompts.
+  QString pendingDelete_;
+  // A move dropped in the file panel, waiting like a deletion.
+  QString pendingMovePath_;
+  QString pendingMoveDirectory_;
   QTimer treeWorkTimer_;
 
   QString documentPath_;

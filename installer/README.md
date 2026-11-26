@@ -1,6 +1,6 @@
 # Vellora 构建、打包与安装
 
-当前发行入口为 [package-qt.ps1](package-qt.ps1)，安装行为由 [vellora-qt-preview.nsi](vellora-qt-preview.nsi) 定义。当前代码和打包默认版本为 **0.1.6**。
+当前发行入口为 [package-qt.ps1](package-qt.ps1)，安装行为由 [vellora-qt-preview.nsi](vellora-qt-preview.nsi) 定义。当前代码和打包默认版本为 **0.1.7**。
 
 ## 构建与产物
 
@@ -23,20 +23,27 @@
 
 | 产物 | 内容 |
 |---|---|
-| `Vellora-0.1.6-portable/` | `vellora.exe`、Qt/MSVC 运行库、插件和许可证；运行时保留完整目录 |
-| `Vellora-Setup-0.1.6.exe` | 当前用户范围的 NSIS 安装包 |
-| `manifest.json` | 实际版本、文件路径、大小、SHA256，以及生产构建标记 |
+| `Vellora-0.1.7-portable/` | `vellora.exe`、Qt/MSVC 运行库、插件、许可证和用户说明 `README.txt`；安装包由它生成，不含 `portable.txt` |
+| `Vellora-Setup-0.1.7.exe` | 当前用户范围的 NSIS 安装包 |
+| `Vellora-0.1.7-portable-x64.zip` | 便携版：上面的目录另加 `portable.txt`，压缩后顶层为 `Vellora-0.1.7-portable/` |
+| `manifest.json` | 实际版本、文件路径、大小、SHA256（含安装包和便携版 zip），以及生产构建标记 |
 | `uninstall-files.nsh` | 从本次便携目录生成的卸载文件清单 |
 
 打包只使用 `<BuildRoot>/app/vellora.exe`，不包含启用测试钩子的 `test-app`。脚本检查应用和安装器的 Windows 版本资源；`-Version` 必须与代码版本一致，不能只改包名。Qt 运行依赖通过 `windeployqt` 收集，MSVC CRT 随应用部署；`licenses/` 保留许可证、Qt 模块 SBOM、版权及源码链接。
 
 脚本生成安装包，不执行安装器，也不发布软件。
 
+## 便携模式
+
+`vellora.exe` 所在文件夹有 `portable.txt` 时，应用把设置写入同一文件夹的 `Vellora.ini`，不读写注册表。侧边栏打开的文件夹同时记下绝对路径和相对程序文件夹的路径（同一盘上时），U 盘换盘符或程序在同盘移动后都能恢复。该文件夹不能写入时，应用改用注册表 `HKCU\Software\Vellora Contributors\Vellora`。
+
+安装包与卸载清单在加入 `portable.txt` 之前由 `Vellora-<版本>-portable/` 生成；`portable.txt` 只复制到另一份临时目录并压缩为 zip。脚本在压缩前确认安装包来源目录中没有该文件，压缩后核对条目数，`test_release_policy.py` 也检查这一顺序。用户说明 `README.txt` 来自 `assets/README-dist.txt`，安装版与便携版相同。
+
 ## 安装与升级行为
 
 - 默认安装到 `%LOCALAPPDATA%\Programs\Vellora`，无需管理员权限；创建 Vellora 开始菜单、桌面快捷方式和卸载入口，不设置开机自启动，也不自动启动应用。
 - 安装器拒绝未标记的非空目标目录，以及其他位置的 Vellora 安装登记或不归本安装管理的已有入口。
-- 带有相同安装器标记的目录允许同版本修复安装。当前 0.1.6 还允许从 0.1.0/0.1.1/0.1.2/0.1.3/0.1.4/0.1.5 原目录升级，但要求安装标记匹配，且注册的安装路径等于目标目录；其他版本不在此升级范围内。
+- 带有相同安装器标记的目录允许同版本修复安装。当前 0.1.7 还允许从 0.1.0/0.1.1/0.1.2/0.1.3/0.1.4/0.1.5/0.1.6 原目录升级，但要求安装标记匹配，且注册的安装路径等于目标目录；其他版本不在此升级范围内。
 - 安装和卸载前检查程序文件是否可独占打开；无法替换时要求先保存文档并关闭程序。
 - 卸载按本次包内清单删除文件，保留额外用户文件；仅当登记的安装路径仍属于本安装时清理快捷方式、卸载登记及所属文件关联，不清理应用用户设置。
 
@@ -48,7 +55,7 @@
 
 ## 验证入口
 
-以下静态策略检查读取安装脚本，不执行安装或修改注册表：
+以下静态策略检查读取安装脚本，不执行安装或修改注册表。`test_release_policy.py` 已包含在 `tools/check.ps1` 中（需要 Python 3.11 或更新版本）：
 
 ```powershell
 python installer/tests/test_association_policy.py
@@ -58,11 +65,11 @@ python installer/tests/test_release_policy.py
 便携运行验证会启动本次便携目录中的应用，单独执行：
 
 ```powershell
-./qt-app/tests/smoke-portable.ps1 -PortableDir '输出目录/Vellora-0.1.6-portable' -OutputDir '新测试目录'
+./qt-app/tests/smoke-portable.ps1 -PortableDir '输出目录/Vellora-0.1.7-portable' -OutputDir '新测试目录'
 ```
 
 该脚本拒绝连接已有生产实例，使用仅含系统目录的 PATH 检查应用本地 DLL 和平台插件，并检查生产版未启用测试钩子。它不运行安装器；真实安装、升级、卸载、文件关联和 Windows 输入法体验需分别验收。
 
 ## 历史入口
 
-旧 Win32/Rich Edit 实现、实验目录和预览版安装流程仅保留在本地，由 `.gitignore` 排除，不参与当前 `package-qt.ps1` 发行流程。当前便携版的 `README.txt` 由打包脚本生成。
+旧 Win32/Rich Edit 实现、实验目录和预览版安装流程仅保留在本地，由 `.gitignore` 排除，不参与当前 `package-qt.ps1` 发行流程。当前便携版的 `README.txt` 由打包脚本从 `assets/README-dist.txt` 生成。

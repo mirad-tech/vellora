@@ -18,7 +18,8 @@ use crate::path_policy;
 use crate::reliable_save::SaveBaseline;
 use crate::rename;
 use crate::types::{
-  CommandResult, DocumentPayload, EmptyPayload, LinkInspectData, MarkdownDocument, RenamePayload,
+  CommandResult, DeletePayload, DeleteTargetPayload, DocumentPayload, EmptyPayload, LinkInspectData,
+  MarkdownDocument, MoveTargetPayload, RenamePayload,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -284,6 +285,296 @@ pub fn rename_entry_session(
     name,
     is_dir,
     session_path: session_path.map(|moved| moved.to_string_lossy().into_owned()),
+  })
+}
+
+const MOVE_BUSY: &str = "无法移动：文件或文件夹可能正被其他程序使用，或没有写入权限。";
+const OTHER_DRIVE: &str = "暂不支持移动到其他磁盘。";
+const TARGET_TAKEN: &str = "目标文件夹里已有同名的文件或文件夹。";
+
+fn move_failure<T>(error: &io::Error) -> CommandResult<T> {
+  // ERROR_NOT_SAME_DEVICE on Windows, EXDEV elsewhere: the move would be a copy.
+  let other_drive = if cfg!(windows) { 17 } else { 18 };
+  if error.raw_os_error() == Some(other_drive) {
+    return CommandResult::failure("OTHER_DRIVE", OTHER_DRIVE);
+  }
+  match error.kind() {
+    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", "文件或文件夹不存在或已被移动。"),
+    io::ErrorKind::AlreadyExists => CommandResult::failure("TARGET_EXISTS", TARGET_TAKEN),
+    io::ErrorKind::PermissionDenied => CommandResult::failure("MOVE_FAILED", MOVE_BUSY),
+    // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION have no stable ErrorKind.
+    _ if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) => {
+      CommandResult::failure("MOVE_FAILED", MOVE_BUSY)
+    }
+    _ => CommandResult::failure("MOVE_FAILED", format!("无法移动：{error}")),
+  }
+}
+
+/// Both canonical paths start on the same drive or share. A different volume
+/// mounted in a folder is still refused by the move itself.
+#[cfg(windows)]
+fn same_volume(a: &Path, b: &Path) -> bool {
+  use std::path::Component;
+  match (a.components().next(), b.components().next()) {
+    (Some(Component::Prefix(a)), Some(Component::Prefix(b))) => {
+      a.as_os_str().to_string_lossy().eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+    }
+    _ => true,
+  }
+}
+
+#[cfg(not(windows))]
+fn same_volume(_: &Path, _: &Path) -> bool {
+  true
+}
+
+struct MovePlan {
+  source: PathBuf,
+  name: String,
+  is_dir: bool,
+  is_link: bool,
+  target: PathBuf,
+  same_folder: bool,
+}
+
+/// Checks a move of `path` into `directory` without touching the disk.
+fn move_plan<T>(path: &str, directory: &str) -> Result<MovePlan, CommandResult<T>> {
+  let trimmed = path.trim();
+  if trimmed.is_empty() || !Path::new(trimmed).is_absolute() {
+    return Err(CommandResult::failure("INVALID_ARGUMENT", "路径无效。"));
+  }
+  if Path::new(trimmed).file_name().is_none() {
+    return Err(CommandResult::failure("INVALID_ARGUMENT", "不能移动磁盘根目录。"));
+  }
+  // As for a rename, the entry itself is never followed: a link moves as the link.
+  let (source, own) = rename::resolve_entry(Path::new(trimmed)).map_err(|error| move_failure(&error))?;
+  let is_link = own.file_type().is_symlink();
+  let metadata = if is_link { fs::metadata(&source).map_err(|error| move_failure(&error))? } else { own };
+  let is_dir = metadata.is_dir();
+  if !is_dir && !(metadata.is_file() && file_access::is_markdown_path(&source)) {
+    return Err(CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能移动 .md、.markdown 文件或文件夹。"));
+  }
+  let folder = directory.trim();
+  if folder.is_empty() || !Path::new(folder).is_absolute() {
+    return Err(CommandResult::failure("INVALID_ARGUMENT", "目标文件夹无效。"));
+  }
+  let destination = match fs::canonicalize(folder) {
+    Ok(destination) => destination,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+      return Err(CommandResult::failure("NOT_FOUND", "目标文件夹不存在或已被移动。"));
+    }
+    Err(error) => return Err(move_failure(&error)),
+  };
+  if !destination.is_dir() {
+    return Err(CommandResult::failure("NOT_A_DIRECTORY", "目标不是文件夹。"));
+  }
+  // A linked folder moves as the link, so only a real folder can contain the target.
+  if is_dir && !is_link && path_policy::is_path_inside_directory(&destination, &source) {
+    return Err(CommandResult::failure("INVALID_TARGET", "不能把文件夹移到它自己或它的子文件夹里。"));
+  }
+  if !same_volume(&source, &destination) {
+    return Err(CommandResult::failure("OTHER_DRIVE", OTHER_DRIVE));
+  }
+  let name = match source.file_name() {
+    Some(name) => name.to_owned(),
+    None => return Err(CommandResult::failure("INVALID_ARGUMENT", "不能移动磁盘根目录。")),
+  };
+  let target = destination.join(&name);
+  let same_folder = source.parent().is_some_and(|parent| path_policy::paths_equal(parent, &destination));
+  if !same_folder && fs::symlink_metadata(&target).is_ok() {
+    return Err(CommandResult::failure("TARGET_EXISTS", TARGET_TAKEN));
+  }
+  Ok(MovePlan { source, name: name.to_string_lossy().into_owned(), is_dir, is_link, target, same_folder })
+}
+
+/// Describes a move for the warning before it. Never changes the disk or the session.
+pub fn inspect_move_session(
+  state: &SessionState,
+  path: &str,
+  directory: &str,
+) -> CommandResult<MoveTargetPayload> {
+  let plan = match move_plan(path, directory) {
+    Ok(plan) => plan,
+    Err(failure) => return failure,
+  };
+  let current = lock_mutex(&state.current_document);
+  let contains_session =
+    !plan.is_link && current.as_deref().is_some_and(|doc| contains_document(doc, &plan.source, plan.is_dir));
+  CommandResult::success(MoveTargetPayload {
+    path: plan.source.to_string_lossy().into_owned(),
+    name: plan.name,
+    is_dir: plan.is_dir,
+    target: plan.target.to_string_lossy().into_owned(),
+    same_folder: plan.same_folder,
+    contains_session,
+  })
+}
+
+/// Moves a Markdown file or a folder into `directory`, keeping its name and never
+/// replacing an existing entry. Like a rename, the session follows the open
+/// document inside the same critical section as saves, so the editor keeps its
+/// draft, undo history and dirty state, and a queued save never targets the old
+/// path. Only a move on the same drive: nothing is ever copied.
+pub fn move_entry_session(state: &SessionState, path: &str, directory: &str) -> CommandResult<RenamePayload> {
+  let _operation = lock_mutex(&state.document_operation);
+  let plan = match move_plan(path, directory) {
+    Ok(plan) => plan,
+    Err(failure) => return failure,
+  };
+  if plan.same_folder {
+    return CommandResult::success(RenamePayload {
+      path: plan.source.to_string_lossy().into_owned(),
+      name: plan.name,
+      is_dir: plan.is_dir,
+      session_path: None,
+    });
+  }
+  // Held across the move so an open that bypasses `document_operation` cannot
+  // interleave between the disk change and the session update.
+  let mut current = lock_mutex(&state.current_document);
+  let moves_session =
+    !plan.is_link && current.as_deref().is_some_and(|doc| contains_document(doc, &plan.source, plan.is_dir));
+  if let Err(error) = rename::rename_no_replace(&plan.source, &plan.target) {
+    return move_failure(&error);
+  }
+  let session_path = if moves_session {
+    current.as_deref().map(|doc| relocate(doc, &plan.source, &plan.target))
+  } else {
+    None
+  };
+  if let Some(moved) = &session_path {
+    *current = Some(moved.clone());
+  }
+  CommandResult::success(RenamePayload {
+    path: plan.target.to_string_lossy().into_owned(),
+    name: plan.name,
+    is_dir: plan.is_dir,
+    session_path: session_path.map(|moved| moved.to_string_lossy().into_owned()),
+  })
+}
+
+/// What the platform did with an entry handed to it for deletion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiskDelete {
+  /// Moved to the recycle bin, or destroyed when that was asked for.
+  Deleted,
+  /// Only for a recycle request: the location has no recycle bin, or the entry
+  /// does not fit in it. Nothing was touched.
+  NotRecyclable,
+  /// Failed with this HRESULT or OS error code.
+  Failed(i32),
+}
+
+const DELETE_BUSY: &str = "无法删除：文件或文件夹可能正被其他程序使用，或没有权限";
+const NOT_RECYCLABLE: &str = "这个位置不支持回收站，或者内容太大，回收站放不下。";
+const DELETE_MISSING: &str = "文件或文件夹不存在或已被移动。";
+
+fn delete_io_failure<T>(error: &io::Error) -> CommandResult<T> {
+  match error.kind() {
+    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", DELETE_MISSING),
+    io::ErrorKind::PermissionDenied => CommandResult::failure("DELETE_FAILED", format!("{DELETE_BUSY}。")),
+    _ => CommandResult::failure("DELETE_FAILED", format!("无法删除：{error}")),
+  }
+}
+
+fn delete_code_failure<T>(code: i32) -> CommandResult<T> {
+  let code = code as u32;
+  // HRESULT_FROM_WIN32 of ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND.
+  if matches!(code, 0x8007_0002 | 0x8007_0003) {
+    return CommandResult::failure("NOT_FOUND", DELETE_MISSING);
+  }
+  CommandResult::failure("DELETE_FAILED", format!("{DELETE_BUSY}（错误 0x{code:08X}）。"))
+}
+
+/// Checks an entry the file tree asks to delete, without following it. Returns
+/// the entry as the disk spells it and whether it is a folder.
+fn delete_target<T>(path: &str) -> Result<(PathBuf, bool), CommandResult<T>> {
+  let trimmed = path.trim();
+  if trimmed.is_empty() || !Path::new(trimmed).is_absolute() {
+    return Err(CommandResult::failure("INVALID_ARGUMENT", "路径无效。"));
+  }
+  if Path::new(trimmed).file_name().is_none() {
+    return Err(CommandResult::failure("INVALID_ARGUMENT", "不能删除磁盘根目录。"));
+  }
+  let resolved = rename::resolve_entry(Path::new(trimmed));
+  let (source, own) = resolved.map_err(|error| delete_io_failure(&error))?;
+  // The shell can reach through a link into the folder it points to, so a link
+  // is refused rather than handed over.
+  if own.file_type().is_symlink() {
+    return Err(CommandResult::failure("UNSUPPORTED_LINK", "暂不支持删除符号链接或目录联接。"));
+  }
+  let is_dir = own.is_dir();
+  if !is_dir && !(own.is_file() && file_access::is_markdown_path(&source)) {
+    return Err(CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能删除 .md、.markdown 文件或文件夹。"));
+  }
+  Ok((source, is_dir))
+}
+
+fn contains_document(document: &Path, entry: &Path, is_dir: bool) -> bool {
+  if is_dir {
+    path_policy::is_path_inside_directory(document, entry)
+  } else {
+    path_policy::paths_equal(document, entry)
+  }
+}
+
+/// Describes an entry for the confirmation before it is deleted. Never changes
+/// the disk or the session.
+pub fn inspect_delete_session(state: &SessionState, path: &str) -> CommandResult<DeleteTargetPayload> {
+  let (source, is_dir) = match delete_target(path) {
+    Ok(target) => target,
+    Err(failure) => return failure,
+  };
+  let current = lock_mutex(&state.current_document);
+  let contains_session = current.as_deref().is_some_and(|doc| contains_document(doc, &source, is_dir));
+  let name = source.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+  CommandResult::success(DeleteTargetPayload {
+    path: source.to_string_lossy().into_owned(),
+    name,
+    is_dir,
+    contains_session,
+  })
+}
+
+/// Deletes a Markdown file or a folder through `delete`, which moves it to the
+/// recycle bin unless `permanent`. When the entry is, or contains, the open
+/// document, the session closes inside the same critical section as saves, so a
+/// queued save can never write the deleted file back. A failed deletion keeps the
+/// session: the editor still holds the draft and can save it again.
+pub fn delete_entry_session(
+  state: &SessionState,
+  path: &str,
+  permanent: bool,
+  delete: impl FnOnce(&Path, bool) -> DiskDelete,
+) -> CommandResult<DeletePayload> {
+  let _operation = lock_mutex(&state.document_operation);
+  let (source, is_dir) = match delete_target(path) {
+    Ok(target) => target,
+    Err(failure) => return failure,
+  };
+  // Held across the deletion so an open that bypasses `document_operation`
+  // cannot interleave between the disk change and the session update.
+  let mut current = lock_mutex(&state.current_document);
+  let closes = current.as_deref().is_some_and(|document| contains_document(document, &source, is_dir));
+  match delete(&source, permanent) {
+    DiskDelete::Deleted => {}
+    DiskDelete::NotRecyclable => return CommandResult::failure("RECYCLE_UNAVAILABLE", NOT_RECYCLABLE),
+    // A shell operation can report an error after the entry is already gone.
+    DiskDelete::Failed(code) if fs::symlink_metadata(&source).is_ok() => return delete_code_failure(code),
+    DiskDelete::Failed(_) => {}
+  }
+  if closes {
+    *current = None;
+    drop(current);
+    *lock_mutex(&state.save_baseline) = None;
+    *lock_mutex(&state.has_unsaved_changes) = false;
+    clear_close_flags_if_idle(state);
+  }
+  CommandResult::success(DeletePayload {
+    path: source.to_string_lossy().into_owned(),
+    is_dir,
+    permanent,
+    closed_session: closes,
   })
 }
 
@@ -873,5 +1164,293 @@ mod tests {
     allow_next_close(&state);
     assert!(take_close_bypass(&state));
     assert!(!take_close_bypass(&state));
+  }
+
+  fn remove_for_test(entry: &Path, _permanent: bool) -> DiskDelete {
+    let removed = if entry.is_dir() { fs::remove_dir_all(entry) } else { fs::remove_file(entry) };
+    match removed {
+      Ok(()) => DiskDelete::Deleted,
+      Err(_) => DiskDelete::Failed(-1),
+    }
+  }
+
+  fn never_delete(entry: &Path, _permanent: bool) -> DiskDelete {
+    panic!("the deleter ran for {entry:?}");
+  }
+
+  fn deleted(result: CommandResult<DeletePayload>) -> DeletePayload {
+    match result {
+      CommandResult::Ok { data, .. } => data,
+      other => panic!("{other:?}"),
+    }
+  }
+
+  fn failure_code<T: std::fmt::Debug>(result: CommandResult<T>) -> String {
+    match result {
+      CommandResult::Err { code, .. } => code,
+      other => panic!("{other:?}"),
+    }
+  }
+
+  #[test]
+  fn deleting_the_open_file_closes_the_session_and_drops_its_draft() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "body");
+    *lock_mutex(&state.has_unsaved_changes) = true;
+    let target = match inspect_delete_session(&state, &session) {
+      CommandResult::Ok { data, .. } => data,
+      other => panic!("{other:?}"),
+    };
+    assert!(target.contains_session);
+    assert!(!target.is_dir);
+    assert_eq!(target.name, "note.md");
+    assert!(path.exists(), "inspecting must not delete");
+    let mut calls = Vec::new();
+    let result = delete_entry_session(&state, &session, false, |entry, permanent| {
+      calls.push(permanent);
+      remove_for_test(entry, permanent)
+    });
+    let result = deleted(result);
+    assert_eq!(calls, [false]);
+    assert!(result.closed_session);
+    assert!(!result.permanent);
+    assert!(!path.exists());
+    assert!(lock_mutex(&state.current_document).is_none());
+    assert!(!*lock_mutex(&state.has_unsaved_changes));
+    // A save queued before the deletion can never write the file back.
+    let saved = save_document_session(&state, &session, "draft", None);
+    assert_eq!(failure_code(saved), "NO_DOCUMENT");
+    assert!(!path.exists());
+  }
+
+  #[test]
+  fn deleting_a_parent_folder_closes_the_session_but_a_prefix_named_sibling_does_not() {
+    let dir = tempdir().unwrap();
+    let drafts = dir.path().join("drafts");
+    let draft = dir.path().join("draft");
+    fs::create_dir_all(drafts.join("deep")).unwrap();
+    fs::create_dir_all(&draft).unwrap();
+    fs::write(draft.join("other.md"), "other").unwrap();
+    let state = SessionState::default();
+    open_session(&state, drafts.join("deep").join("note.md").to_str().unwrap(), "body");
+    let inspected = inspect_delete_session(&state, draft.to_str().unwrap());
+    assert!(matches!(inspected, CommandResult::Ok { ref data, .. } if !data.contains_session));
+    let sibling = deleted(delete_entry_session(&state, draft.to_str().unwrap(), false, remove_for_test));
+    assert!(sibling.is_dir);
+    assert!(!sibling.closed_session);
+    assert!(!draft.exists());
+    assert!(lock_mutex(&state.current_document).is_some());
+    let parent = deleted(delete_entry_session(&state, drafts.to_str().unwrap(), false, remove_for_test));
+    assert!(parent.closed_session);
+    assert!(!drafts.exists());
+    assert!(lock_mutex(&state.current_document).is_none());
+  }
+
+  #[test]
+  fn an_entry_that_cannot_be_recycled_stays_until_permanent_deletion_is_asked_for() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "body");
+    let refused = delete_entry_session(&state, &session, false, |_, _| DiskDelete::NotRecyclable);
+    assert_eq!(failure_code(refused), "RECYCLE_UNAVAILABLE");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "body");
+    assert!(lock_mutex(&state.current_document).is_some());
+    let mut asked = None;
+    let result = delete_entry_session(&state, &session, true, |entry, permanent| {
+      asked = Some(permanent);
+      remove_for_test(entry, permanent)
+    });
+    let result = deleted(result);
+    assert_eq!(asked, Some(true));
+    assert!(result.permanent);
+    assert!(result.closed_session);
+    assert!(!path.exists());
+  }
+
+  #[test]
+  fn a_failed_deletion_keeps_the_session_unless_the_entry_is_gone() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "body");
+    // ERROR_SHARING_VIOLATION as an HRESULT: another program holds the file.
+    let sharing = 0x8007_0020_u32 as i32;
+    let busy = delete_entry_session(&state, &session, false, |_, _| DiskDelete::Failed(sharing));
+    assert_eq!(failure_code(busy), "DELETE_FAILED");
+    assert!(path.exists());
+    assert!(lock_mutex(&state.current_document).is_some());
+    // Reported as failed, but the entry is gone: the session must not outlive it.
+    let gone = delete_entry_session(&state, &session, false, |entry, _| {
+      fs::remove_file(entry).unwrap();
+      DiskDelete::Failed(-1)
+    });
+    assert!(deleted(gone).closed_session);
+    assert!(lock_mutex(&state.current_document).is_none());
+  }
+
+  #[test]
+  fn links_other_files_and_unsafe_paths_are_refused_before_anything_is_deleted() {
+    let dir = tempdir().unwrap();
+    let state = SessionState::default();
+    let text = dir.path().join("notes.txt");
+    fs::write(&text, "x").unwrap();
+    let result = delete_entry_session(&state, text.to_str().unwrap(), false, never_delete);
+    assert_eq!(failure_code(result), "UNSUPPORTED_FILE_TYPE");
+    assert!(text.exists());
+    let missing = dir.path().join("missing.md");
+    let result = delete_entry_session(&state, missing.to_str().unwrap(), false, never_delete);
+    assert_eq!(failure_code(result), "NOT_FOUND");
+    let root = if cfg!(windows) { "C:\\" } else { "/" };
+    for path in ["", "relative.md", root] {
+      let result = delete_entry_session(&state, path, false, never_delete);
+      assert_eq!(failure_code(result), "INVALID_ARGUMENT", "{path}");
+    }
+    let real = dir.path().join("real");
+    fs::create_dir_all(&real).unwrap();
+    fs::write(real.join("doc.md"), "keep").unwrap();
+    let link = dir.path().join("link");
+    if !rename::make_dir_link(&real, &link) {
+      eprintln!("skipped the link case: this system cannot create a directory link");
+      return;
+    }
+    let result = delete_entry_session(&state, link.to_str().unwrap(), false, never_delete);
+    assert_eq!(failure_code(result), "UNSUPPORTED_LINK");
+    assert_eq!(fs::read_to_string(real.join("doc.md")).unwrap(), "keep");
+    assert!(fs::symlink_metadata(&link).is_ok());
+  }
+
+  fn moved(result: CommandResult<RenamePayload>) -> RenamePayload {
+    match result {
+      CommandResult::Ok { data, .. } => data,
+      other => panic!("{other:?}"),
+    }
+  }
+
+  #[test]
+  fn moving_the_open_file_into_a_folder_moves_the_session_and_keeps_dirty_state() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let archive = dir.path().join("archive");
+    fs::create_dir(&archive).unwrap();
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "body");
+    *lock_mutex(&state.has_unsaved_changes) = true;
+    let target = match inspect_move_session(&state, &session, archive.to_str().unwrap()) {
+      CommandResult::Ok { data, .. } => data,
+      other => panic!("{other:?}"),
+    };
+    assert!(target.contains_session);
+    assert!(!target.same_folder);
+    assert!(!target.is_dir);
+    assert!(Path::new(&target.target).ends_with(Path::new("archive").join("note.md")), "{target:?}");
+    assert!(path.exists(), "inspecting must not move");
+    let result = moved(move_entry_session(&state, &session, archive.to_str().unwrap()));
+    let moved_session = result.session_path.clone().expect("session moved");
+    assert_eq!(moved_session, result.path);
+    assert!(!path.exists());
+    assert!(*lock_mutex(&state.has_unsaved_changes));
+    let stale = save_document_session(&state, &session, "draft", None);
+    assert_eq!(failure_code(stale), "SESSION_MISMATCH");
+    let saved = save_document_session(&state, &moved_session, "draft", None);
+    assert!(matches!(saved, CommandResult::Ok { .. }), "{saved:?}");
+    assert_eq!(fs::read_to_string(archive.join("note.md")).unwrap(), "draft");
+  }
+
+  #[test]
+  fn moving_a_folder_takes_the_open_document_inside_it_along() {
+    let dir = tempdir().unwrap();
+    let drafts = dir.path().join("drafts");
+    let published = dir.path().join("published");
+    fs::create_dir_all(drafts.join("deep")).unwrap();
+    fs::create_dir(&published).unwrap();
+    let state = SessionState::default();
+    open_session(&state, drafts.join("deep").join("note.md").to_str().unwrap(), "body");
+    let result = moved(move_entry_session(&state, drafts.to_str().unwrap(), published.to_str().unwrap()));
+    assert!(result.is_dir);
+    let session = PathBuf::from(result.session_path.unwrap());
+    let expected = Path::new("published").join("drafts").join("deep").join("note.md");
+    assert!(session.ends_with(&expected), "{session:?}");
+    let saved = save_document_session(&state, session.to_str().unwrap(), "next", None);
+    assert!(matches!(saved, CommandResult::Ok { .. }), "{saved:?}");
+    assert_eq!(fs::read_to_string(dir.path().join(&expected)).unwrap(), "next");
+    assert!(!drafts.exists());
+  }
+
+  #[test]
+  fn moves_never_replace_nest_a_folder_in_itself_or_leave_markdown() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().to_str().unwrap();
+    let path = dir.path().join("a.md");
+    let sub = dir.path().join("sub");
+    let folder = dir.path().join("folder");
+    fs::create_dir_all(&sub).unwrap();
+    fs::create_dir_all(folder.join("inner")).unwrap();
+    fs::write(sub.join("a.md"), "keep").unwrap();
+    let state = SessionState::default();
+    let session = open_session(&state, path.to_str().unwrap(), "mine");
+    let before = lock_mutex(&state.current_document).clone();
+    let taken = move_entry_session(&state, &session, sub.to_str().unwrap());
+    assert_eq!(failure_code(taken), "TARGET_EXISTS");
+    assert_eq!(fs::read_to_string(sub.join("a.md")).unwrap(), "keep");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "mine");
+    assert_eq!(*lock_mutex(&state.current_document), before);
+    for into in [folder.clone(), folder.join("inner")] {
+      let result = move_entry_session(&state, folder.to_str().unwrap(), into.to_str().unwrap());
+      assert_eq!(failure_code(result), "INVALID_TARGET", "{into:?}");
+    }
+    assert!(folder.join("inner").is_dir());
+    // Already in that folder: nothing changes and the session stays put.
+    let inspected = inspect_move_session(&state, &session, root);
+    assert!(matches!(inspected, CommandResult::Ok { ref data, .. } if data.same_folder), "{inspected:?}");
+    let same = moved(move_entry_session(&state, &session, root));
+    assert!(same.session_path.is_none());
+    assert!(path.exists());
+    assert_eq!(*lock_mutex(&state.current_document), before);
+    let text = dir.path().join("notes.txt");
+    fs::write(&text, "x").unwrap();
+    let result = move_entry_session(&state, text.to_str().unwrap(), sub.to_str().unwrap());
+    assert_eq!(failure_code(result), "UNSUPPORTED_FILE_TYPE");
+    let missing = dir.path().join("missing");
+    let result = move_entry_session(&state, &session, missing.to_str().unwrap());
+    assert_eq!(failure_code(result), "NOT_FOUND");
+    let result = move_entry_session(&state, &session, text.to_str().unwrap());
+    assert_eq!(failure_code(result), "NOT_A_DIRECTORY");
+    let cases = [("", root), ("relative.md", root), (session.as_str(), ""), (session.as_str(), "sub")];
+    for (from, into) in cases {
+      let result = move_entry_session(&state, from, into);
+      assert_eq!(failure_code(result), "INVALID_ARGUMENT", "{from} -> {into}");
+    }
+    assert!(text.exists());
+    assert!(path.exists());
+    assert_eq!(*lock_mutex(&state.current_document), before);
+  }
+
+  #[test]
+  fn moving_a_linked_folder_moves_the_link_not_its_target() {
+    let dir = tempdir().unwrap();
+    let real = dir.path().join("real");
+    let elsewhere = dir.path().join("elsewhere");
+    fs::create_dir_all(&real).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    let doc = real.join("doc.md");
+    let link = dir.path().join("link");
+    if !rename::make_dir_link(&real, &link) {
+      eprintln!("skipped: this system cannot create a directory link");
+      return;
+    }
+    let state = SessionState::default();
+    let session = open_session(&state, link.join("doc.md").to_str().unwrap(), "body");
+    let result = moved(move_entry_session(&state, link.to_str().unwrap(), elsewhere.to_str().unwrap()));
+    assert!(result.is_dir);
+    assert!(result.session_path.is_none());
+    assert!(fs::symlink_metadata(elsewhere.join("link")).unwrap().file_type().is_symlink());
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert_eq!(fs::read_to_string(&doc).unwrap(), "body");
+    let saved = save_document_session(&state, &session, "next", None);
+    assert!(matches!(saved, CommandResult::Ok { .. }), "{saved:?}");
+    assert_eq!(fs::read_to_string(&doc).unwrap(), "next");
   }
 }

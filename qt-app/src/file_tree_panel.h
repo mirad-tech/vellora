@@ -41,9 +41,9 @@ class FileTreePanel : public QFrame {
 
   void setRootPath(const QString& path);
   QString rootPath() const { return rootPath_; }
-  // Shows the file's folder when no folder is open, then expands to the file.
-  // A file outside an open folder leaves that folder as it is: only the user
-  // changes it. It never shows the panel.
+  // Expands to the file and highlights it. A file outside the open folder,
+  // or any file while no folder is open, switches the panel to the file's own
+  // folder. It never shows the panel.
   void revealFile(const QString& path);
   void setCurrentFile(const QString& path, bool dirty);
   QString currentFile() const { return currentFile_; }
@@ -71,11 +71,26 @@ class FileTreePanel : public QFrame {
   QStringList visibleChildNames(const QString& directory) const;
   const QPixmap& glyph(int kind) const;
 
+  // Data type of an entry dragged inside the panel. Only this is offered, never
+  // file URLs, so a drag cannot let another program move or copy the entry.
+  static QString moveMimeType();
+  // The folder a drop on `index` moves into: a folder row, a file's folder, or
+  // the open folder below the last row.
+  QString dropDirectory(const QModelIndex& index) const { return targetDirectory(index); }
+  // Only into another folder within the open folder: never into itself, below
+  // itself, or the folder it is already in.
+  bool canMoveInto(const QString& path, const QString& directory) const;
+  void requestMove(const QString& path, const QString& directory);
+
  signals:
   void fileActivated(const QString& path);
   void openFolderRequested();
   void newFileRequested(const QString& directory);
   void renameRequested(const QString& path, const QString& newName);
+  // Delete key or the context menu. MainWindow asks before anything is deleted.
+  void deleteRequested(const QString& path);
+  // A drop inside the panel. MainWindow checks it and moves the entry.
+  void moveRequested(const QString& path, const QString& directory);
 
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -91,6 +106,7 @@ class FileTreePanel : public QFrame {
   void expandAncestors(const QString& path);
   void applyReveal();
   void refreshHeader();
+  bool isUnderRoot(const QString& path) const;
   void activate(const QModelIndex& index, bool fromMouse);
   void showContextMenu(const QPoint& position);
   QString targetDirectory(const QModelIndex& index) const;
@@ -121,6 +137,9 @@ class FileTreePanel : public QFrame {
   int renameAttempts_ = 0;
   QTimer renameTimer_;
   QString rootPath_;
+  // The open folder with links resolved, as the core reports documents opened
+  // through a linked folder. Updated whenever rootPath_ changes.
+  QString rootResolved_;
   QString revealPending_;
   QString currentFile_;
   bool currentDirty_ = false;

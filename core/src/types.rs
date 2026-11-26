@@ -131,6 +131,40 @@ pub struct RenamePayload {
   pub session_path: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveTargetPayload {
+  pub path: String,
+  pub name: String,
+  pub is_dir: bool,
+  /// Where the entry would be after the move.
+  pub target: String,
+  /// The entry is already in that folder: moving it changes nothing.
+  pub same_folder: bool,
+  /// The open document would move with the entry.
+  pub contains_session: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteTargetPayload {
+  pub path: String,
+  pub name: String,
+  pub is_dir: bool,
+  /// Deleting the entry would delete the open document.
+  pub contains_session: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePayload {
+  pub path: String,
+  pub is_dir: bool,
+  pub permanent: bool,
+  /// The open document went with the entry and its session is closed.
+  pub closed_session: bool,
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

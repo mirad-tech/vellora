@@ -9,7 +9,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use serde_json::{json, Value};
-use vellora_core::session::{self, SessionState};
+use vellora_core::session::{self, DiskDelete, SessionState};
 use vellora_core::types::{CommandResult, LinkInspectData};
 use vellora_core::{file_access, image_access, link_access, rename};
 use vellora_md::{Alignment, Block, Document, Inline, PreservedMarkdown, Table};
@@ -734,6 +734,257 @@ pub unsafe extern "C" fn vellora_remove_empty_markdown(path: *const c_char) -> *
   })
 }
 
+/// A link or image target that resolves against the document's folder, so a
+/// moved document may no longer find it. Anchors, URLs with a scheme, drive and
+/// root paths stay valid wherever the document is.
+fn is_scheme_char(c: char) -> bool {
+  c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')
+}
+
+fn is_relative_target(target: &str) -> bool {
+  if target.is_empty() || target.starts_with(['#', '/', '\\']) {
+    return false;
+  }
+  let end = target.find(['/', '\\', '?', '#']).unwrap_or(target.len());
+  if let Some(colon) = target[..end].find(':') {
+    let scheme = &target[..colon];
+    // "https:", "mailto:", and a drive letter such as "C:".
+    if !scheme.is_empty() && scheme.chars().all(is_scheme_char) {
+      return false;
+    }
+  }
+  true
+}
+
+fn note_target(target: &str, found: &mut Vec<String>) {
+  let target = target.trim();
+  let target = target.strip_prefix('<').and_then(|inner| inner.strip_suffix('>')).unwrap_or(target);
+  if is_relative_target(target) && !found.iter().any(|seen| seen == target) {
+    found.push(target.to_string());
+  }
+}
+
+fn note_inlines(inlines: &[Inline], found: &mut Vec<String>) {
+  for inline in inlines {
+    if let Some(link) = &inline.marks().link {
+      note_target(&link.href, found);
+    }
+    if let Inline::Image { src, .. } = inline {
+      note_target(src, found);
+    }
+  }
+}
+
+/// `src` and `href` attributes in retained HTML.
+fn note_html(source: &str, found: &mut Vec<String>) {
+  // ASCII lowering keeps every byte offset, so positions index `source` too.
+  let lower = source.to_ascii_lowercase();
+  for attribute in [" src=", " href=", "\tsrc=", "\thref=", "\nsrc=", "\nhref="] {
+    let mut from = 0;
+    while let Some(at) = lower[from..].find(attribute) {
+      let start = from + at + attribute.len();
+      from = start;
+      let rest = &source[start..];
+      let value = match rest.chars().next() {
+        Some(quote @ ('"' | '\'')) => rest[1..].split(quote).next().unwrap_or(""),
+        _ => rest.split(|c: char| c.is_whitespace() || c == '>').next().unwrap_or(""),
+      };
+      note_target(value, found);
+    }
+  }
+}
+
+fn note_block(block: &Block, found: &mut Vec<String>) {
+  match block {
+    Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => note_inlines(inlines, found),
+    Block::BlockQuote(blocks) => blocks.iter().for_each(|block| note_block(block, found)),
+    Block::List(list) => list.items.iter().flatten().for_each(|block| note_block(block, found)),
+    Block::Table(table) => {
+      table.header.iter().for_each(|cell| note_inlines(cell, found));
+      table.rows.iter().flatten().for_each(|cell| note_inlines(cell, found));
+    }
+    Block::RawSource(source) => note_html(source, found),
+    Block::CodeBlock { .. } | Block::HorizontalRule => {}
+  }
+}
+
+/// Every distinct relative link and image target, in document order.
+fn relative_targets(markdown: &str) -> Vec<String> {
+  let mut found = Vec::new();
+  for segment in &vellora_md::parse(markdown).segments {
+    note_block(&segment.block, &mut found);
+  }
+  found
+}
+
+/// Describes moving `path` into `directory` for the warning before it. Returns
+/// `{ok, path, name, isDir, target, sameFolder, containsSession,
+/// relativeReferences, examples}`; changes nothing. For a file, the relative
+/// links and images are counted in `draft` (the open document's unsaved text,
+/// used only when the file is that document) or else in the file on disk.
+///
+/// # Safety
+///
+/// `path` and `directory` must each either be null or point to a valid
+/// NUL-terminated C string; `draft` must be valid for `draft_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_inspect_move(
+  path: *const c_char,
+  directory: *const c_char,
+  draft: *const u8,
+  draft_len: usize,
+  has_draft: i32,
+) -> *mut c_char {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    let directory = unsafe { from_c(directory) };
+    let draft = if has_draft == 0 {
+      None
+    } else {
+      match unsafe { from_c_len(draft, draft_len) } {
+        Ok(text) => Some(text),
+        Err(error) => return error,
+      }
+    };
+    let data = match session::inspect_move_session(state(), &path, &directory) {
+      CommandResult::Ok { data, .. } => data,
+      CommandResult::Err { code, message, .. } => return error_json(&code, &message),
+    };
+    // A folder moves with everything it links to inside it.
+    let targets = if data.is_dir || data.same_folder {
+      Vec::new()
+    } else {
+      match draft.filter(|_| data.contains_session) {
+        Some(text) => relative_targets(&text),
+        None => match file_access::read_markdown_file(&data.path) {
+          CommandResult::Ok { data: file, .. } => relative_targets(&file.document.content),
+          CommandResult::Err { .. } => Vec::new(),
+        },
+      }
+    };
+    json!({
+      "ok": true,
+      "path": data.path,
+      "name": data.name,
+      "isDir": data.is_dir,
+      "target": data.target,
+      "sameFolder": data.same_folder,
+      "containsSession": data.contains_session,
+      "relativeReferences": targets.len(),
+      "examples": targets.iter().take(3).collect::<Vec<_>>(),
+    })
+  })
+}
+
+/// Moves a Markdown file or a folder into `directory` on the same drive, never
+/// replacing anything. Returns `{ok, path, name, isDir, sessionPath}` like
+/// [`vellora_rename`]; `sessionPath` is the open document's new path if it moved.
+///
+/// # Safety
+///
+/// `path` and `directory` must each either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_move_entry(path: *const c_char, directory: *const c_char) -> *mut c_char {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    let directory = unsafe { from_c(directory) };
+    match session::move_entry_session(state(), &path, &directory) {
+      CommandResult::Ok { data, .. } => json!({
+        "ok": true,
+        "path": data.path,
+        "name": data.name,
+        "isDir": data.is_dir,
+        "sessionPath": data.session_path,
+      }),
+      CommandResult::Err { code, message, .. } => error_json(&code, &message),
+    }
+  })
+}
+
+/// Deletes an entry for [`vellora_delete_entry`]: `permanent` 0 moves it to the
+/// recycle bin, 1 destroys it. Returns 0 when done, 1 when the entry cannot be
+/// recycled and nothing changed, and otherwise the failure's HRESULT.
+pub type DeleteEntryFn = unsafe extern "C" fn(path: *const c_char, permanent: i32) -> i32;
+
+/// HRESULT for an argument the shell cannot take.
+const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+
+/// The shell does not parse `\\?\` paths, so it gets the ordinary spelling.
+fn shell_path(path: &std::path::Path) -> String {
+  let text = path.to_string_lossy();
+  if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+    return format!(r"\\{rest}");
+  }
+  text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
+}
+
+/// Describes an entry for the confirmation before deleting it. Returns
+/// `{ok, path, name, isDir, containsSession}`; never changes the disk or session.
+///
+/// # Safety
+///
+/// `path` must either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_inspect_delete(path: *const c_char) -> *mut c_char {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    match session::inspect_delete_session(state(), &path) {
+      CommandResult::Ok { data, .. } => json!({
+        "ok": true,
+        "path": data.path,
+        "name": data.name,
+        "isDir": data.is_dir,
+        "containsSession": data.contains_session,
+      }),
+      CommandResult::Err { code, message, .. } => error_json(&code, &message),
+    }
+  })
+}
+
+/// Deletes a Markdown file or a folder through `delete` and closes the session
+/// when the open document went with it. Returns `{ok, path, isDir, permanent,
+/// closedSession}`, or the code `RECYCLE_UNAVAILABLE` when it cannot be recycled.
+///
+/// # Safety
+///
+/// `path` must either be null or point to a valid NUL-terminated C string, and
+/// `delete` must be safe to call with a NUL-terminated UTF-8 path.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_delete_entry(
+  path: *const c_char,
+  permanent: i32,
+  delete: Option<DeleteEntryFn>,
+) -> *mut c_char {
+  guarded(|| {
+    let path = unsafe { from_c(path) };
+    let delete = match delete {
+      Some(delete) => delete,
+      None => return error_json("INVALID_ARGUMENT", "missing delete callback"),
+    };
+    let result = session::delete_entry_session(state(), &path, permanent != 0, |entry, permanent| {
+      let native = match CString::new(shell_path(entry)) {
+        Ok(native) => native,
+        Err(_) => return DiskDelete::Failed(E_INVALIDARG),
+      };
+      match unsafe { delete(native.as_ptr(), i32::from(permanent)) } {
+        0 => DiskDelete::Deleted,
+        1 => DiskDelete::NotRecyclable,
+        code => DiskDelete::Failed(code),
+      }
+    });
+    match result {
+      CommandResult::Ok { data, .. } => json!({
+        "ok": true,
+        "path": data.path,
+        "isDir": data.is_dir,
+        "permanent": data.permanent,
+        "closedSession": data.closed_session,
+      }),
+      CommandResult::Err { code, message, .. } => error_json(&code, &message),
+    }
+  })
+}
+
 /// Reports whether the current session still matches `path`.
 ///
 /// # Safety
@@ -1232,5 +1483,24 @@ mod length_delimited_tests {
     let spliced = read_result(unsafe { vellora_splice_text_n(text.as_ptr(), text.len(), edits.as_ptr()) });
     assert_eq!(spliced["ok"], true, "{spliced}");
     assert_eq!(spliced["content"], "first\0tail\n\nchanged\n");
+  }
+
+  #[test]
+  fn relative_targets_list_each_local_link_and_image_once() {
+    let source = [
+      "![a](img/a.png) [doc](../other.md) [again](../other.md)",
+      "[web](https://example.com) [top](#top) ![drive](C:/p.png) ![root](/r.png)",
+      "[mail](mailto:a@b.c)",
+      "> - [deep](notes/deep.md \"title\")",
+      "| x |\n|---|\n| ![t](t.png) |",
+      "<img src=\"html.png\" alt=\"x\">",
+      "[ref]",
+      "[ref]: refs/r.md\n",
+    ]
+    .join("\n\n");
+    let mut found = super::relative_targets(&source);
+    found.sort();
+    assert_eq!(found, ["../other.md", "html.png", "img/a.png", "notes/deep.md", "refs/r.md", "t.png"]);
+    assert!(super::relative_targets("# Title\n\n[web](https://example.com)\n").is_empty());
   }
 }

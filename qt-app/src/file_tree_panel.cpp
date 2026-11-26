@@ -5,6 +5,13 @@
 #include <QAbstractFileIconProvider>
 #include <QApplication>
 #include <QClipboard>
+#include <QCursor>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QDir>
 #include <QFileInfo>
 #include <QFileSystemModel>
@@ -116,24 +123,9 @@ class FileTreeDelegate final : public QStyledItemDelegate {
   void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
+    // The row's background is one strip painted by FileTreeView::drawRow.
     const QRect row = option.rect.adjusted(0, 1, -6, -1);
     const bool current = panel_->isCurrentIndex(index);
-    const bool hovered = option.state.testFlag(QStyle::State_MouseOver);
-    const bool keyboard = option.state.testFlag(QStyle::State_HasFocus) &&
-                          option.state.testFlag(QStyle::State_Selected);
-    QColor fill;
-    if (current) fill = theme::pressed();
-    else if (hovered || keyboard) fill = theme::hover();
-    if (fill.isValid()) {
-      painter->setPen(Qt::NoPen);
-      painter->setBrush(fill);
-      painter->drawRoundedRect(row, 6, 6);
-    }
-    if (keyboard) {
-      painter->setBrush(Qt::NoBrush);
-      painter->setPen(QPen(theme::focusRing(), 1));
-      painter->drawRoundedRect(QRectF(row).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
-    }
 
     const bool directory = panel_->isDirectory(index);
     const int kind = directory ? (panel_->isExpandedIndex(index) ? kGlyphFolderOpen : kGlyphFolder) : kGlyphFile;
@@ -170,6 +162,163 @@ class FileTreeDelegate final : public QStyledItemDelegate {
 
  private:
   FileTreePanel* panel_;
+};
+
+// Paints each row's background as one strip across the whole width, under the
+// indentation and the expand arrows too, so a nested row never shows a cut-off
+// highlight. The open document gets the warm selection colour; hover and the
+// keyboard position get the light hover tint. There is no focus ring.
+class FileTreeView final : public QTreeView {
+ public:
+  explicit FileTreeView(FileTreePanel* panel) : QTreeView(panel), panel_(panel) {
+    // Entries are dragged onto folders to move them. The model stays read-only:
+    // drops are handled here and moved by MainWindow through the core.
+    setDragDropMode(QAbstractItemView::DragDrop);
+    setDefaultDropAction(Qt::MoveAction);
+    setDropIndicatorShown(false);
+    viewport()->setAcceptDrops(true);
+    // Hovering over a closed folder during a drag opens it.
+    setAutoExpandDelay(700);
+  }
+
+ protected:
+  void drawRow(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+    const QModelIndex row = index.siblingAtColumn(0);
+    QColor fill;
+    if (dropTarget_.isValid() && dropTarget_ == row) {
+      fill = theme::pressed();
+    } else if (panel_->isCurrentIndex(row)) {
+      fill = theme::selectionBg();
+    } else {
+      const bool keyboard = hasFocus() && currentIndex().siblingAtColumn(0) == row;
+      const bool hovered = viewport()->underMouse() &&
+                           indexAt(viewport()->mapFromGlobal(QCursor::pos())).siblingAtColumn(0) == row;
+      if (keyboard || hovered) fill = theme::hover();
+    }
+    if (fill.isValid()) {
+      const QRect item = visualRect(row);
+      painter->save();
+      painter->setRenderHint(QPainter::Antialiasing, true);
+      painter->setPen(Qt::NoPen);
+      painter->setBrush(fill);
+      painter->drawRoundedRect(QRect(0, item.top() + 1, qMax(0, viewport()->width() - 6), item.height() - 2), 6, 6);
+      painter->restore();
+    }
+    QTreeView::drawRow(painter, option, index);
+  }
+
+  void currentChanged(const QModelIndex& current, const QModelIndex& previous) override {
+    QTreeView::currentChanged(current, previous);
+    // The strip reaches past the item's own rectangle.
+    viewport()->update();
+  }
+  void focusInEvent(QFocusEvent* event) override {
+    QTreeView::focusInEvent(event);
+    viewport()->update();
+  }
+  void focusOutEvent(QFocusEvent* event) override {
+    QTreeView::focusOutEvent(event);
+    viewport()->update();
+  }
+
+  // Offers only the panel's own data type: nothing outside the panel accepts it.
+  void startDrag(Qt::DropActions) override {
+    const QModelIndex index = currentIndex().siblingAtColumn(0);
+    const QString path = panel_->pathForIndex(index);
+    if (path.isEmpty()) return;
+    auto* data = new QMimeData;
+    data->setData(FileTreePanel::moveMimeType(), path.toUtf8());
+    auto* drag = new QDrag(this);
+    drag->setMimeData(data);
+    const QRect item = visualRect(index);
+    const QRect strip(0, item.top(), qMax(1, viewport()->width() - 6), item.height());
+    const QPixmap row = viewport()->grab(strip);
+    QPixmap faded(row.size());
+    faded.setDevicePixelRatio(row.devicePixelRatio());
+    faded.fill(Qt::transparent);
+    {
+      QPainter painter(&faded);
+      painter.setOpacity(0.85);
+      painter.drawPixmap(0, 0, row);
+    }
+    drag->setPixmap(faded);
+    const QPoint grip = viewport()->mapFromGlobal(QCursor::pos()) - strip.topLeft();
+    drag->setHotSpot(QPoint(qBound(0, grip.x(), strip.width() - 1), qBound(0, grip.y(), strip.height() - 1)));
+    drag->exec(Qt::MoveAction, Qt::MoveAction);
+  }
+
+  void dragEnterEvent(QDragEnterEvent* event) override {
+    // Files from other programs go on to the window, which opens them.
+    if (!event->mimeData()->hasFormat(FileTreePanel::moveMimeType())) {
+      event->ignore();
+      return;
+    }
+    setState(DraggingState);
+    event->setDropAction(Qt::MoveAction);
+    event->accept();
+  }
+
+  void dragMoveEvent(QDragMoveEvent* event) override {
+    if (!event->mimeData()->hasFormat(FileTreePanel::moveMimeType())) {
+      event->ignore();
+      return;
+    }
+    // Scrolls near the edges and opens a hovered folder. It refuses the drop
+    // itself, as the model is read-only; the decision is made below.
+    QTreeView::dragMoveEvent(event);
+    const QString directory = directoryAt(event->position().toPoint());
+    const bool allowed = panel_->canMoveInto(draggedPath(event->mimeData()), directory);
+    setDropTarget(allowed ? panel_->indexForPath(directory) : QModelIndex());
+    if (allowed) {
+      event->setDropAction(Qt::MoveAction);
+      event->accept();
+    } else {
+      event->ignore();
+    }
+  }
+
+  void dragLeaveEvent(QDragLeaveEvent* event) override {
+    setDropTarget(QModelIndex());
+    QTreeView::dragLeaveEvent(event);
+  }
+
+  void dropEvent(QDropEvent* event) override {
+    stopAutoScroll();
+    setState(NoState);
+    setDropTarget(QModelIndex());
+    if (!event->mimeData()->hasFormat(FileTreePanel::moveMimeType())) {
+      event->ignore();
+      return;
+    }
+    const QString path = draggedPath(event->mimeData());
+    const QString directory = directoryAt(event->position().toPoint());
+    if (!panel_->canMoveInto(path, directory)) {
+      event->ignore();
+      return;
+    }
+    event->setDropAction(Qt::MoveAction);
+    event->accept();
+    // After the drag has ended: the move may ask a question first.
+    QTimer::singleShot(0, panel_, [panel = panel_, path, directory] { panel->requestMove(path, directory); });
+  }
+
+ private:
+  static QString draggedPath(const QMimeData* data) {
+    return QString::fromUtf8(data->data(FileTreePanel::moveMimeType()));
+  }
+  QString directoryAt(const QPoint& position) const {
+    const QModelIndex index = indexAt(position);
+    return panel_->dropDirectory(index.isValid() ? index.siblingAtColumn(0) : QModelIndex());
+  }
+  void setDropTarget(const QModelIndex& index) {
+    if (dropTarget_ == index) return;
+    dropTarget_ = QPersistentModelIndex(index);
+    viewport()->update();
+  }
+
+  FileTreePanel* panel_;
+  // The folder row a drop would move into, tinted while the drag is over it.
+  QPersistentModelIndex dropTarget_;
 };
 
 QToolButton* headerButton(QWidget* parent, const QString& name, int extent = 24) {
@@ -261,7 +410,7 @@ FileTreePanel::FileTreePanel(QWidget* parent) : QFrame(parent), icons_(new NoShe
   for (auto* button : {newButton_, folderButton_, collapseButton_}) headerLayout->addWidget(button);
   layout->addWidget(header_);
 
-  tree_ = new QTreeView(this);
+  tree_ = new FileTreeView(this);
   tree_->setObjectName(QStringLiteral("fileTree"));
   tree_->setAccessibleName(QStringLiteral("文件列表"));
   tree_->setHeaderHidden(true);
@@ -346,7 +495,10 @@ void FileTreePanel::applyTheme() {
       "QToolButton { border: 0; border-radius: 6px; background: transparent; color: %1; font-size: 16px; }"
       "QToolButton:hover:enabled { background: %2; }"
       "QToolButton:focus { outline: 0; }"
-      "QTreeView { background: transparent; border: 0; outline: 0; }"
+      // Rows paint their own strip: the style must not add the selection
+      // colour under the indentation or a focus rectangle.
+      "QTreeView { background: transparent; border: 0; outline: 0; show-decoration-selected: 0;"
+      "  selection-background-color: transparent; }"
       "QTreeView::item { border: 0; }"
       "QTreeView::item:hover, QTreeView::item:selected { background: transparent; }"
       "QScrollBar:vertical { width: 10px; background: transparent; margin: 0; border: 0; }"
@@ -355,10 +507,10 @@ void FileTreePanel::applyTheme() {
       "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; border: 0; background: transparent; }"
       "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: 0; }"
       "QLineEdit#fileTreeRenameEditor { border: 1px solid %5; border-radius: 6px; padding: 0 5px;"
-      "  background: %6; color: %7; font-size: 13px; }")
+      "  background: %6; color: %7; font-size: 13px; selection-background-color: %8; selection-color: %7; }")
       .arg(theme::muted().name(), hover, theme::rgbaCss(theme::scrollbarThumb()),
            theme::rgbaCss(theme::scrollbarThumbHover()), theme::focusRing().name(), theme::raised().name(),
-           theme::text().name()));
+           theme::text().name(), theme::selectionBg().name()));
   titleLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 12px;").arg(theme::muted().name()));
   emptyLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px;").arg(theme::muted().name()));
   emptyHint_->setStyleSheet(QStringLiteral("color: %1; font-size: 12px;").arg(theme::faint().name()));
@@ -383,6 +535,10 @@ const QPixmap& FileTreePanel::glyph(int kind) const { return glyphs_[qBound(0, k
 void FileTreePanel::focusTree() {
   if (rootPath_.isEmpty()) emptyButton_->setFocus(Qt::OtherFocusReason);
   else tree_->setFocus(Qt::OtherFocusReason);
+}
+
+bool FileTreePanel::isUnderRoot(const QString& path) const {
+  return isInside(path, rootPath_) || (!rootResolved_.isEmpty() && isInside(path, rootResolved_));
 }
 
 void FileTreePanel::refreshHeader() {
@@ -471,6 +627,9 @@ void FileTreePanel::setRootPath(const QString& path) {
   const QString root = expandedPath(path);
   if (root == rootPath_) return;
   rootPath_ = root;
+  // Read once here: never while painting or on every keystroke.
+  const QString resolved = root.isEmpty() ? QString() : normalizedPath(QFileInfo(root).canonicalFilePath());
+  rootResolved_ = samePath(resolved, root) ? QString() : resolved;
   expanded_.clear();
   pendingScroll_ = -1;
   revealPending_.clear();
@@ -512,6 +671,8 @@ void FileTreePanel::resumeWatching(const QString& renamedFrom, const QString& re
     expanded_ = rebased;
     rootPath_ = rebase(rootPath_);
     currentFile_ = rebase(currentFile_);
+    const QString resolved = normalizedPath(QFileInfo(rootPath_).canonicalFilePath());
+    rootResolved_ = samePath(resolved, rootPath_) ? QString() : resolved;
   }
   if (isVisible() && !rootPath_.isEmpty()) rebuildModel();
   refreshHeader();
@@ -565,13 +726,9 @@ void FileTreePanel::expandAncestors(const QString& path) {
 void FileTreePanel::revealFile(const QString& path) {
   const QString file = expandedPath(path);
   if (file.isEmpty()) return;
-  if (rootPath_.isEmpty()) {
-    setRootPath(QFileInfo(file).absolutePath());
-  } else if (!isInside(file, rootPath_)) {
-    // Opened from elsewhere (Ctrl+O, a drop, another window): keep the folder.
-    revealPending_.clear();
-    return;
-  }
+  // Opened from elsewhere (Ctrl+O, a drop, a link, another window): the panel
+  // follows the document to its folder, so it is always listed.
+  if (rootPath_.isEmpty() || !isUnderRoot(file)) setRootPath(QFileInfo(file).absolutePath());
   revealPending_ = file;
   applyReveal();
 }
@@ -615,6 +772,21 @@ void FileTreePanel::activate(const QModelIndex& index, bool fromMouse) {
   emit fileActivated(pathForIndex(index));
 }
 
+QString FileTreePanel::moveMimeType() { return QStringLiteral("application/x-vellora-file-tree-entry"); }
+
+bool FileTreePanel::canMoveInto(const QString& path, const QString& directory) const {
+  if (path.isEmpty() || directory.isEmpty() || rootPath_.isEmpty()) return false;
+  if (!isInside(path, rootPath_)) return false;
+  if (!samePath(directory, rootPath_) && !isInside(directory, rootPath_)) return false;
+  if (samePath(QFileInfo(path).absolutePath(), directory)) return false;
+  return !samePath(path, directory) && !isInside(directory, path);
+}
+
+void FileTreePanel::requestMove(const QString& path, const QString& directory) {
+  cancelRename();
+  if (canMoveInto(path, directory)) emit moveRequested(path, directory);
+}
+
 QString FileTreePanel::targetDirectory(const QModelIndex& index) const {
   if (!index.isValid()) return rootPath_;
   const QString path = pathForIndex(index);
@@ -636,15 +808,22 @@ void FileTreePanel::showContextMenu(const QPoint& position) {
            theme::rgbaCss(theme::hover())));
   QAction* create = menu.addAction(QStringLiteral("新建 Markdown 文件"));
   QAction* rename = nullptr;
+  QAction* remove = nullptr;
   if (index.isValid()) {
     rename = menu.addAction(QStringLiteral("重命名"));
     rename->setShortcut(QKeySequence(Qt::Key_F2));
+    remove = menu.addAction(QStringLiteral("删除"));
+    remove->setShortcut(QKeySequence(Qt::Key_Delete));
   }
   menu.addSeparator();
   QAction* copy = menu.addAction(QStringLiteral("复制路径"));
   QAction* chosen = menu.exec(tree_->viewport()->mapToGlobal(position));
   if (chosen == create) emit newFileRequested(targetDirectory(index));
   else if (chosen && chosen == rename) beginRename(path);
+  else if (chosen && chosen == remove) {
+    cancelRename();
+    emit deleteRequested(path);
+  }
   else if (chosen == copy) QGuiApplication::clipboard()->setText(QDir::toNativeSeparators(path));
 }
 
@@ -682,6 +861,11 @@ bool FileTreePanel::eventFilter(QObject* watched, QEvent* event) {
       }
       if (key->key() == Qt::Key_F2 && tree_->currentIndex().isValid()) {
         beginRename(pathForIndex(tree_->currentIndex()));
+        return true;
+      }
+      if (key->key() == Qt::Key_Delete && tree_->currentIndex().isValid()) {
+        cancelRename();
+        emit deleteRequested(pathForIndex(tree_->currentIndex()));
         return true;
       }
     }
@@ -733,9 +917,15 @@ void FileTreePanel::openRenameEditor(const QModelIndex& index, const QString& pa
 
 void FileTreePanel::positionRenameEditor() {
   if (!renameEditor_) return;
-  if (!renameIndex_.isValid()) { cancelRename(); return; }
+  const bool focused = renameEditor_->hasFocus();
+  // The entry is gone, or an ancestor folder was collapsed: the field has no
+  // row left to stand on. Cancel rather than hide it: hiding a focused field
+  // moves focus away, which used to commit a name the user never confirmed.
+  // A row that has only scrolled out of view keeps its rect and its field,
+  // which scrolls back with it.
+  if (!renameIndex_.isValid()) { cancelRename(focused); return; }
   const QRect rect = tree_->visualRect(renameIndex_);
-  if (rect.isEmpty()) { renameEditor_->hide(); return; }
+  if (rect.isEmpty()) { cancelRename(focused); return; }
   renameEditor_->setGeometry(rect.left() + kTextInset - 6, rect.top() + 2,
                              qMax(64, rect.width() - kTextInset), rect.height() - 4);
   renameEditor_->show();

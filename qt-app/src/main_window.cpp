@@ -31,6 +31,7 @@
 #include <qt_windows.h>
 #endif
 
+#include "app_settings.h"
 #include "bridge.h"
 #include "chrome.h"
 #include "document_view.h"
@@ -166,6 +167,8 @@ void MainWindow::buildUi() {
   connect(fileTree_, &FileTreePanel::openFolderRequested, this, &MainWindow::chooseFolder);
   connect(fileTree_, &FileTreePanel::fileActivated, this, &MainWindow::openFromTree);
   connect(fileTree_, &FileTreePanel::renameRequested, this, &MainWindow::renameFromTree);
+  connect(fileTree_, &FileTreePanel::deleteRequested, this, &MainWindow::deleteFromTree);
+  connect(fileTree_, &FileTreePanel::moveRequested, this, &MainWindow::moveFromTree);
   connect(fileTree_, &FileTreePanel::newFileRequested, this, &MainWindow::createFileIn);
   connect(toolbar_, &Toolbar::modeChanged, this, &MainWindow::setMode);
   connect(documentView_, &DocumentView::openRequested, this, &MainWindow::chooseFile);
@@ -438,7 +441,10 @@ void MainWindow::applyDocument(const QJsonObject& payload) {
   updateActiveHeading();
   refreshIdentity();
   documentView_->setFocus();
+  const QString folderBefore = fileTree_->rootPath();
   fileTree_->revealFile(documentPath_);
+  // The panel followed the document to another folder: remember it.
+  if (fileTree_->rootPath() != folderBefore) saveWorkspace();
   // Switching away leaves a new file abandoned: remove it while still empty.
   discardFreshFiles(true);
   if (!pendingTreeRename_.isEmpty()) {
@@ -1059,8 +1065,20 @@ void MainWindow::runTreeWork(bool showErrors) {
   // ask() refuses to stack dialogs, so an error waits for any open one to close.
   if (showErrors) {
     while (!pendingErrors_.isEmpty() && !modalOpen_) showError(pendingErrors_.takeFirst());
+    // A deletion asks first, so it runs outside the key or menu event that
+    // requested it, after the renames and errors queued before it.
+    if (!pendingDelete_.isEmpty() && pendingRenames_.isEmpty() && pendingErrors_.isEmpty() && !modalOpen_ &&
+        !busy_ && !isAsyncBusy() && !compositionActive()) {
+      deleteEntry(std::exchange(pendingDelete_, QString()));
+    }
+    if (!pendingMovePath_.isEmpty() && pendingRenames_.isEmpty() && pendingErrors_.isEmpty() &&
+        pendingDelete_.isEmpty() && !modalOpen_ && !busy_ && !isAsyncBusy() && !compositionActive()) {
+      const QString directory = std::exchange(pendingMoveDirectory_, QString());
+      moveEntry(std::exchange(pendingMovePath_, QString()), directory);
+    }
   }
-  if (pendingRenames_.isEmpty() && pendingErrors_.isEmpty()) {
+  if (pendingRenames_.isEmpty() && pendingErrors_.isEmpty() && pendingDelete_.isEmpty() &&
+      pendingMovePath_.isEmpty()) {
     treeWorkTimer_.stop();
   } else if (!showErrors) {
     QTimer::singleShot(0, this, [this] { runTreeWork(true); });
@@ -1080,6 +1098,158 @@ void MainWindow::discardFreshFiles(bool keepCurrent) {
     bridge::removeEmptyMarkdown(fresh);
   }
   freshFiles_ = kept;
+}
+
+void MainWindow::moveFromTree(const QString& path, const QString& directory) {
+  if (path.isEmpty() || directory.isEmpty()) return;
+  pendingMovePath_ = path;
+  pendingMoveDirectory_ = directory;
+  QTimer::singleShot(0, this, [this] { runTreeWork(true); });
+}
+
+void MainWindow::moveEntry(const QString& path, const QString& directory) {
+  // The warning counts links in the latest typing too.
+  if (!collectDraft()) return;
+  const QString draft = currentMarkdown();
+  const QJsonObject target = bridge::inspectMove(path, directory, documentPath_.isEmpty() ? nullptr : &draft);
+  if (!target.value("ok").toBool()) {
+    showError(target.value("message").toString());
+    return;
+  }
+  if (target.value("sameFolder").toBool()) return;
+  const bool folder = target.value("isDir").toBool();
+  const int links = target.value("relativeReferences").toInt();
+  // A folder moves together with what it links to inside it, so only files warn.
+  if (!folder && links > 0) {
+    QStringList examples;
+    for (const auto& value : target.value("examples").toArray()) examples << value.toString();
+    const QString destination =
+        QFileInfo(QFileInfo(FileTreePanel::normalizedPath(target.value("target").toString())).absolutePath()).fileName();
+    const QString message =
+        QStringLiteral("“%1”里有 %2 处用相对路径写的图片或链接，例如 %3。移到“%4”后，它们可能找不到。\n\n要继续移动吗？")
+            .arg(target.value("name").toString())
+            .arg(links)
+            .arg(examples.join(QStringLiteral("、")), destination);
+    if (ask(QStringLiteral("移动文件"), message, QStringLiteral("仍然移动"), QStringLiteral("取消")) != 2) return;
+  }
+  // Windows refuses to move a folder the file panel is watching.
+  if (folder) fileTree_->suspendWatching();
+  const QJsonObject result = bridge::moveEntry(path, directory);
+  const bool moved = result.value("ok").toBool();
+  if (folder) fileTree_->resumeWatching(moved ? path : QString(), moved ? result.value("path").toString() : QString());
+  if (!moved) {
+    showError(result.value("message").toString());
+    return;
+  }
+  // A new file the user moved is theirs to keep, as after a rename.
+  freshFiles_.removeIf([&](const QString& fresh) {
+    return FileTreePanel::samePath(fresh, path) || FileTreePanel::isInside(fresh, path) ||
+           FileTreePanel::samePath(fresh, target.value("path").toString()) ||
+           FileTreePanel::isInside(fresh, target.value("path").toString());
+  });
+  const QString sessionPath = result.value("sessionPath").toString();
+  if (sessionPath.isEmpty() || documentPath_.isEmpty()) return;
+  // Only the identity changes, as after a rename: the view is not rebuilt.
+  documentPath_ = sessionPath;
+  documentView_->setDocumentPath(sessionPath);
+  refreshIdentity();
+  fileTree_->revealFile(sessionPath);
+}
+
+void MainWindow::deleteFromTree(const QString& path) {
+  if (path.isEmpty()) return;
+  // A newer request replaces one that is still waiting.
+  pendingDelete_ = path;
+  QTimer::singleShot(0, this, [this] { runTreeWork(true); });
+}
+
+void MainWindow::deleteEntry(const QString& path) {
+  // dirty_ must include the latest typing before the prompt mentions it.
+  if (!collectDraft()) return;
+  const QJsonObject target = bridge::inspectDelete(path);
+  if (!target.value("ok").toBool()) {
+    showError(target.value("message").toString());
+    return;
+  }
+  const QString name = target.value("name").toString();
+  const bool folder = target.value("isDir").toBool();
+  const bool closes = target.value("containsSession").toBool() && !documentPath_.isEmpty();
+  const bool unsaved = closes && dirty_;
+  QString message = folder
+      ? QStringLiteral("要把文件夹“%1”及其中的全部内容移到回收站吗？文件列表里不显示的其他文件（例如图片）也会一起删除。").arg(name)
+      : QStringLiteral("要把“%1”移到回收站吗？").arg(name);
+  message += QStringLiteral("之后可以从回收站还原。");
+  if (unsaved) message += QStringLiteral("\n\n当前文档有未保存的更改，删除后这些更改会丢失。");
+  else if (closes) message += QStringLiteral("\n\n当前打开的文档会被关闭。");
+  const QString title = folder ? QStringLiteral("删除文件夹") : QStringLiteral("删除文件");
+  const QString primary = unsaved ? QStringLiteral("放弃更改并删除") : QStringLiteral("删除");
+  if (ask(title, message, primary, QStringLiteral("取消"), true) != 2) return;
+  QJsonObject result = removeEntry(path, false);
+  if (!result.value("ok").toBool() && result.value("code").toString() == QStringLiteral("RECYCLE_UNAVAILABLE")) {
+    const QString again = QStringLiteral("“%1”所在的位置不支持回收站，或者内容太大，回收站放不下。\n\n"
+                                         "要永久删除吗？永久删除后无法恢复。").arg(name);
+    if (ask(QStringLiteral("无法移到回收站"), again, QStringLiteral("永久删除"), QStringLiteral("取消"), true) != 2) {
+      return;
+    }
+    result = removeEntry(path, true);
+  }
+  if (!result.value("ok").toBool()) showError(result.value("message").toString());
+}
+
+QJsonObject MainWindow::removeEntry(const QString& path, bool permanent) {
+  QJsonObject result;
+  {
+    // The shell may dispatch window messages while it works. Nothing may save,
+    // open or prompt meanwhile: the core holds the session lock.
+    QScopedValueRollback<bool> modal(modalOpen_, true);
+    // Windows refuses to delete a folder the file panel is watching.
+    const bool folder = QFileInfo(path).isDir();
+    if (folder) fileTree_->suspendWatching();
+    result = bridge::deleteEntry(path, permanent);
+    if (folder) fileTree_->resumeWatching();
+  }
+  if (!result.value("ok").toBool()) return result;
+  const QString removed = result.value("path").toString();
+  freshFiles_.removeIf([&](const QString& fresh) {
+    return FileTreePanel::samePath(fresh, path) || FileTreePanel::isInside(fresh, path) ||
+           FileTreePanel::samePath(fresh, removed) || FileTreePanel::isInside(fresh, removed);
+  });
+  if (result.value("closedSession").toBool()) closeDeletedDocument();
+  return result;
+}
+
+void MainWindow::closeDeletedDocument() {
+  // The core already closed the session; only the view is left to reset.
+  QScopedValueRollback<bool> applying(applying_, true);
+  dirtyTimer_.stop();
+  maximumDirtyTimer_.stop();
+  ++session_;
+  compositionActions_.clear();
+  documentPath_.clear();
+  documentName_.clear();
+  savedMarkdown_.clear();
+  draftMarkdown_.clear();
+  documentBaselineMarkdown_.clear();
+  documentViewMarkdown_.clear();
+  sourceBaselineMarkdown_.clear();
+  lineEnding_ = QStringLiteral("\n");
+  dirty_ = false;
+  savedFeedback_ = false;
+  failure_.clear();
+  documentMode_ = true;
+  sourceVisited_ = false;
+  sourceScroll_ = documentScroll_ = sourceSelectionStart_ = sourceSelectionEnd_ = 0;
+  documentView_->setEmptyState();
+  sourceView_->setMarkdown(QString());
+  toolbar_->setMode(kModeDocument);
+  stack_->setCurrentWidget(documentView_);
+  closeSearch();
+  for (auto* field : search_->findChildren<QLineEdit*>()) field->clear();
+  searchQuery_.clear();
+  sourceMatches_.clear();
+  sourceSearchIndex_ = -1;
+  refreshOutline(QJsonObject());
+  refreshIdentity();
 }
 
 void MainWindow::createFileIn(const QString& directory) {
@@ -1108,15 +1278,15 @@ void MainWindow::createFileIn(const QString& directory) {
 
 void MainWindow::restoreWorkspace() {
   settingsEnabled_ = true;
-  QSettings settings;
+  const auto settings = app_settings::open();
   // Without the window size the sidebar would never be wide enough to dock.
-  restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
-  const QString folder = settings.value(QStringLiteral("sidebar/root")).toString();
+  restoreGeometry(settings->value(QStringLiteral("window/geometry")).toByteArray());
+  const QString folder = app_settings::loadFolder(*settings, QStringLiteral("sidebar/root"));
   if (!folder.isEmpty() && QFileInfo(folder).isDir()) fileTree_->setRootPath(folder);
-  side_->setCurrentTab(settings.value(QStringLiteral("sidebar/tab")).toString() == QStringLiteral("outline")
+  side_->setCurrentTab(settings->value(QStringLiteral("sidebar/tab")).toString() == QStringLiteral("outline")
                            ? SidePanel::Outline
                            : SidePanel::Files);
-  sidePreferred_ = settings.value(QStringLiteral("sidebar/visible"), false).toBool();
+  sidePreferred_ = settings->value(QStringLiteral("sidebar/visible"), false).toBool();
   layoutSidebar();
   // Decided in showEvent(), once a maximised window has its real width. A
   // remembered sidebar opens only where it docks, never over the document.
@@ -1125,13 +1295,13 @@ void MainWindow::restoreWorkspace() {
 
 void MainWindow::saveWorkspace() {
   if (!settingsEnabled_) return;
-  QSettings settings;
-  settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
-  settings.setValue(QStringLiteral("sidebar/root"), fileTree_->rootPath());
-  settings.setValue(QStringLiteral("sidebar/visible"), sidePreferred_);
-  settings.setValue(QStringLiteral("sidebar/tab"), side_->preferredTab() == SidePanel::Outline
-                                                       ? QStringLiteral("outline")
-                                                       : QStringLiteral("files"));
+  const auto settings = app_settings::open();
+  settings->setValue(QStringLiteral("window/geometry"), saveGeometry());
+  app_settings::saveFolder(*settings, QStringLiteral("sidebar/root"), fileTree_->rootPath());
+  settings->setValue(QStringLiteral("sidebar/visible"), sidePreferred_);
+  settings->setValue(QStringLiteral("sidebar/tab"), side_->preferredTab() == SidePanel::Outline
+                                                        ? QStringLiteral("outline")
+                                                        : QStringLiteral("files"));
 }
 
 void MainWindow::positionSearchPanel() {

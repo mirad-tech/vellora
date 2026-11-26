@@ -25,21 +25,31 @@ function Assert-ReleaseUnwindProfile([string]$TomlPath) {
   }
 }
 
-Write-Host '==> [1/4] Checking Rust formatting (cargo fmt --check)...'
+Write-Host '==> [1/5] Checking Rust formatting (cargo fmt --check)...'
 & cargo fmt --manifest-path $manifest --all -- --check
 if ($LASTEXITCODE -ne 0) { throw "cargo fmt --check failed: $LASTEXITCODE" }
 
-Write-Host '==> [2/4] Running Clippy (cargo clippy -- -D warnings)...'
+Write-Host '==> [2/5] Running Clippy (cargo clippy -- -D warnings)...'
 & cargo clippy --manifest-path $manifest --workspace --all-targets --locked -- -D warnings
 if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed: $LASTEXITCODE" }
 
-Write-Host '==> [3/4] Verifying release panic unwind policy...'
+Write-Host '==> [3/5] Verifying release panic unwind policy...'
 foreach ($rel in @('Cargo.toml', 'core\Cargo.toml', 'md\Cargo.toml', 'bridge\Cargo.toml')) {
   Assert-ReleaseUnwindProfile (Join-Path $repoRoot $rel)
 }
 
+# Static guards for the installer and the portable zip, e.g. that portable.txt
+# never reaches the installed copy. They read files only and need tomllib (3.11+).
+Write-Host '==> [4/5] Checking release packaging rules (installer/tests/test_release_policy.py)...'
+$python = Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (!$python) { throw 'Python 3.11 or newer is required on PATH for the release packaging rules.' }
+& $python.Source -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'
+if ($LASTEXITCODE -ne 0) { throw "Python 3.11 or newer is required for the release packaging rules: $($python.Source)" }
+& $python.Source (Join-Path $repoRoot 'installer\tests\test_release_policy.py')
+if ($LASTEXITCODE -ne 0) { throw "Release packaging rules failed: $LASTEXITCODE" }
+
 if ($Full) {
-  Write-Host '==> [4/4] Building and running full Rust + Qt regression suites...'
+  Write-Host '==> [5/5] Building and running full Rust + Qt regression suites...'
   $oldQtRoot = $env:QT_ROOT
   try {
     if (!$env:QT_ROOT -and $env:QT_ROOT_DIR) {
@@ -50,7 +60,7 @@ if ($Full) {
     $env:QT_ROOT = $oldQtRoot
   }
 } else {
-  Write-Host '==> [4/4] Running Rust workspace tests...'
+  Write-Host '==> [5/5] Running Rust workspace tests...'
   & cargo test --manifest-path $manifest --workspace --locked
   if ($LASTEXITCODE -ne 0) { throw "cargo test failed: $LASTEXITCODE" }
 }

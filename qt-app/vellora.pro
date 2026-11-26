@@ -33,7 +33,7 @@ LIBS += $$quote($$BRIDGE_DIR/vellora_bridge.lib)
 LIBS += -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -loleaut32 -luuid -lsynchronization
 
 RC_ICONS = $$PWD/../installer/assets/vellora.ico
-VERSION = 0.1.6
+VERSION = 0.1.7
 QMAKE_TARGET_PRODUCT = "Vellora"
 QMAKE_TARGET_DESCRIPTION = "Vellora"
 QMAKE_TARGET_COMPANY = "Vellora Contributors"
@@ -52,3 +52,6 @@ HEADERS += $$PWD/src/image_decode.h
 
 SOURCES += $$PWD/src/file_tree_panel.cpp
 HEADERS += $$PWD/src/file_tree_panel.h
+
+SOURCES += $$PWD/src/app_settings.cpp
+HEADERS += $$PWD/src/app_settings.h
