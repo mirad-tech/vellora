@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("Vellora"));
   app.setApplicationDisplayName(QStringLiteral("Vellora"));
-  app.setApplicationVersion(QStringLiteral("0.1.7"));
+  app.setApplicationVersion(QStringLiteral("0.1.8"));
   app.setOrganizationName(QStringLiteral("Vellora Contributors"));
   // Before any widget exists: a Chinese system UI language keeps the Chinese UI,
   // any other shows English. VELLORA_LANG=zh|en overrides it.

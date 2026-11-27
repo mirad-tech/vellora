@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -70,8 +71,10 @@ jobs:
 
   windows-installer:
     name: Windows installer (test build)
-    # Builds Setup and the portable zip from this commit so a pull request can be
-    # tried on a real machine; also compiles the NSIS script. Not a release.
+    # Only on a manual run (Actions > CI > Run workflow, pick the branch): builds
+    # Setup and the portable zip from that commit so it can be tried on a real
+    # machine. Not a release.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - name: Checkout repository
