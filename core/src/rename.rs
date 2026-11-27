@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::file_access::is_markdown_path;
+use crate::i18n::{is_english, text};
 use crate::types::{CommandResult, EmptyPayload, EntryPayload};
 
 fn is_forbidden_char(c: char) -> bool {
@@ -28,25 +29,31 @@ fn is_reserved_windows_name(name: &str) -> bool {
 /// so a renamed document stays portable; Markdown files keep a Markdown extension.
 pub fn validate_new_name(name: &str, is_markdown_file: bool) -> Result<(), &'static str> {
   if name.is_empty() {
-    return Err("名称不能为空。");
+    return Err(text("名称不能为空。", "Name can't be empty."));
   }
   if name.trim() != name {
-    return Err("名称首尾不能有空格。");
+    return Err(text("名称首尾不能有空格。", "Name can't start or end with a space."));
   }
   if name.ends_with('.') {
-    return Err("名称不能以句点结尾。");
+    return Err(text("名称不能以句点结尾。", "Name can't end with a period."));
   }
   if name.chars().any(is_forbidden_char) {
-    return Err("名称不能包含 \\ / : * ? \" < > | 或控制字符。");
+    return Err(text(
+      "名称不能包含 \\ / : * ? \" < > | 或控制字符。",
+      "Name can't contain \\ / : * ? \" < > | or control characters.",
+    ));
   }
   if name.encode_utf16().count() > 255 {
-    return Err("名称过长。");
+    return Err(text("名称过长。", "Name is too long."));
   }
   if is_reserved_windows_name(name) {
-    return Err("这是 Windows 保留的名称，请换一个。");
+    return Err(text(
+      "这是 Windows 保留的名称，请换一个。",
+      "This name is reserved by Windows. Choose another.",
+    ));
   }
   if is_markdown_file && !is_markdown_path(Path::new(name)) {
-    return Err("文件扩展名必须是 .md 或 .markdown。");
+    return Err(text("文件扩展名必须是 .md 或 .markdown。", "File extension must be .md or .markdown."));
   }
   Ok(())
 }
@@ -189,16 +196,33 @@ fn same_entry(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
   false
 }
 
-const UNTITLED: &str = "未命名";
+/// Base name of a new file: "未命名" in Chinese, "Untitled" in English.
+fn untitled() -> &'static str {
+  text("未命名", "Untitled")
+}
 
 fn create_failure<T>(error: &io::Error) -> CommandResult<T> {
   match error.kind() {
-    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", "文件夹不存在或已被移动。"),
-    io::ErrorKind::AlreadyExists => CommandResult::failure("TARGET_EXISTS", "已存在同名的文件或文件夹。"),
-    io::ErrorKind::PermissionDenied => {
-      CommandResult::failure("CREATE_FAILED", "无法新建文件：没有写入权限。")
-    }
-    _ => CommandResult::failure("CREATE_FAILED", format!("无法新建文件：{error}")),
+    io::ErrorKind::NotFound => CommandResult::failure(
+      "NOT_FOUND",
+      text("文件夹不存在或已被移动。", "The folder doesn't exist or has been moved."),
+    ),
+    io::ErrorKind::AlreadyExists => CommandResult::failure(
+      "TARGET_EXISTS",
+      text("已存在同名的文件或文件夹。", "A file or folder with that name already exists."),
+    ),
+    io::ErrorKind::PermissionDenied => CommandResult::failure(
+      "CREATE_FAILED",
+      text("无法新建文件：没有写入权限。", "Can't create the file: no write permission."),
+    ),
+    _ => CommandResult::failure(
+      "CREATE_FAILED",
+      if is_english() {
+        format!("Can't create the file: {error}")
+      } else {
+        format!("无法新建文件：{error}")
+      },
+    ),
   }
 }
 
@@ -211,17 +235,22 @@ fn create_new_file(path: &Path) -> io::Result<()> {
 pub fn create_markdown_entry(directory: &str, name: &str) -> CommandResult<EntryPayload> {
   let trimmed = directory.trim();
   if trimmed.is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "路径无效。");
+    return CommandResult::failure("INVALID_ARGUMENT", text("路径无效。", "Invalid path."));
   }
   // Keep the folder as the caller named it: canonicalizing would follow a
   // junction or symlink, and the file tree would no longer find the new file.
   let directory = Path::new(trimmed);
   if !directory.is_absolute() {
-    return CommandResult::failure("INVALID_ARGUMENT", "路径无效。");
+    return CommandResult::failure("INVALID_ARGUMENT", text("路径无效。", "Invalid path."));
   }
   match fs::metadata(directory) {
     Ok(metadata) if metadata.is_dir() => {}
-    Ok(_) => return CommandResult::failure("NOT_A_DIRECTORY", "选择的路径不是文件夹。"),
+    Ok(_) => {
+      return CommandResult::failure(
+        "NOT_A_DIRECTORY",
+        text("选择的路径不是文件夹。", "The selected path isn't a folder."),
+      )
+    }
     Err(error) => return create_failure(&error),
   }
   let created = |path: PathBuf| {
@@ -244,7 +273,8 @@ pub fn create_markdown_entry(directory: &str, name: &str) -> CommandResult<Entry
     };
   }
   for index in 1..=999u32 {
-    let candidate = if index == 1 { format!("{UNTITLED}.md") } else { format!("{UNTITLED} {index}.md") };
+    let untitled = untitled();
+    let candidate = if index == 1 { format!("{untitled}.md") } else { format!("{untitled} {index}.md") };
     let path = directory.join(candidate);
     match create_new_file(&path) {
       Ok(()) => return created(path),
@@ -252,7 +282,13 @@ pub fn create_markdown_entry(directory: &str, name: &str) -> CommandResult<Entry
       Err(error) => return create_failure(&error),
     }
   }
-  CommandResult::failure("CREATE_FAILED", "无法新建文件：未命名文件过多，请先整理文件夹。")
+  CommandResult::failure(
+    "CREATE_FAILED",
+    text(
+      "无法新建文件：未命名文件过多，请先整理文件夹。",
+      "Can't create the file: too many untitled files. Tidy up the folder first.",
+    ),
+  )
 }
 
 /// Removes a Markdown file that was created for the user and then abandoned.
@@ -261,27 +297,52 @@ pub fn create_markdown_entry(directory: &str, name: &str) -> CommandResult<Entry
 pub fn remove_empty_markdown(path: &str) -> CommandResult<EmptyPayload> {
   let trimmed = path.trim();
   if trimmed.is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "路径无效。");
+    return CommandResult::failure("INVALID_ARGUMENT", text("路径无效。", "Invalid path."));
   }
   let path = Path::new(trimmed);
   if !is_markdown_path(path) {
-    return CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能删除 .md 或 .markdown 文件。");
+    return CommandResult::failure(
+      "UNSUPPORTED_FILE_TYPE",
+      text("只能删除 .md 或 .markdown 文件。", "Only .md or .markdown files can be deleted."),
+    );
   }
   let metadata = match fs::symlink_metadata(path) {
     Ok(metadata) => metadata,
     Err(error) if error.kind() == io::ErrorKind::NotFound => return CommandResult::success(EmptyPayload {}),
-    Err(error) => return CommandResult::failure("REMOVE_FAILED", format!("无法删除文件：{error}")),
+    Err(error) => {
+      return CommandResult::failure(
+        "REMOVE_FAILED",
+        if is_english() {
+          format!("Can't delete the file: {error}")
+        } else {
+          format!("无法删除文件：{error}")
+        },
+      )
+    }
   };
   if !metadata.is_file() {
-    return CommandResult::failure("NOT_A_FILE", "选择的路径不是文件。");
+    return CommandResult::failure(
+      "NOT_A_FILE",
+      text("选择的路径不是文件。", "The selected path isn't a file."),
+    );
   }
   if metadata.len() != 0 {
-    return CommandResult::failure("NOT_EMPTY", "文件已有内容，未删除。");
+    return CommandResult::failure(
+      "NOT_EMPTY",
+      text("文件已有内容，未删除。", "The file has content, so it wasn't deleted."),
+    );
   }
   match fs::remove_file(path) {
     Ok(()) => CommandResult::success(EmptyPayload {}),
     Err(error) if error.kind() == io::ErrorKind::NotFound => CommandResult::success(EmptyPayload {}),
-    Err(error) => CommandResult::failure("REMOVE_FAILED", format!("无法删除文件：{error}")),
+    Err(error) => CommandResult::failure(
+      "REMOVE_FAILED",
+      if is_english() {
+        format!("Can't delete the file: {error}")
+      } else {
+        format!("无法删除文件：{error}")
+      },
+    ),
   }
 }
 
@@ -346,6 +407,40 @@ mod tests {
     assert_eq!(created.name, "未命名 2.md");
     assert_eq!(fs::read_to_string(dir.path().join("未命名.md")).unwrap(), "keep");
     assert!(fs::read(dir.path().join("未命名 2.md")).unwrap().is_empty());
+  }
+
+  #[test]
+  fn english_names_new_files_untitled_and_explains_refusals_in_english() {
+    use crate::i18n::{with_language, Language};
+    let dir = tempfile::tempdir().unwrap();
+    let directory = dir.path().to_str().unwrap();
+    let names = with_language(Language::English, || {
+      [create_markdown_entry(directory, ""), create_markdown_entry(directory, "")].map(
+        |result| match result {
+          CommandResult::Ok { data, .. } => data.name,
+          other => panic!("{other:?}"),
+        },
+      )
+    });
+    assert_eq!(names, ["Untitled.md".to_string(), "Untitled 2.md".to_string()]);
+    assert_eq!(validate_new_name("", true), Err("名称不能为空。"));
+    with_language(Language::English, || {
+      assert_eq!(validate_new_name("", true), Err("Name can't be empty."));
+      assert_eq!(validate_new_name("a.md ", true), Err("Name can't start or end with a space."));
+      assert_eq!(validate_new_name("a.", false), Err("Name can't end with a period."));
+      assert_eq!(
+        validate_new_name("a?.md", true),
+        Err("Name can't contain \\ / : * ? \" < > | or control characters.")
+      );
+      assert_eq!(validate_new_name("con.md", true), Err("This name is reserved by Windows. Choose another."));
+      assert_eq!(validate_new_name("notes.txt", true), Err("File extension must be .md or .markdown."));
+      match create_markdown_entry("relative", "") {
+        CommandResult::Err { code, message, .. } => {
+          assert_eq!((code.as_str(), message.as_str()), ("INVALID_ARGUMENT", "Invalid path."))
+        }
+        other => panic!("{other:?}"),
+      }
+    });
   }
 
   #[test]

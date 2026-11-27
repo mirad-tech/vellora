@@ -31,3 +31,4 @@ Qt kit 优先使用 `-QtRoot` 或 `QT_ROOT`；未指定时使用 `qt/6.8.3/msvc2
 - 原始 HTML/Markdown 片段的原文与预览分离；不执行脚本、事件处理器和任意 CSS。
 - 文件、图片和链接访问由 core 校验；使用同一已验证文件句柄读取的图片字节，编码文件上限 10 MiB，缓存和动画有界。
 - HTTP(S) 外链需确认，本地资源不能越过当前文档允许目录。复制正文可包含 HTML 与纯文本，粘贴按纯文本处理。
+- 界面文字以简体中文为源文本，统一经 `ui::tr` / `ui::trTrash`（`src/ui_text.h`）取用；英文译文手写在 `translations/vellora_en.ts`，构建时由 lrelease 编译并嵌入资源。启动时按 `QLocale::system().uiLanguages()` 的第一项选择：任何 `zh*` 为中文，其余为英文；`VELLORA_LANG=zh|en` 可覆盖，便于测试。Rust core 的错误信息随之切换（`vellora_set_language`），错误码不变。新增或修改界面文字后运行 `python tools/check_translations.py`，并补全 `.ts` 中的英文。

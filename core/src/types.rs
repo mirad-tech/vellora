@@ -6,6 +6,8 @@
 
 use serde::Serialize;
 
+use crate::i18n::text;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarkdownDocument {
@@ -46,7 +48,11 @@ impl<T> CommandResult<T> {
     Self::Err {
       ok: false,
       code: "FILE_CHANGED".to_string(),
-      message: "文件已被其他程序修改，请选择保留草稿、重新加载或确认覆盖。".to_string(),
+      message: text(
+        "文件已被其他程序修改，请选择保留草稿、重新加载或确认覆盖。",
+        "The file was changed by another program. Keep your draft, reload it, or overwrite it.",
+      )
+      .to_string(),
       conflict_token: Some(token),
     }
   }
@@ -180,6 +186,21 @@ mod tests {
     let other =
       serde_json::to_value(CommandResult::<DocumentPayload>::failure("NOT_FOUND", "missing")).unwrap();
     assert_eq!(other.as_object().unwrap().len(), 3);
+  }
+
+  #[test]
+  fn conflict_message_follows_the_language_and_keeps_its_code() {
+    use crate::i18n::{with_language, Language};
+    let message = |result: CommandResult<DocumentPayload>| result.as_err().unwrap();
+    let chinese = message(CommandResult::file_changed("t".into()));
+    assert_eq!(chinese.message, "文件已被其他程序修改，请选择保留草稿、重新加载或确认覆盖。");
+    let english = with_language(Language::English, || message(CommandResult::file_changed("t".into())));
+    assert_eq!(english.code, "FILE_CHANGED");
+    assert_eq!(english.conflict_token.as_deref(), Some("t"));
+    assert_eq!(
+      english.message,
+      "The file was changed by another program. Keep your draft, reload it, or overwrite it."
+    );
   }
 
   #[test]

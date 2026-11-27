@@ -133,6 +133,7 @@ jobs:
         run: |
           python installer/tests/test_release_policy.py
           python installer/tests/test_association_policy.py
+          python tools/check_translations.py
 
       - name: Build and run Rust + Qt regression suites
         env:

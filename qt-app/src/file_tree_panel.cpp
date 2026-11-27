@@ -41,6 +41,7 @@
 
 #include "chrome.h"
 #include "theme.h"
+#include "ui_text.h"
 
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -387,7 +388,7 @@ bool FileTreePanel::isInside(const QString& child, const QString& parent) {
 
 FileTreePanel::FileTreePanel(QWidget* parent) : QFrame(parent), icons_(new NoShellIcons) {
   setObjectName(QStringLiteral("fileTreePanel"));
-  setAccessibleName(QStringLiteral("文件"));
+  setAccessibleName(ui::tr("文件"));
   setAttribute(Qt::WA_StyledBackground, true);
 
   auto* layout = new QVBoxLayout(this);
@@ -399,20 +400,20 @@ FileTreePanel::FileTreePanel(QWidget* parent) : QFrame(parent), icons_(new NoShe
   auto* headerLayout = new QHBoxLayout(header_);
   headerLayout->setContentsMargins(8, 0, 12, 0);
   headerLayout->setSpacing(2);
-  titleLabel_ = new QLabel(QStringLiteral("文件"), header_);
+  titleLabel_ = new QLabel(ui::tr("文件"), header_);
   titleLabel_->setTextFormat(Qt::PlainText);
   titleLabel_->setMinimumWidth(0);
   titleLabel_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   headerLayout->addWidget(titleLabel_, 1);
-  newButton_ = headerButton(header_, QStringLiteral("新建 Markdown 文件"));
-  folderButton_ = headerButton(header_, QStringLiteral("打开文件夹"));
-  collapseButton_ = headerButton(header_, QStringLiteral("全部折叠"));
+  newButton_ = headerButton(header_, ui::tr("新建 Markdown 文件"));
+  folderButton_ = headerButton(header_, ui::tr("打开文件夹"));
+  collapseButton_ = headerButton(header_, ui::tr("全部折叠"));
   for (auto* button : {newButton_, folderButton_, collapseButton_}) headerLayout->addWidget(button);
   layout->addWidget(header_);
 
   tree_ = new FileTreeView(this);
   tree_->setObjectName(QStringLiteral("fileTree"));
-  tree_->setAccessibleName(QStringLiteral("文件列表"));
+  tree_->setAccessibleName(ui::tr("文件列表"));
   tree_->setHeaderHidden(true);
   tree_->setIndentation(14);
   tree_->setUniformRowHeights(true);
@@ -433,12 +434,12 @@ FileTreePanel::FileTreePanel(QWidget* parent) : QFrame(parent), icons_(new NoShe
   auto* emptyLayout = new QVBoxLayout(empty_);
   emptyLayout->setContentsMargins(8, 8, 12, 8);
   emptyLayout->setSpacing(10);
-  emptyLabel_ = new QLabel(QStringLiteral("还没有打开文件夹。"), empty_);
+  emptyLabel_ = new QLabel(ui::tr("还没有打开文件夹。"), empty_);
   emptyLabel_->setWordWrap(true);
-  emptyButton_ = new QPushButton(QStringLiteral("打开文件夹"), empty_);
+  emptyButton_ = new QPushButton(ui::tr("打开文件夹"), empty_);
   emptyButton_->setCursor(Qt::PointingHandCursor);
   emptyButton_->setFixedHeight(32);
-  emptyHint_ = new QLabel(QStringLiteral("也可以把文件夹拖进窗口。打开文件时会自动显示它所在的文件夹。"), empty_);
+  emptyHint_ = new QLabel(ui::tr("也可以把文件夹拖进窗口。打开文件时会自动显示它所在的文件夹。"), empty_);
   emptyHint_->setWordWrap(true);
   emptyLayout->addWidget(emptyLabel_);
   emptyLayout->addWidget(emptyButton_, 0, Qt::AlignLeft);
@@ -548,7 +549,7 @@ void FileTreePanel::refreshHeader() {
     titleLabel_->setText(name.isEmpty() ? QDir::toNativeSeparators(rootPath_) : name);
     titleLabel_->setToolTip(QDir::toNativeSeparators(rootPath_));
   } else {
-    titleLabel_->setText(QStringLiteral("文件"));
+    titleLabel_->setText(ui::tr("文件"));
     titleLabel_->setToolTip(QString());
   }
   newButton_->setVisible(open);
@@ -806,17 +807,17 @@ void FileTreePanel::showContextMenu(const QPoint& position) {
       "QMenu::separator { height: 1px; background: %2; margin: 4px 8px; }")
       .arg(theme::raised().name(), theme::rgbaCss(theme::border()), theme::text().name(),
            theme::rgbaCss(theme::hover())));
-  QAction* create = menu.addAction(QStringLiteral("新建 Markdown 文件"));
+  QAction* create = menu.addAction(ui::tr("新建 Markdown 文件"));
   QAction* rename = nullptr;
   QAction* remove = nullptr;
   if (index.isValid()) {
-    rename = menu.addAction(QStringLiteral("重命名"));
+    rename = menu.addAction(ui::tr("重命名"));
     rename->setShortcut(QKeySequence(Qt::Key_F2));
-    remove = menu.addAction(QStringLiteral("删除"));
+    remove = menu.addAction(ui::tr("删除"));
     remove->setShortcut(QKeySequence(Qt::Key_Delete));
   }
   menu.addSeparator();
-  QAction* copy = menu.addAction(QStringLiteral("复制路径"));
+  QAction* copy = menu.addAction(ui::tr("复制路径"));
   QAction* chosen = menu.exec(tree_->viewport()->mapToGlobal(position));
   if (chosen == create) emit newFileRequested(targetDirectory(index));
   else if (chosen && chosen == rename) beginRename(path);
@@ -904,7 +905,7 @@ void FileTreePanel::openRenameEditor(const QModelIndex& index, const QString& pa
   tree_->setCurrentIndex(index);
   renameEditor_ = new QLineEdit(tree_->viewport());
   renameEditor_->setObjectName(QStringLiteral("fileTreeRenameEditor"));
-  renameEditor_->setAccessibleName(QStringLiteral("重命名"));
+  renameEditor_->setAccessibleName(ui::tr("重命名"));
   const QString name = QFileInfo(path).fileName();
   renameEditor_->setText(name);
   const int dot = isDirectory(index) ? -1 : name.lastIndexOf(QLatin1Char('.'));
@@ -961,7 +962,7 @@ void FileTreePanel::closeRenameEditor(bool refocus) {
 
 SidePanel::SidePanel(QWidget* parent) : QFrame(parent) {
   setObjectName(QStringLiteral("sidePanel"));
-  setAccessibleName(QStringLiteral("侧边栏"));
+  setAccessibleName(ui::tr("侧边栏"));
   setAttribute(Qt::WA_StyledBackground, true);
   setFixedWidth(232);
 
@@ -988,10 +989,10 @@ SidePanel::SidePanel(QWidget* parent) : QFrame(parent) {
     row->addWidget(tab);
     return tab;
   };
-  filesTab_ = makeTab(QStringLiteral("文件"));
-  outlineTab_ = makeTab(QStringLiteral("大纲"));
+  filesTab_ = makeTab(ui::tr("文件"));
+  outlineTab_ = makeTab(ui::tr("大纲"));
   row->addStretch(1);
-  closeButton_ = headerButton(header, QStringLiteral("关闭侧边栏"), 26);
+  closeButton_ = headerButton(header, ui::tr("关闭侧边栏"), 26);
   closeButton_->setObjectName(QStringLiteral("sideClose"));
   row->addWidget(closeButton_);
   layout->addWidget(header);
@@ -1048,7 +1049,7 @@ void SidePanel::showTab(Tab tab) {
 
 void SidePanel::refreshTabs() {
   outlineTab_->setEnabled(outlineAvailable_);
-  outlineTab_->setToolTip(outlineAvailable_ ? QString() : QStringLiteral("打开文档后可查看大纲"));
+  outlineTab_->setToolTip(outlineAvailable_ ? QString() : ui::tr("打开文档后可查看大纲"));
   (currentTab() == Outline ? outlineTab_ : filesTab_)->setChecked(true);
 }
 

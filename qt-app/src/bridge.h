@@ -74,5 +74,7 @@ QJsonObject deleteEntry(const QString& path, bool permanent);
 using DiskDeleter = std::function<int(const QString& path, bool permanent)>;
 void setDiskDeleterForTesting(DiskDeleter deleter);
 QString version();
+// Language of the core's messages, for the whole process: "zh" (default) or "en".
+bool setLanguage(const QString& tag);
 
 }  // namespace bridge

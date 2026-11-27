@@ -36,6 +36,7 @@
 #include <QVBoxLayout>
 
 #include "theme.h"
+#include "ui_text.h"
 
 namespace {
 
@@ -287,7 +288,7 @@ SegmentedControl::SegmentedControl(QWidget* parent) : QWidget(parent) {
   setAttribute(Qt::WA_Hover, true);
   setMouseTracking(true);
   setFocusPolicy(Qt::NoFocus);
-  setAccessibleName(QStringLiteral("查看方式"));
+  setAccessibleName(ui::tr("查看方式"));
   for (int index = 0; index < labels_.size(); ++index) {
     auto* button = new SegmentButton(labels_[index], this);
     button->setAccessibleName(labels_[index]);
@@ -446,8 +447,8 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
 
   replaceToggle_ = smallButton(prefix);
   replaceToggle_->setIconSize(QSize(16, 16));
-  replaceToggle_->setAccessibleName(QStringLiteral("展开替换"));
-  replaceToggle_->setToolTip(QStringLiteral("替换 (Ctrl+H)"));
+  replaceToggle_->setAccessibleName(ui::tr("展开替换"));
+  replaceToggle_->setToolTip(ui::tr("替换 (Ctrl+H)"));
   prefixLayout->addWidget(replaceToggle_);
 
   searchIcon_ = new QLabel(prefix);
@@ -456,7 +457,7 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   fieldLayout->addWidget(prefix);
 
   query_ = new QLineEdit(fieldRow);
-  query_->setPlaceholderText(QStringLiteral("查找"));
+  query_->setPlaceholderText(ui::tr("查找"));
   query_->setFixedHeight(40);
   query_->setMinimumWidth(0);
   fieldLayout->addWidget(query_, 1);
@@ -485,7 +486,7 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   replaceLayout->addWidget(replacePrefix);
 
   replacement_ = new QLineEdit(replaceRow_);
-  replacement_->setPlaceholderText(QStringLiteral("替换为"));
+  replacement_->setPlaceholderText(ui::tr("替换为"));
   replacement_->setFixedHeight(40);
   replacement_->setMinimumWidth(0);
   replaceLayout->addWidget(replacement_, 1);
@@ -506,22 +507,22 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
 
   auto* previous = previous_ = smallButton(navRow_);
   previous->setIconSize(QSize(16, 16));
-  previous->setAccessibleName(QStringLiteral("上一个匹配项"));
-  previous->setToolTip(QStringLiteral("上一个匹配项"));
+  previous->setAccessibleName(ui::tr("上一个匹配项"));
+  previous->setToolTip(ui::tr("上一个匹配项"));
   navLayout->addWidget(previous);
 
   auto* next = next_ = smallButton(navRow_);
   next->setIconSize(QSize(16, 16));
-  next->setAccessibleName(QStringLiteral("下一个匹配项"));
-  next->setToolTip(QStringLiteral("下一个匹配项"));
+  next->setAccessibleName(ui::tr("下一个匹配项"));
+  next->setToolTip(ui::tr("下一个匹配项"));
   navLayout->addWidget(next);
 
   navLayout->addStretch(1);
 
   replaceOne_ = new QToolButton(navRow_);
-  replaceOne_->setText(QStringLiteral("替换"));
+  replaceOne_->setText(ui::tr("替换"));
   replaceAll_ = new QToolButton(navRow_);
-  replaceAll_->setText(QStringLiteral("全部替换"));
+  replaceAll_->setText(ui::tr("全部替换"));
   for (QToolButton* button : {replaceOne_, replaceAll_}) {
     button->setCursor(Qt::PointingHandCursor);
     button->setFixedHeight(28);
@@ -583,9 +584,9 @@ SearchPanel::SearchPanel(QWidget* parent) : QFrame(parent) {
   });
   query_->installEventFilter(this);
   replacement_->installEventFilter(this);
-  query_->setAccessibleName(QStringLiteral("搜索当前文档"));
-  replacement_->setAccessibleName(QStringLiteral("替换为"));
-  closeButton_->setAccessibleName(QStringLiteral("关闭查找"));
+  query_->setAccessibleName(ui::tr("搜索当前文档"));
+  replacement_->setAccessibleName(ui::tr("替换为"));
+  closeButton_->setAccessibleName(ui::tr("关闭查找"));
   connect(replacement_, &QLineEdit::textChanged, this, [this] { setFeedback(QString()); });
   connect(replacement_, &QLineEdit::returnPressed, this, [this] {
     if (!composing_ && replaceOne_->isEnabled()) emit replaceRequested();
@@ -740,7 +741,7 @@ void SearchPanel::setReplaceVisible(bool visible) {
   if (!visible && composing_) return;
   if (!visible && replacement_->hasFocus()) query_->setFocus(Qt::OtherFocusReason);
   replaceMode_ = visible;
-  replaceToggle_->setAccessibleName(visible ? QStringLiteral("收起替换") : QStringLiteral("展开替换"));
+  replaceToggle_->setAccessibleName(visible ? ui::tr("收起替换") : ui::tr("展开替换"));
   replaceToggle_->setToolTip(replaceToggle_->accessibleName());
   auto* navLayout = qobject_cast<QHBoxLayout*>(navRow_->layout());
   navLayout->removeWidget(counter_);
@@ -812,12 +813,12 @@ OutlinePanel::OutlinePanel(QWidget* parent) : QFrame(parent) {
   // Preserve the old close-control position: its 4px internal margin plus
   // the 8px outer padding now removed from the scroll area's right edge.
   headerLayout->setContentsMargins(8, 0, 12, 0);
-  titleLabel_ = new QLabel(QStringLiteral("目录"), header);
+  titleLabel_ = new QLabel(ui::tr("目录"), header);
   headerLayout->addWidget(titleLabel_);
   headerLayout->addStretch(1);
   closeButton_ = new QToolButton(header);
-  closeButton_->setAccessibleName(QStringLiteral("关闭目录"));
-  closeButton_->setToolTip(QStringLiteral("关闭目录"));
+  closeButton_->setAccessibleName(ui::tr("关闭目录"));
+  closeButton_->setToolTip(ui::tr("关闭目录"));
   closeButton_->setText(QStringLiteral("×"));
   closeButton_->setCursor(Qt::PointingHandCursor);
   closeButton_->setFixedSize(28, 28);
@@ -927,7 +928,7 @@ void OutlinePanel::setHeadings(const QJsonArray& headings) {
   current_ = -1;
 
   if (headings.isEmpty()) {
-    emptyLabel_ = new QLabel(QStringLiteral("没有标题"), this);
+    emptyLabel_ = new QLabel(ui::tr("没有标题"), this);
     emptyLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; padding: 8px 12px;")
                                    .arg(theme::muted().name()));
     list_->addWidget(emptyLabel_);
@@ -961,8 +962,8 @@ Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
   setAttribute(Qt::WA_StyledBackground, true);
 
   openButton_ = new QToolButton(this);
-  openButton_->setAccessibleName(QStringLiteral("打开文件"));
-  openButton_->setText(QStringLiteral("打开"));
+  openButton_->setAccessibleName(ui::tr("打开文件"));
+  openButton_->setText(ui::tr("打开"));
   openButton_->setIconSize(QSize(16, 16));
   openButton_->setFixedSize(64, 32);
   openButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
@@ -973,7 +974,7 @@ Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
 
   nameLabel_ = new QLabel(QStringLiteral("Vellora"), identity);
   nameLabel_->setTextFormat(Qt::PlainText);
-  statusLabel_ = new QLabel(QStringLiteral("未打开文件"), identity);
+  statusLabel_ = new QLabel(ui::tr("未打开文件"), identity);
   statusLabel_->setTextFormat(Qt::PlainText);
 
   // The stylesheet centres the switch in the toolbar's middle grid column, so it
@@ -983,8 +984,8 @@ Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
   mode_->raise();
 
   saveButton_ = new CentredToolButton(this);
-  saveButton_->setAccessibleName(QStringLiteral("保存"));
-  saveButton_->setText(QStringLiteral("保存"));
+  saveButton_->setAccessibleName(ui::tr("保存"));
+  saveButton_->setText(ui::tr("保存"));
   saveButton_->setIconSize(QSize(16, 16));
   saveButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   saveButton_->setCursor(Qt::PointingHandCursor);
@@ -992,8 +993,8 @@ Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
   connect(saveButton_, &QToolButton::clicked, this, &Toolbar::saveRequested);
 
   searchButton_ = new QToolButton(this);
-  searchButton_->setAccessibleName(QStringLiteral("查找"));
-  searchButton_->setToolTip(QStringLiteral("查找 (Ctrl+F)"));
+  searchButton_->setAccessibleName(ui::tr("查找"));
+  searchButton_->setToolTip(ui::tr("查找 (Ctrl+F)"));
   searchButton_->setCheckable(true);
   searchButton_->setIconSize(QSize(16, 16));
   searchButton_->setFixedSize(32, 32);
@@ -1001,8 +1002,8 @@ Toolbar::Toolbar(QWidget* parent) : QWidget(parent) {
   connect(searchButton_, &QToolButton::clicked, this, &Toolbar::searchRequested);
 
   outlineButton_ = new QToolButton(this);
-  outlineButton_->setAccessibleName(QStringLiteral("侧边栏"));
-  outlineButton_->setToolTip(QStringLiteral("侧边栏 (Ctrl+\\)"));
+  outlineButton_->setAccessibleName(ui::tr("侧边栏"));
+  outlineButton_->setToolTip(ui::tr("侧边栏 (Ctrl+\\)"));
   outlineButton_->setCheckable(true);
   outlineButton_->setIconSize(QSize(16, 16));
   outlineButton_->setFixedSize(32, 32);
@@ -1023,7 +1024,16 @@ void Toolbar::applyTheme() {
 
   const QString buttonCss = toolButtonStyle();
   openButton_->setIcon(strokeIcon("<path d='M2.5 6V4.5a1 1 0 0 1 1-1h4l2 2h6a1 1 0 0 1 1 1V8M3.5 16.5h12l2-8h-12l-2 8-1-10'/>"));
+  // The button keeps its fixed 64 px. A label wider than 打开 (English "Open")
+  // trims the side padding instead of eliding to "...": icon, the style's 4 px
+  // gap and the 13 px label are centred in what is left.
   openButton_->setStyleSheet(buttonCss);
+  const int label = openButton_->iconSize().width() + 4 +
+                    openButton_->fontMetrics().horizontalAdvance(openButton_->text());
+  const int padding = qBound(0, (openButton_->width() - label) / 2, 8);
+  if (padding < 8) {
+    openButton_->setStyleSheet(buttonCss + QStringLiteral("QToolButton { padding: 0 %1px; }").arg(padding));
+  }
 
   nameLabel_->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; font-weight: 500;")
                                 .arg(theme::text().name()));
@@ -1423,17 +1433,17 @@ int ModalDialog::resolveConflict(QWidget* parent, QJsonObject conflict,
   auto* host = parent ? parent->window() : nullptr;
   auto* scrim = new Scrim(host);
   if (host) scrim->setGeometry(host->rect());
-  auto* dialog = new ModalDialog(scrim, QStringLiteral("文件已被外部修改"),
-      conflict.value("message").toString(), QStringLiteral("覆盖外部版本"),
-      QStringLiteral("继续编辑"), true);
+  auto* dialog = new ModalDialog(scrim, ui::tr("文件已被外部修改"),
+      conflict.value("message").toString(), ui::tr("覆盖外部版本"),
+      ui::tr("继续编辑"), true);
   dialog->setObjectName(QStringLiteral("conflictModal"));
-  dialog->setAccessibleName(QStringLiteral("文件已被外部修改"));
+  dialog->setAccessibleName(ui::tr("文件已被外部修改"));
   auto* layout = qobject_cast<QVBoxLayout*>(dialog->layout());
   auto* row = qobject_cast<QHBoxLayout*>(layout->itemAt(layout->count()-1)->layout());
   const auto existing = dialog->findChildren<QPushButton*>();
   auto* cancel = existing.at(0);
   auto* confirm = existing.at(1);
-  auto* reload = new QPushButton(QStringLiteral("重新加载"), dialog);
+  auto* reload = new QPushButton(ui::tr("重新加载"), dialog);
   reload->setFixedHeight(32);
   row->insertWidget(row->count()-1, reload);
   auto* message = dialog->findChild<QLabel*>(QStringLiteral("message"));
@@ -1454,11 +1464,11 @@ int ModalDialog::resolveConflict(QWidget* parent, QJsonObject conflict,
   const auto choose = [&](int next) {
     step = next;
     feedback->clear(); feedback->hide();
-    message->setText(step == 1 ? QStringLiteral("确认用当前草稿覆盖检测到的外部版本？")
-        : step == 2 ? QStringLiteral("重新加载将放弃当前草稿，确认继续？")
+    message->setText(step == 1 ? ui::tr("确认用当前草稿覆盖检测到的外部版本？")
+        : step == 2 ? ui::tr("重新加载将放弃当前草稿，确认继续？")
         : conflict.value("message").toString());
-    confirm->setText(step == 1 ? QStringLiteral("确认覆盖")
-        : step == 2 ? QStringLiteral("放弃草稿并重新加载") : QStringLiteral("覆盖外部版本"));
+    confirm->setText(step == 1 ? ui::tr("确认覆盖")
+        : step == 2 ? ui::tr("放弃草稿并重新加载") : ui::tr("覆盖外部版本"));
     reload->setVisible(step == 0);
     arrange();
     cancel->setFocus(Qt::OtherFocusReason);

@@ -11,7 +11,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use serde_json::{json, Value};
 use vellora_core::session::{self, DiskDelete, SessionState};
 use vellora_core::types::{CommandResult, LinkInspectData};
-use vellora_core::{file_access, image_access, link_access, rename};
+use vellora_core::{file_access, i18n, image_access, link_access, rename};
 use vellora_md::{Alignment, Block, Document, Inline, PreservedMarkdown, Table};
 
 static SESSION: std::sync::OnceLock<SessionState> = std::sync::OnceLock::new();
@@ -251,6 +251,29 @@ fn collect_outline_headings(block: &Block, result: &mut Vec<(u8, String)>) {
 #[no_mangle]
 pub extern "C" fn vellora_version() -> *mut c_char {
   into_c_string(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") }))
+}
+
+/// Sets the language of every user-facing message the core returns, for the
+/// whole process: `"zh"` (any `zh-*`) for Simplified Chinese, the default, or
+/// `"en"` (any `en-*`) for English. Codes never change. Returns
+/// `{ok, language}`; an unknown tag fails with `INVALID_ARGUMENT` and changes
+/// nothing.
+///
+/// # Safety
+///
+/// `tag` must either be null or point to a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn vellora_set_language(tag: *const c_char) -> *mut c_char {
+  guarded(|| {
+    let tag = unsafe { from_c(tag) };
+    match i18n::Language::from_tag(&tag) {
+      Some(language) => {
+        i18n::set_language(language);
+        json!({ "ok": true, "language": language.tag() })
+      }
+      None => error_json("INVALID_ARGUMENT", "unknown language tag"),
+    }
+  })
 }
 
 /// Releases a heap-allocated C string previously returned by a `vellora_*` bridge function.
@@ -693,7 +716,8 @@ pub unsafe extern "C" fn vellora_rename(path: *const c_char, new_name: *const c_
 }
 
 /// Creates an empty Markdown file in `directory` without replacing anything. An
-/// empty `name` picks the first free "未命名.md", "未命名 2.md", ... Returns
+/// empty `name` picks the first free "未命名.md", "未命名 2.md", ... (in English,
+/// "Untitled.md", "Untitled 2.md", ...). Returns
 /// `{ok, path, name, realPath}`: `path` keeps the folder as given, links included;
 /// `realPath` is the same file as an opened document reports it.
 ///
@@ -1175,6 +1199,55 @@ mod tests {
     assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["code"], "PANIC");
     assert_eq!(parsed["message"], "native bridge failed");
+  }
+}
+
+#[cfg(test)]
+mod language_tests {
+  use super::*;
+
+  fn set(tag: Option<&str>) -> Value {
+    let tag = tag.map(|tag| CString::new(tag).unwrap());
+    let raw = unsafe { vellora_set_language(tag.as_ref().map_or(std::ptr::null(), |tag| tag.as_ptr())) };
+    let value = serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
+    unsafe { vellora_free(raw) };
+    value
+  }
+
+  fn create_in(directory: &str) -> Value {
+    let directory = CString::new(directory).unwrap();
+    let name = CString::new("").unwrap();
+    let raw = unsafe { vellora_create_markdown(directory.as_ptr(), name.as_ptr()) };
+    let value = serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
+    unsafe { vellora_free(raw) };
+    value
+  }
+
+  // One test changes the process-wide language, so nothing in this binary sees
+  // English unexpectedly; no other test here asserts on message text.
+  #[test]
+  fn set_language_switches_core_messages_and_refuses_unknown_tags() {
+    let chinese = create_in("relative");
+    assert_eq!(
+      (chinese["code"].as_str(), chinese["message"].as_str()),
+      (Some("INVALID_ARGUMENT"), Some("路径无效。"))
+    );
+    assert_eq!(set(Some("en-US")), json!({ "ok": true, "language": "en" }));
+    let english = create_in("relative");
+    assert_eq!(
+      (english["code"].as_str(), english["message"].as_str()),
+      (Some("INVALID_ARGUMENT"), Some("Invalid path."))
+    );
+    for tag in [None, Some(""), Some("ja"), Some("de-DE")] {
+      let refused = set(tag);
+      assert_eq!(refused["ok"], false, "{tag:?}");
+      assert_eq!(refused["code"], "INVALID_ARGUMENT", "{tag:?}");
+      assert_eq!(i18n::language(), i18n::Language::English, "{tag:?} must change nothing");
+    }
+    for tag in ["zh-TW", "zh-Hant", "zh-CN", "zh"] {
+      assert_eq!(set(Some(tag)), json!({ "ok": true, "language": "zh" }), "{tag}");
+    }
+    assert_eq!(i18n::language(), i18n::Language::Chinese);
   }
 }
 

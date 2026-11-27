@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
+use crate::i18n::text;
 use crate::path_policy::resolve_document_relative_path;
 use crate::types::{CommandResult, ImagePayload};
 
@@ -69,10 +70,10 @@ fn open_authorized_local_image<T>(
   max_bytes: Option<u64>,
 ) -> Result<OpenedLocalImage, CommandResult<T>> {
   if document_path.trim().is_empty() {
-    return Err(CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。"));
+    return Err(CommandResult::failure("INVALID_ARGUMENT", text("文件路径无效。", "Invalid file path.")));
   }
   if raw_src.trim().is_empty() {
-    return Err(CommandResult::failure("INVALID_ARGUMENT", "图片路径无效。"));
+    return Err(CommandResult::failure("INVALID_ARGUMENT", text("图片路径无效。", "Invalid image path.")));
   }
 
   let trimmed = raw_src.trim();
@@ -81,19 +82,28 @@ fn open_authorized_local_image<T>(
   if has_protocol(cleaned) || Path::new(cleaned).is_absolute() {
     return Err(CommandResult::failure(
       "UNSUPPORTED_IMAGE_SOURCE",
-      "仅支持当前 Markdown 文件旁的相对路径图片。",
+      text(
+        "仅支持当前 Markdown 文件旁的相对路径图片。",
+        "Only images with a relative path next to this Markdown file are supported.",
+      ),
     ));
   }
 
   let extension = Path::new(cleaned).extension().and_then(|e| e.to_str()).unwrap_or("");
   let Some(mime) = mime_for_extension(extension) else {
-    return Err(CommandResult::failure("UNSUPPORTED_IMAGE_TYPE", "不支持该图片类型。"));
+    return Err(CommandResult::failure(
+      "UNSUPPORTED_IMAGE_TYPE",
+      text("不支持该图片类型。", "This image type isn't supported."),
+    ));
   };
 
   let Some(image_path) = resolve_document_relative_path(Path::new(document_path), cleaned) else {
     return Err(CommandResult::failure(
       "UNSUPPORTED_IMAGE_SOURCE",
-      "仅支持当前 Markdown 文件旁的相对路径图片。",
+      text(
+        "仅支持当前 Markdown 文件旁的相对路径图片。",
+        "Only images with a relative path next to this Markdown file are supported.",
+      ),
     ));
   };
 
@@ -111,20 +121,35 @@ fn open_authorized_local_image<T>(
   let metadata = match file.metadata() {
     Ok(m) => m,
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return Err(CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。"));
+      return Err(CommandResult::failure(
+        "IMAGE_NOT_FOUND",
+        text("图片不存在或已被移动。", "The image doesn't exist or has been moved."),
+      ));
     }
     Err(_) => {
-      return Err(CommandResult::failure("IMAGE_READ_FAILED", "无法读取图片，请检查权限或文件状态。"));
+      return Err(CommandResult::failure(
+        "IMAGE_READ_FAILED",
+        text(
+          "无法读取图片，请检查权限或文件状态。",
+          "Can't read the image. Check its permissions and status.",
+        ),
+      ));
     }
   };
 
   if !metadata.is_file() {
-    return Err(CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。"));
+    return Err(CommandResult::failure(
+      "IMAGE_NOT_FOUND",
+      text("图片不存在或已被移动。", "The image doesn't exist or has been moved."),
+    ));
   }
 
   let limit = max_bytes.unwrap_or(DEFAULT_MAX_MARKDOWN_IMAGE_BYTES);
   if metadata.len() > limit {
-    return Err(CommandResult::failure("IMAGE_TOO_LARGE", "图片过大，已跳过。"));
+    return Err(CommandResult::failure(
+      "IMAGE_TOO_LARGE",
+      text("图片过大，已跳过。", "Image too large; skipped."),
+    ));
   }
 
   Ok(OpenedLocalImage { file, metadata, path: image_path, mime, limit })
@@ -182,10 +207,19 @@ pub fn read_local_image(
   match read_result {
     Ok(_) => {}
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return CommandResult::failure("IMAGE_NOT_FOUND", "图片不存在或已被移动。");
+      return CommandResult::failure(
+        "IMAGE_NOT_FOUND",
+        text("图片不存在或已被移动。", "The image doesn't exist or has been moved."),
+      );
     }
     Err(_) => {
-      return CommandResult::failure("IMAGE_READ_FAILED", "无法读取图片，请检查权限或文件状态。");
+      return CommandResult::failure(
+        "IMAGE_READ_FAILED",
+        text(
+          "无法读取图片，请检查权限或文件状态。",
+          "Can't read the image. Check its permissions and status.",
+        ),
+      );
     }
   };
 

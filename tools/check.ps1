@@ -40,13 +40,16 @@ foreach ($rel in @('Cargo.toml', 'core\Cargo.toml', 'md\Cargo.toml', 'bridge\Car
 
 # Static guards for the installer and the portable zip, e.g. that portable.txt
 # never reaches the installed copy. They read files only and need tomllib (3.11+).
-Write-Host '==> [4/5] Checking release packaging rules (installer/tests/test_release_policy.py)...'
+Write-Host '==> [4/5] Checking release packaging rules and UI translations...'
 $python = Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (!$python) { throw 'Python 3.11 or newer is required on PATH for the release packaging rules.' }
 & $python.Source -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'
 if ($LASTEXITCODE -ne 0) { throw "Python 3.11 or newer is required for the release packaging rules: $($python.Source)" }
 & $python.Source (Join-Path $repoRoot 'installer\tests\test_release_policy.py')
 if ($LASTEXITCODE -ne 0) { throw "Release packaging rules failed: $LASTEXITCODE" }
+# Every interface string has its English translation (qt-app/translations).
+& $python.Source (Join-Path $repoRoot 'tools\check_translations.py')
+if ($LASTEXITCODE -ne 0) { throw "English translation check failed: $LASTEXITCODE" }
 
 if ($Full) {
   Write-Host '==> [5/5] Building and running full Rust + Qt regression suites...'

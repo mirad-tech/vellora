@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 
+#[cfg(windows)]
+use crate::i18n::is_english;
+use crate::i18n::text;
 use crate::types::{CommandResult, DocumentPayload};
 
 pub type ContentDigest = [u8; 32];
@@ -83,12 +86,22 @@ impl SaveBaseline {
       #[cfg(windows)]
       Err(SaveFailure::Recovery { backup_path, replace_error, restore_error }) => CommandResult::failure(
         "SAVE_FAILED",
-        format!(
-          "保存失败，无法自动恢复原文件。草稿已保留。备份路径：{}。替换错误：{}。恢复错误：{}。",
-          backup_path.display(),
-          replace_error,
-          restore_error,
-        ),
+        if is_english() {
+          format!(
+            "Save failed and the original file couldn't be restored automatically. Your draft is kept. \
+             Backup: {}. Replace error: {}. Restore error: {}.",
+            backup_path.display(),
+            replace_error,
+            restore_error,
+          )
+        } else {
+          format!(
+            "保存失败，无法自动恢复原文件。草稿已保留。备份路径：{}。替换错误：{}。恢复错误：{}。",
+            backup_path.display(),
+            replace_error,
+            restore_error,
+          )
+        },
       ),
     }
   }
@@ -96,8 +109,17 @@ impl SaveBaseline {
 
 fn save_io_error(error: io::Error) -> CommandResult<DocumentPayload> {
   match error.kind() {
-    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。"),
-    _ => CommandResult::failure("SAVE_FAILED", "保存失败，请检查权限或文件状态。草稿已保留。"),
+    io::ErrorKind::NotFound => CommandResult::failure(
+      "NOT_FOUND",
+      text("文件不存在或已被移动。", "The file doesn't exist or has been moved."),
+    ),
+    _ => CommandResult::failure(
+      "SAVE_FAILED",
+      text(
+        "保存失败，请检查权限或文件状态。草稿已保留。",
+        "Save failed. Check the file's permissions and status. Your draft is kept.",
+      ),
+    ),
   }
 }
 

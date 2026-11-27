@@ -21,6 +21,8 @@
 #include "main_window.h"
 #include "source_view.h"
 #include "theme.h"
+#include "ui_language.h"
+#include "ui_text.h"
 
 int main(int argc, char** argv) {
   QApplication app(argc, argv);
@@ -28,6 +30,9 @@ int main(int argc, char** argv) {
   app.setApplicationDisplayName(QStringLiteral("Vellora"));
   app.setApplicationVersion(QStringLiteral("0.1.7"));
   app.setOrganizationName(QStringLiteral("Vellora Contributors"));
+  // Before any widget exists: a Chinese system UI language keeps the Chinese UI,
+  // any other shows English. VELLORA_LANG=zh|en overrides it.
+  ui_language::apply(app, ui_language::systemChoice());
   // portable.txt beside vellora.exe keeps settings in Vellora.ini there.
   app_settings::configure(QCoreApplication::applicationDirPath());
   app.setFont(theme::uiFont(14));
@@ -190,9 +195,9 @@ int main(int argc, char** argv) {
   }
   if (qEnvironmentVariableIsSet("VELLORA_DIALOG")) {
     QTimer::singleShot(600, [&window] {
-      ModalDialog::ask(&window, QStringLiteral("文件已被外部修改"),
-          QStringLiteral("文件已被其他程序修改。"), QStringLiteral("覆盖外部版本"),
-          QStringLiteral("继续编辑"), true, QStringLiteral("重新加载"));
+      ModalDialog::ask(&window, ui::tr("文件已被外部修改"),
+          ui::tr("文件已被其他程序修改。"), ui::tr("覆盖外部版本"),
+          ui::tr("继续编辑"), true, ui::tr("重新加载"));
     });
   }
   if (qEnvironmentVariableIsSet("VELLORA_DEBUG_TREE")) {

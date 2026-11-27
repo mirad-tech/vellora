@@ -12,5 +12,6 @@ Terminal=false
 Categories=Utility;TextEditor;
 MimeType=text/markdown;text/x-markdown;
 Keywords=markdown;md;editor;notes;
+Keywords[zh_CN]=markdown;md;编辑器;笔记;
 StartupNotify=true
 StartupWMClass=vellora
