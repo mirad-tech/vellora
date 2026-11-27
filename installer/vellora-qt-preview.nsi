@@ -30,6 +30,7 @@ VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "FileDescription" "Vellora Setup"
 VIAddVersionKey "FileVersion" "${APP_VERSION}.0"
 VIAddVersionKey "LegalCopyright" "Vellora Contributors; third-party licenses included"
+!include "FileFunc.nsh"
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
@@ -55,13 +56,24 @@ Page custom AssociationPageCreate AssociationPageLeave
 
 ; Chinese Windows display languages (Simplified or Traditional) get the Chinese
 ; setup, every other language English, without asking.
-!macro VELLORA_PICK_LANGUAGE
+; /LANG=en or /LANG=zh on the command line overrides it (for testing).
+!macro VELLORA_PICK_LANGUAGE UN
   System::Call 'kernel32::GetUserDefaultUILanguage() i .r0'
   IntOp $0 $0 & 0x3FF
   ${If} $0 = 0x04
     StrCpy $LANGUAGE ${LANG_SIMPCHINESE}
   ${Else}
     StrCpy $LANGUAGE ${LANG_ENGLISH}
+  ${EndIf}
+  ${${UN}GetParameters} $1
+  ClearErrors
+  ${${UN}GetOptions} $1 "/LANG=" $2
+  ${IfNot} ${Errors}
+    ${If} $2 == "en"
+      StrCpy $LANGUAGE ${LANG_ENGLISH}
+    ${ElseIf} $2 == "zh"
+      StrCpy $LANGUAGE ${LANG_SIMPCHINESE}
+    ${EndIf}
   ${EndIf}
 !macroend
 
@@ -109,7 +121,7 @@ LangString CloseToUninstall ${LANG_SIMPCHINESE} "请先保存文档并关闭 Vel
 LangString CloseToUninstall ${LANG_ENGLISH} "Save your documents and close Vellora before uninstalling."
 
 Function .onInit
-  !insertmacro VELLORA_PICK_LANGUAGE
+  !insertmacro VELLORA_PICK_LANGUAGE ""
   StrCpy $AssociationSelected ${BST_UNCHECKED}
   StrCpy $AssociationRegistered 0
 FunctionEnd
@@ -368,7 +380,7 @@ Section "Vellora"
 SectionEnd
 
 Function un.onInit
-  !insertmacro VELLORA_PICK_LANGUAGE
+  !insertmacro VELLORA_PICK_LANGUAGE "un."
   SetShellVarContext current
   ReadINIStr $0 "$INSTDIR\vellora-install.ini" "Vellora" "InstallerId"
   ${If} $0 != "${INSTALLER_ID}"
