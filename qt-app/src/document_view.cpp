@@ -61,6 +61,7 @@
 
 #include "bridge.h"
 #include "theme.h"
+#include "ui_text.h"
 
 namespace {
 
@@ -458,8 +459,8 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   setFocusPolicy(Qt::StrongFocus);
-  setAccessibleName(QStringLiteral("打开"));
-  setAccessibleDescription(QStringLiteral("未打开文件。请选择 .md 或 .markdown 文件。"));
+  setAccessibleName(ui::tr("打开"));
+  setAccessibleDescription(ui::tr("未打开文件。请选择 .md 或 .markdown 文件。"));
   setMouseTracking(true);
   viewport()->setAutoFillBackground(false);
   viewport()->setAttribute(Qt::WA_OpaquePaintEvent, true);
@@ -494,7 +495,7 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
     const QSize size=imageSizes_.value(normalizedImagePath(format.stringProperty(ImagePathProperty)));
     if (format.boolProperty(MissingImageProperty) && !size.isValid()) {
       const QFontMetricsF metrics(theme::bodyFont(13));
-      const QString label = QStringLiteral("图片缺失：%1").arg(format.stringProperty(ImageSourceProperty));
+      const QString label = ui::tr("图片缺失：%1").arg(format.stringProperty(ImageSourceProperty));
       return QSizeF(qMin<qreal>(contentWidth(), metrics.horizontalAdvance(label) + 16), metrics.height() + 8);
     }
     if(size.isValid()) { const qreal w=qMin<qreal>(contentWidth(),size.width()); return QSizeF(w,size.height()*w/size.width()); }
@@ -509,7 +510,7 @@ DocumentView::DocumentView(QWidget* parent) : QAbstractScrollArea(parent) {
       painter->drawRoundedRect(rect, kRadiusContent, kRadiusContent);
       painter->setFont(theme::bodyFont(13)); painter->setPen(theme::danger());
       painter->drawText(rect.adjusted(8, 4, -8, -4), Qt::AlignVCenter | Qt::TextSingleLine,
-                        QStringLiteral("图片缺失：%1").arg(format.stringProperty(ImageSourceProperty)));
+                        ui::tr("图片缺失：%1").arg(format.stringProperty(ImageSourceProperty)));
       painter->restore(); return;
     }
     if (image.isNull()) return;
@@ -633,8 +634,8 @@ void DocumentView::setEmptyState() {
   // Closing a document is a lifecycle boundary, not an editing operation.
   // Release its model and working storage rather than retaining a hidden draft.
   building_=true;empty_=true;errorMessage_.clear();
-  setAccessibleName(QStringLiteral("打开"));
-  setAccessibleDescription(QStringLiteral("未打开文件。请选择 .md 或 .markdown 文件。"));
+  setAccessibleName(ui::tr("打开"));
+  setAccessibleDescription(ui::tr("未打开文件。请选择 .md 或 .markdown 文件。"));
   imageCache_.clear();animationCache_.clear();authorizedImages_.clear();imageSources_.clear();imageSizes_.clear();imageStats_.clear();paintedImages_.clear();
   for(auto& surface:rawSurfaces_){delete surface.preview;}rawSurfaces_.clear();
   auto release=[](auto& values){using Values=std::decay_t<decltype(values)>;Values{}.swap(values);};
@@ -648,7 +649,7 @@ void DocumentView::setEmptyState() {
 }
 
 void DocumentView::setErrorState(const QString& message) {
-  setEmptyState();errorMessage_=message;setAccessibleName(QStringLiteral("重新选择"));setAccessibleDescription(QStringLiteral("打开失败。")+message);viewport()->update();
+  setEmptyState();errorMessage_=message;setAccessibleName(ui::tr("重新选择"));setAccessibleDescription(ui::tr("打开失败。")+message);viewport()->update();
 }
 
 void DocumentView::setDocumentPath(const QString& documentPath) {
@@ -672,7 +673,7 @@ void DocumentView::setPlan(const QJsonObject& plan, const QString& documentPath)
   stopHeadingScroll();
   resetCodeCopyFeedback();
   errorMessage_.clear();
-  setAccessibleName(QStringLiteral("文档编辑器"));setAccessibleDescription(QString());
+  setAccessibleName(ui::tr("文档编辑器"));setAccessibleDescription(QString());
   authorizedImages_.clear(); imageSources_.clear(); imageSizes_.clear(); imageStats_.clear(); paintedImages_.clear(); imageCache_.clear(); animationCache_.clear();
   if(normalizedImagePath(documentPath_)!=normalizedImagePath(documentPath)) {
     // A different file owns a different working set. Keep same-file reparses
@@ -1313,7 +1314,7 @@ struct DocumentView::BuildContext {
       QTextBlockFormat mutedBlock = bodyBlock();
       mutedBlock.setProperty(DisplayMutedProperty, true);
       openBlock(mutedBlock, segment);
-      cursor.insertText(QStringLiteral("表格过大，请切换源码查看。"), mutedFormat());
+      cursor.insertText(ui::tr("表格过大，请切换源码查看。"), mutedFormat());
       return;
     }
 
@@ -2027,8 +2028,8 @@ void DocumentView::paintEmptyState(QPainter& painter) {
 
   const int width = viewport()->width();
   const int height = viewport()->height();
-  const QString title = errorMessage_.isEmpty()?QStringLiteral("未打开文件"):QStringLiteral("打开失败");
-  const QString hint = errorMessage_.isEmpty()?QStringLiteral("请选择 .md 或 .markdown 文件。"):errorMessage_;
+  const QString title = errorMessage_.isEmpty()?ui::tr("未打开文件"):ui::tr("打开失败");
+  const QString hint = errorMessage_.isEmpty()?ui::tr("请选择 .md 或 .markdown 文件。"):errorMessage_;
 
   QFont titleFont = theme::bodyFont(15,QFont::DemiBold);
   QFont hintFont = theme::bodyFont(14);
@@ -2062,7 +2063,7 @@ void DocumentView::paintEmptyState(QPainter& painter) {
 
   const QFont buttonFont = theme::bodyFont(13);
   const QFontMetricsF buttonMetrics(buttonFont);
-  const QString buttonText=errorMessage_.isEmpty()?QStringLiteral("打开"):QStringLiteral("重新选择");
+  const QString buttonText=errorMessage_.isEmpty()?ui::tr("打开"):ui::tr("重新选择");
   const qreal buttonWidth = buttonMetrics.horizontalAdvance(buttonText) + 24;
   const QRectF buttonRect((width - buttonWidth) / 2, y, buttonWidth, buttonHeight);
   painter.setPen(Qt::NoPen);
@@ -2224,7 +2225,7 @@ void DocumentView::paintEvent(QPaintEvent*) {
         painter.drawRoundedRect(QRectF(origin+QPointF(10,6),QSizeF(10,12)),1.5,1.5);
       }
       if(copiedNode_==region.node || copyErrorNode_==region.node) {
-        const QString feedback = copiedNode_==region.node ? QStringLiteral("已复制") : QStringLiteral("复制失败，请重试或手动复制");
+        const QString feedback = copiedNode_==region.node ? ui::tr("已复制") : ui::tr("复制失败，请重试或手动复制");
         const qreal labelWidth = painter.fontMetrics().horizontalAdvance(feedback) + 12;
         const QRectF label(origin.x()-labelWidth-4,origin.y(),labelWidth,28);
         painter.setPen(Qt::NoPen); painter.setBrush(theme::surface());
@@ -2305,7 +2306,7 @@ void DocumentView::copyCodeText(int node, const QString& text) {
   const bool copied = writeCodeClipboard(text);
   if (copied) copiedNode_ = node;
   else copyErrorNode_ = node;
-  setAccessibleDescription(copied ? QStringLiteral("已复制") : QStringLiteral("复制失败，请重试或手动复制"));
+  setAccessibleDescription(copied ? ui::tr("已复制") : ui::tr("复制失败，请重试或手动复制"));
   QAccessibleEvent changed(this, QAccessible::DescriptionChanged);
   QAccessible::updateAccessibility(&changed);
   QAccessibleAnnouncementEvent announcement(this, accessibleDescription());
@@ -3670,7 +3671,7 @@ bool DocumentView::protectNestedStructure(const QTextCursor& range) {
       checked.insert(segment);
       if (risky(segmentModels_.value(segment), 0, 0)) {
         QToolTip::showText(viewport()->mapToGlobal(QPoint(24, 24)),
-            QStringLiteral("此嵌套结构请在源码模式中调整，以保留原有层级。普通文字和任务勾选仍可直接编辑。"), this, QRect(), 6000);
+            ui::tr("此嵌套结构请在源码模式中调整，以保留原有层级。普通文字和任务勾选仍可直接编辑。"), this, QRect(), 6000);
         return true;
       }
     }
@@ -4578,19 +4579,19 @@ void DocumentView::contextMenuEvent(QContextMenuEvent* event) {
     });
   };
   const bool editing = !readOnly_ && !isComposing();
-  command(QStringLiteral("撤销"), Qt::Key_Z, editing && document_->isUndoAvailable());
-  command(QStringLiteral("重做"), Qt::Key_Y, editing && document_->isRedoAvailable());
+  command(ui::tr("撤销"), Qt::Key_Z, editing && document_->isUndoAvailable());
+  command(ui::tr("重做"), Qt::Key_Y, editing && document_->isRedoAvailable());
   menu.addSeparator();
-  command(QStringLiteral("剪切"), Qt::Key_X, editing && cursor_.hasSelection());
-  command(QStringLiteral("复制"), Qt::Key_C, cursor_.hasSelection());
-  command(QStringLiteral("粘贴"), Qt::Key_V, editing && !QApplication::clipboard()->text().isEmpty());
-  command(QStringLiteral("全选"), Qt::Key_A, true);
+  command(ui::tr("剪切"), Qt::Key_X, editing && cursor_.hasSelection());
+  command(ui::tr("复制"), Qt::Key_C, cursor_.hasSelection());
+  command(ui::tr("粘贴"), Qt::Key_V, editing && !QApplication::clipboard()->text().isEmpty());
+  command(ui::tr("全选"), Qt::Key_A, true);
   QTextCursor probe = cursor_;
   if (probe.charFormat().anchorHref().isEmpty()) probe.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
   const QString href = probe.charFormat().anchorHref();
   if (!href.isEmpty()) {
     menu.addSeparator();
-    connect(menu.addAction(QStringLiteral("打开链接")), &QAction::triggered, this, [this, href] { emit linkActivated(href); });
+    connect(menu.addAction(ui::tr("打开链接")), &QAction::triggered, this, [this, href] { emit linkActivated(href); });
   }
   menu.exec(event->globalPos());
 }
@@ -4620,7 +4621,7 @@ void DocumentView::setPreviewContext(const QString& markdown) {
     }
     if (preview.isEmpty()) continue;
     if (preview.value("blocks").toArray().isEmpty()) {
-      QJsonObject run{{"kind","text"},{"text",QStringLiteral("此内容无法预览，请切换源码查看。")}};
+      QJsonObject run{{"kind","text"},{"text",ui::tr("此内容无法预览，请切换源码查看。")}};
       preview.insert("blocks",QJsonArray{QJsonObject{{"type","paragraph"},{"runs",QJsonArray{run}}}});
     }
     preview = withTaskListSpacing(preview, source);

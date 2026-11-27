@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::i18n::text;
 use crate::reliable_save::{atomic_write, ContentDigest, SaveFailure};
 use crate::types::{CommandResult, DocumentPayload, MarkdownDocument};
 
@@ -30,18 +31,24 @@ fn modified_at_ms(metadata: &fs::Metadata) -> f64 {
 pub fn read_markdown_file(file_path: &str) -> CommandResult<DocumentPayload> {
   let trimmed = file_path.trim();
   if trimmed.is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。");
+    return CommandResult::failure("INVALID_ARGUMENT", text("文件路径无效。", "Invalid file path."));
   }
 
   let path = PathBuf::from(trimmed);
   if !is_markdown_path(&path) {
-    return CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能打开 .md 或 .markdown 文件。");
+    return CommandResult::failure(
+      "UNSUPPORTED_FILE_TYPE",
+      text("只能打开 .md 或 .markdown 文件。", "Only .md or .markdown files can be opened."),
+    );
   }
 
   let canonical = match fs::canonicalize(&path) {
     Ok(p) => p,
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。");
+      return CommandResult::failure(
+        "NOT_FOUND",
+        text("文件不存在或已被移动。", "The file doesn't exist or has been moved."),
+      );
     }
     Err(_) => path.clone(),
   };
@@ -49,24 +56,45 @@ pub fn read_markdown_file(file_path: &str) -> CommandResult<DocumentPayload> {
   let metadata = match fs::metadata(&canonical) {
     Ok(m) => m,
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。");
+      return CommandResult::failure(
+        "NOT_FOUND",
+        text("文件不存在或已被移动。", "The file doesn't exist or has been moved."),
+      );
     }
     Err(_) => {
-      return CommandResult::failure("READ_FAILED", "无法读取文件，请检查权限或文件状态。");
+      return CommandResult::failure(
+        "READ_FAILED",
+        text(
+          "无法读取文件，请检查权限或文件状态。",
+          "Can't read the file. Check its permissions and status.",
+        ),
+      );
     }
   };
 
   if !metadata.is_file() {
-    return CommandResult::failure("NOT_A_FILE", "选择的路径不是文件。");
+    return CommandResult::failure(
+      "NOT_A_FILE",
+      text("选择的路径不是文件。", "The selected path isn't a file."),
+    );
   }
 
   let content = match fs::read_to_string(&canonical) {
     Ok(c) => c,
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      return CommandResult::failure("NOT_FOUND", "文件不存在或已被移动。");
+      return CommandResult::failure(
+        "NOT_FOUND",
+        text("文件不存在或已被移动。", "The file doesn't exist or has been moved."),
+      );
     }
     Err(_) => {
-      return CommandResult::failure("READ_FAILED", "无法读取文件，请检查权限或文件状态。");
+      return CommandResult::failure(
+        "READ_FAILED",
+        text(
+          "无法读取文件，请检查权限或文件状态。",
+          "Can't read the file. Check its permissions and status.",
+        ),
+      );
     }
   };
 
@@ -91,12 +119,19 @@ pub fn save_markdown_file(
 ) -> Result<MarkdownDocument, SaveFailure> {
   let trimmed = file_path.trim();
   if trimmed.is_empty() {
-    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "文件路径无效。").into());
+    return Err(
+      std::io::Error::new(std::io::ErrorKind::InvalidInput, text("文件路径无效。", "Invalid file path."))
+        .into(),
+    );
   }
 
   if !is_markdown_path(Path::new(trimmed)) {
     return Err(
-      std::io::Error::new(std::io::ErrorKind::InvalidInput, "只能保存 .md 或 .markdown 文件。").into(),
+      std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        text("只能保存 .md 或 .markdown 文件。", "Only .md or .markdown files can be saved."),
+      )
+      .into(),
     );
   }
 
@@ -115,7 +150,7 @@ pub fn save_markdown_file(
 pub fn choose_markdown_file(pick: impl FnOnce() -> Option<PathBuf>) -> CommandResult<DocumentPayload> {
   match pick() {
     Some(path) => read_markdown_file(path.to_string_lossy().as_ref()),
-    None => CommandResult::failure("CANCELED", "已取消。"),
+    None => CommandResult::failure("CANCELED", text("已取消。", "Canceled.")),
   }
 }
 
@@ -180,11 +215,23 @@ mod tests {
 
   #[test]
   fn rejects_non_markdown() {
+    use crate::i18n::{with_language, Language};
     let dir = tempdir().unwrap();
     let path = dir.path().join("note.txt");
     fs::write(&path, "x").unwrap();
     match read_markdown_file(path.to_str().unwrap()) {
-      CommandResult::Err { code, .. } => assert_eq!(code, "UNSUPPORTED_FILE_TYPE"),
+      CommandResult::Err { code, message, .. } => {
+        assert_eq!(code, "UNSUPPORTED_FILE_TYPE");
+        assert_eq!(message, "只能打开 .md 或 .markdown 文件。");
+      }
+      _ => panic!("expected failure"),
+    }
+    // English changes the message only; the code callers branch on stays.
+    match with_language(Language::English, || read_markdown_file(path.to_str().unwrap())) {
+      CommandResult::Err { code, message, .. } => {
+        assert_eq!(code, "UNSUPPORTED_FILE_TYPE");
+        assert_eq!(message, "Only .md or .markdown files can be opened.");
+      }
       _ => panic!("expected failure"),
     }
   }

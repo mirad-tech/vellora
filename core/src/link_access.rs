@@ -7,6 +7,7 @@ use std::path::Path;
 use url::Url;
 
 use crate::file_access::{is_markdown_path, read_markdown_file};
+use crate::i18n::text;
 use crate::path_policy::resolve_document_relative_path;
 use crate::types::{CommandResult, EmptyPayload, LinkInspectData};
 
@@ -67,10 +68,10 @@ fn from_hex(byte: u8) -> Option<u8> {
 
 pub fn inspect_markdown_link(document_path: &str, raw_href: &str) -> CommandResult<LinkInspectData> {
   if document_path.trim().is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "文件路径无效。");
+    return CommandResult::failure("INVALID_ARGUMENT", text("文件路径无效。", "Invalid file path."));
   }
   if raw_href.trim().is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "链接无效。");
+    return CommandResult::failure("INVALID_ARGUMENT", text("链接无效。", "Invalid link."));
   }
 
   let href = raw_href.trim();
@@ -78,7 +79,10 @@ pub fn inspect_markdown_link(document_path: &str, raw_href: &str) -> CommandResu
 
   if let Some(ref p) = protocol {
     if DANGEROUS_PROTOCOLS.contains(&p.as_str()) {
-      return CommandResult::failure("DANGEROUS_PROTOCOL", "已阻止不安全链接。");
+      return CommandResult::failure(
+        "DANGEROUS_PROTOCOL",
+        text("已阻止不安全链接。", "Blocked an unsafe link."),
+      );
     }
 
     if p == "http:" || p == "https:" {
@@ -87,20 +91,38 @@ pub fn inspect_markdown_link(document_path: &str, raw_href: &str) -> CommandResu
           action: "external".into(),
           url: url.to_string(),
         }),
-        Err(_) => CommandResult::failure("UNSUPPORTED_LINK", "链接无效。"),
+        Err(_) => CommandResult::failure("UNSUPPORTED_LINK", text("链接无效。", "Invalid link.")),
       };
     }
 
-    return CommandResult::failure("UNSUPPORTED_LINK", "只能打开 Markdown 链接或安全外部链接。");
+    return CommandResult::failure(
+      "UNSUPPORTED_LINK",
+      text(
+        "只能打开 Markdown 链接或安全外部链接。",
+        "Only Markdown links or safe external links can be opened.",
+      ),
+    );
   }
 
   let decoded = decode_path(href);
   let Some(local_path) = resolve_document_relative_path(Path::new(document_path), &decoded) else {
-    return CommandResult::failure("UNSUPPORTED_LINK", "只能打开 Markdown 链接或安全外部链接。");
+    return CommandResult::failure(
+      "UNSUPPORTED_LINK",
+      text(
+        "只能打开 Markdown 链接或安全外部链接。",
+        "Only Markdown links or safe external links can be opened.",
+      ),
+    );
   };
 
   if !is_markdown_path(&local_path) {
-    return CommandResult::failure("UNSUPPORTED_LINK", "只能打开 Markdown 链接或安全外部链接。");
+    return CommandResult::failure(
+      "UNSUPPORTED_LINK",
+      text(
+        "只能打开 Markdown 链接或安全外部链接。",
+        "Only Markdown links or safe external links can be opened.",
+      ),
+    );
   }
 
   match read_markdown_file(local_path.to_string_lossy().as_ref()) {
@@ -115,16 +137,16 @@ pub fn inspect_markdown_link(document_path: &str, raw_href: &str) -> CommandResu
 pub fn validate_external_url(url: &str) -> Result<String, (String, String)> {
   let trimmed = url.trim();
   if trimmed.is_empty() {
-    return Err(("INVALID_ARGUMENT".into(), "链接无效。".into()));
+    return Err(("INVALID_ARGUMENT".into(), text("链接无效。", "Invalid link.").into()));
   }
 
   let parsed = match Url::parse(trimmed) {
     Ok(u) => u,
-    Err(_) => return Err(("UNSUPPORTED_LINK".into(), "链接无效。".into())),
+    Err(_) => return Err(("UNSUPPORTED_LINK".into(), text("链接无效。", "Invalid link.").into())),
   };
 
   if parsed.scheme() != "https" && parsed.scheme() != "http" {
-    return Err(("DANGEROUS_PROTOCOL".into(), "已阻止不安全链接。".into()));
+    return Err(("DANGEROUS_PROTOCOL".into(), text("已阻止不安全链接。", "Blocked an unsafe link.").into()));
   }
 
   Ok(parsed.to_string())
@@ -138,7 +160,9 @@ pub fn open_external_url(
   match validate_external_url(url) {
     Ok(safe) => match launcher(&safe) {
       Ok(()) => CommandResult::success(EmptyPayload {}),
-      Err(_) => CommandResult::failure("OPEN_FAILED", "无法打开外部链接。"),
+      Err(_) => {
+        CommandResult::failure("OPEN_FAILED", text("无法打开外部链接。", "Can't open the external link."))
+      }
     },
     Err((code, message)) => CommandResult::failure(code, message),
   }

@@ -53,6 +53,14 @@ HEADERS += $$PWD/src/file_tree_panel.h
 SOURCES += $$PWD/src/app_settings.cpp
 HEADERS += $$PWD/src/app_settings.h
 
+# UI language: Simplified Chinese source text, English from translations/.
+# lrelease compiles the .ts and embed_translations puts the .qm in the
+# resources under :/i18n, so nothing ships beside the executable.
+SOURCES += $$PWD/src/ui_language.cpp
+HEADERS += $$PWD/src/ui_language.h $$PWD/src/ui_text.h
+TRANSLATIONS += $$PWD/translations/vellora_en.ts
+CONFIG += lrelease embed_translations
+
 # Linux / BSD: `make install` (honours INSTALL_ROOT) lays out the binary,
 # desktop entry, MIME glob and hicolor icons under PREFIX (default /usr/local).
 unix:!macx {

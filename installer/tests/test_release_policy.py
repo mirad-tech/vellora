@@ -52,4 +52,36 @@ class ReleasePolicy(unittest.TestCase):
         self.assertTrue((R/'installer/assets/portable.txt').is_file())
         note=(R/'installer/assets/README-dist.txt').read_text(encoding='utf-8-sig')
         self.assertIn('{VERSION}',note);self.assertIn('portable.txt',note)
+class InstallerLanguages(unittest.TestCase):
+    """Chinese Windows display languages get the Chinese setup, all others English."""
+    def test_english_default_and_chinese_by_display_language(self):
+        langs=re.findall(r'!insertmacro MUI_LANGUAGE "(\w+)"',S)
+        self.assertEqual(langs,['English','SimpChinese'])
+        self.assertNotIn('MUI_LANGDLL',S)
+        pick=S.split('!macro VELLORA_PICK_LANGUAGE',1)[1].split('!macroend',1)[0]
+        self.assertIn('GetUserDefaultUILanguage',pick)
+        self.assertIn('IntOp $0 $0 & 0x3FF',pick)
+        self.assertIn('${If} $0 = 0x04\n    StrCpy $LANGUAGE ${LANG_SIMPCHINESE}',pick)
+        self.assertIn('StrCpy $LANGUAGE ${LANG_ENGLISH}',pick)
+        for init in ('Function .onInit\n','Function un.onInit\n'):
+            body=S.split(init,1)[1].split('FunctionEnd',1)[0]
+            self.assertTrue(body.lstrip().startswith('!insertmacro VELLORA_PICK_LANGUAGE'),init)
+    def test_every_message_has_both_languages(self):
+        defined={}
+        for name,lang in re.findall(r'^LangString (\w+) \$\{LANG_(\w+)\} ',S,re.M):
+            defined.setdefault(name,set()).add(lang)
+        self.assertTrue(defined)
+        for name,langs in defined.items():
+            self.assertEqual(langs,{'ENGLISH','SIMPCHINESE'},name)
+        used=set(re.findall(r'\$\((\w+)\)',S))
+        self.assertEqual(used,set(defined))
+        for line in S.splitlines():
+            if line.lstrip().startswith((';','LangString','!define UNINSTALL_LINK_')): continue
+            self.assertNotRegex(line,r'[\u4e00-\u9fff]',line)
+    def test_both_uninstall_shortcut_names_are_guarded_and_removed(self):
+        for name in ('${UNINSTALL_LINK_ZH}','${UNINSTALL_LINK_EN}'):
+            self.assertIn('${OrIf} ${FileExists} "$SMPROGRAMS\\Vellora\\'+name+'"',V)
+            uninstall=S.split('Section "Uninstall"',1)[1]
+            self.assertIn('Delete "$SMPROGRAMS\\Vellora\\'+name+'"',uninstall)
+        self.assertIn('!define UNINSTALL_LINK_ZH "卸载 Vellora.lnk"',S)
 if __name__=='__main__': unittest.main(verbosity=2)

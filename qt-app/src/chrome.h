@@ -11,6 +11,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include "ui_text.h"
+
 class QGraphicsEffect;
 class QLabel;
 class QPropertyAnimation;
@@ -50,7 +52,7 @@ class SegmentedControl : public QWidget {
 
  private:
   QRect segmentRect(int index) const;
-  QStringList labels_{QStringLiteral("文档"), QStringLiteral("源码")};
+  QStringList labels_{ui::tr("文档"), ui::tr("源码")};
   QVector<QPushButton*> segments_;
   int current_ = 0;
   qreal slider_ = 0.0;

@@ -38,6 +38,7 @@
 #include "file_tree_panel.h"
 #include "source_view.h"
 #include "theme.h"
+#include "ui_text.h"
 
 namespace {
 constexpr int kModeDocument = 0;
@@ -264,16 +265,16 @@ int MainWindow::ask(const QString& title, const QString& message, const QString&
 bool MainWindow::confirmDiscard() {
   if (!collectDraft()) return false;
   if (!dirty_) return true;
-  return ask(QStringLiteral("未保存更改"), QStringLiteral("当前文档有未保存更改。"),
-             QStringLiteral("放弃更改"), QStringLiteral("继续编辑"), true) == 2;
+  return ask(ui::tr("未保存更改"), ui::tr("当前文档有未保存更改。"),
+             ui::tr("放弃更改"), ui::tr("继续编辑"), true) == 2;
 }
 
 bool MainWindow::confirmSwitch() {
   if (!collectDraft()) return false;
   if (!dirty_) return true;
-  const int answer = ask(QStringLiteral("未保存更改"), QStringLiteral("当前文档有未保存更改。切换前要保存吗？"),
-                         QStringLiteral("保存并切换"), QStringLiteral("继续编辑"), false,
-                         QStringLiteral("放弃更改"));
+  const int answer = ask(ui::tr("未保存更改"), ui::tr("当前文档有未保存更改。切换前要保存吗？"),
+                         ui::tr("保存并切换"), ui::tr("继续编辑"), false,
+                         ui::tr("放弃更改"));
   if (answer == 2) return save();
   return answer == 3;
 }
@@ -299,8 +300,8 @@ void MainWindow::chooseFile() {
     QString path;
     {
       QScopedValueRollback<bool> modal(modalOpen_, true);
-      path = QFileDialog::getOpenFileName(this, QStringLiteral("打开 Markdown 文件"),
-          QString(), QStringLiteral("Markdown 文件 (*.md *.markdown)"));
+      path = QFileDialog::getOpenFileName(this, ui::tr("打开 Markdown 文件"),
+          QString(), ui::tr("Markdown 文件 (*.md *.markdown)"));
     }
     if (path.isEmpty() || request != openRequestId_) return;
     startOpen([path] { return bridge::openDocument(path); }, false);
@@ -346,7 +347,7 @@ QJsonObject MainWindow::renameEntry(const QString& path, const QString& newName)
   // runs. Renaming underneath it would retarget work that has already started.
   if (modalOpen_ || busy_ || isAsyncBusy() || compositionActive()) {
     return QJsonObject{{"ok", false}, {"code", "BUSY"},
-                       {"message", QStringLiteral("当前文档正在处理中，请稍后再重命名。")}};
+                       {"message", ui::tr("当前文档正在处理中，请稍后再重命名。")}};
   }
   // Windows refuses to rename a folder the file panel is watching.
   const bool folder = QFileInfo(path).isDir();
@@ -478,7 +479,7 @@ bool MainWindow::splicePendingEdits(QString* content) {
   for (const auto& edit : pending) edits.append(QJsonObject{{"index", edit.first}, {"markdown", edit.second}});
   const QJsonObject spliced = bridge::spliceSegments(documentBaselineMarkdown_, edits);
   if (!spliced.value("ok").toBool() || spliced.value("applied").toInt(-1) != edits.size()) {
-    failure_ = spliced.value("message").toString(QStringLiteral("文档无法完整序列化，草稿已保留。"));
+    failure_ = spliced.value("message").toString(ui::tr("文档无法完整序列化，草稿已保留。"));
     return false;
   }
   *content = spliced.value("content").toString();
@@ -639,11 +640,11 @@ void MainWindow::setModeWithPlan(int mode, const QJsonObject* precomputedPlan) {
 }
 
 void MainWindow::refreshIdentity() {
-  const QString status = opening_ ? QStringLiteral("正在打开文件")
-      : busy_ ? QStringLiteral("正在保存")
-      : !failure_.isEmpty() ? failure_ : savedFeedback_ ? QStringLiteral("已保存")
-      : documentPath_.isEmpty() ? QStringLiteral("未打开文件")
-      : dirty_ ? QStringLiteral("有未保存更改") : QStringLiteral("Markdown 文档");
+  const QString status = opening_ ? ui::tr("正在打开文件")
+      : busy_ ? ui::tr("正在保存")
+      : !failure_.isEmpty() ? failure_ : savedFeedback_ ? ui::tr("已保存")
+      : documentPath_.isEmpty() ? ui::tr("未打开文件")
+      : dirty_ ? ui::tr("有未保存更改") : ui::tr("Markdown 文档");
   toolbar_->setDocumentName(documentName_, status, dirty_);
   toolbar_->setDocumentAvailable(!documentPath_.isEmpty());
   toolbar_->setBusy(busy_ || isAsyncBusy());
@@ -733,7 +734,7 @@ void MainWindow::showOpenError(const QString& message) {
 
 void MainWindow::showError(const QString& message) {
   if (message.isEmpty()) return;
-  ask(QStringLiteral("Vellora"), message, QStringLiteral("知道了"), QString());
+  ask(QStringLiteral("Vellora"), message, ui::tr("知道了"), QString());
 }
 
 void MainWindow::openLink(const QString& href) {
@@ -754,8 +755,8 @@ void MainWindow::openLink(const QString& href) {
     if (!inspected.value("ok").toBool()) { showError(inspected.value("message").toString()); return; }
     if (inspected.value("action").toString() == QStringLiteral("external")) {
       const QString url = inspected.value("url").toString();
-      if (ask(QStringLiteral("安全提示"), QStringLiteral("您即将访问外部链接，确认离开此应用程序吗？\n\n%1").arg(url),
-              QStringLiteral("继续访问"), QStringLiteral("取消")) != 2) return;
+      if (ask(ui::tr("安全提示"), ui::tr("您即将访问外部链接，确认离开此应用程序吗？\n\n%1").arg(url),
+              ui::tr("继续访问"), ui::tr("取消")) != 2) return;
       const QJsonObject opened = bridge::openExternal(url);
       if (!opened.value("ok").toBool()) showError(opened.value("message").toString());
     } else {
@@ -915,7 +916,7 @@ void MainWindow::replaceCurrent() {
   }
   collectDraft(false);
   refreshSearch(false);
-  search_->setFeedback(changed ? QStringLiteral("已替换 %1 处").arg(changed) : QStringLiteral("内容未变化"));
+  search_->setFeedback(changed ? ui::tr("已替换 %n 处", changed) : ui::tr("内容未变化"));
 }
 
 void MainWindow::replaceAll() {
@@ -925,13 +926,13 @@ void MainWindow::replaceAll() {
   int count = 0;
   if (documentMode_) count = documentView_->replacementChangeCount(replacement);
   else for (const QTextCursor& match : sourceMatches_) if (match.selectedText() != replacement) ++count;
-  if (count == 0) { search_->setFeedback(QStringLiteral("内容未变化")); return; }
+  if (count == 0) { search_->setFeedback(ui::tr("内容未变化")); return; }
   const quint64 expectedSession = session_;
   const QString expectedContent = draftMarkdown_;
   const QString query = search_->query();
   const bool expectedMode = documentMode_;
-  if (ask(QStringLiteral("全部替换"), QStringLiteral("将替换当前文档的 %1 处内容。").arg(count),
-          QStringLiteral("全部替换"), QStringLiteral("取消")) != 2) return;
+  if (ask(ui::tr("全部替换"), ui::tr("将替换当前文档的 %n 处内容。", count),
+          ui::tr("全部替换"), ui::tr("取消")) != 2) return;
   if (session_ != expectedSession || documentMode_ != expectedMode || query != search_->query() ||
       replacement != search_->replacement() || !collectDraft() || draftMarkdown_ != expectedContent) return;
   if (documentMode_) count = documentView_->replaceAll(replacement);
@@ -946,7 +947,7 @@ void MainWindow::replaceAll() {
   }
   collectDraft(false);
   refreshSearch(true);
-  search_->setFeedback(count ? QStringLiteral("已替换 %1 处").arg(count) : QStringLiteral("内容未变化"));
+  search_->setFeedback(count ? ui::tr("已替换 %n 处", count) : ui::tr("内容未变化"));
 }
 void MainWindow::closeSearch() {
   search_->closePanel();toolbar_->setSearchChecked(false);
@@ -1035,7 +1036,7 @@ void MainWindow::chooseFolder() {
     QString start = fileTree_->rootPath();
     if (start.isEmpty() && !documentPath_.isEmpty())
       start = QFileInfo(FileTreePanel::normalizedPath(documentPath_)).absolutePath();
-    folder = QFileDialog::getExistingDirectory(this, QStringLiteral("打开文件夹"), start);
+    folder = QFileDialog::getExistingDirectory(this, ui::tr("打开文件夹"), start);
   }
   if (!folder.isEmpty()) openFolder(folder);
 }
@@ -1126,11 +1127,11 @@ void MainWindow::moveEntry(const QString& path, const QString& directory) {
     const QString destination =
         QFileInfo(QFileInfo(FileTreePanel::normalizedPath(target.value("target").toString())).absolutePath()).fileName();
     const QString message =
-        QStringLiteral("“%1”里有 %2 处用相对路径写的图片或链接，例如 %3。移到“%4”后，它们可能找不到。\n\n要继续移动吗？")
+        ui::tr("“%1”里有 %2 处用相对路径写的图片或链接，例如 %3。移到“%4”后，它们可能找不到。\n\n要继续移动吗？")
             .arg(target.value("name").toString())
             .arg(links)
-            .arg(examples.join(QStringLiteral("、")), destination);
-    if (ask(QStringLiteral("移动文件"), message, QStringLiteral("仍然移动"), QStringLiteral("取消")) != 2) return;
+            .arg(examples.join(ui::tr("、")), destination);
+    if (ask(ui::tr("移动文件"), message, ui::tr("仍然移动"), ui::tr("取消")) != 2) return;
   }
   // Windows refuses to move a folder the file panel is watching.
   if (folder) fileTree_->suspendWatching();
@@ -1176,19 +1177,19 @@ void MainWindow::deleteEntry(const QString& path) {
   const bool closes = target.value("containsSession").toBool() && !documentPath_.isEmpty();
   const bool unsaved = closes && dirty_;
   QString message = folder
-      ? QStringLiteral("要把文件夹“%1”及其中的全部内容移到回收站吗？文件列表里不显示的其他文件（例如图片）也会一起删除。").arg(name)
-      : QStringLiteral("要把“%1”移到回收站吗？").arg(name);
-  message += QStringLiteral("之后可以从回收站还原。");
-  if (unsaved) message += QStringLiteral("\n\n当前文档有未保存的更改，删除后这些更改会丢失。");
-  else if (closes) message += QStringLiteral("\n\n当前打开的文档会被关闭。");
-  const QString title = folder ? QStringLiteral("删除文件夹") : QStringLiteral("删除文件");
-  const QString primary = unsaved ? QStringLiteral("放弃更改并删除") : QStringLiteral("删除");
-  if (ask(title, message, primary, QStringLiteral("取消"), true) != 2) return;
+      ? ui::trTrash("要把文件夹“%1”及其中的全部内容移到回收站吗？文件列表里不显示的其他文件（例如图片）也会一起删除。").arg(name)
+      : ui::trTrash("要把“%1”移到回收站吗？").arg(name);
+  message += ui::trTrash("之后可以从回收站还原。");
+  if (unsaved) message += ui::tr("\n\n当前文档有未保存的更改，删除后这些更改会丢失。");
+  else if (closes) message += ui::tr("\n\n当前打开的文档会被关闭。");
+  const QString title = folder ? ui::tr("删除文件夹") : ui::tr("删除文件");
+  const QString primary = unsaved ? ui::tr("放弃更改并删除") : ui::tr("删除");
+  if (ask(title, message, primary, ui::tr("取消"), true) != 2) return;
   QJsonObject result = removeEntry(path, false);
   if (!result.value("ok").toBool() && result.value("code").toString() == QStringLiteral("RECYCLE_UNAVAILABLE")) {
-    const QString again = QStringLiteral("“%1”所在的位置不支持回收站，或者内容太大，回收站放不下。\n\n"
-                                         "要永久删除吗？永久删除后无法恢复。").arg(name);
-    if (ask(QStringLiteral("无法移到回收站"), again, QStringLiteral("永久删除"), QStringLiteral("取消"), true) != 2) {
+    const QString again = ui::trTrash("“%1”所在的位置不支持回收站，或者内容太大，回收站放不下。\n\n"
+                                      "要永久删除吗？永久删除后无法恢复。").arg(name);
+    if (ask(ui::trTrash("无法移到回收站"), again, ui::tr("永久删除"), ui::tr("取消"), true) != 2) {
       return;
     }
     result = removeEntry(path, true);
@@ -1386,8 +1387,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   }
   if(!collectDraft()){event->ignore();return;}
   if(dirty_) {
-    const int answer=ask(QStringLiteral("未保存更改"),QStringLiteral("当前文档有未保存更改。"),
-        QStringLiteral("保存并退出"),QStringLiteral("继续编辑"),false,QStringLiteral("不保存并退出"));
+    const int answer=ask(ui::tr("未保存更改"),ui::tr("当前文档有未保存更改。"),
+        ui::tr("保存并退出"),ui::tr("继续编辑"),false,ui::tr("不保存并退出"));
     if(answer==2){if(!save()){event->ignore();return;}}
     else if(answer!=3){event->ignore();return;}
   }

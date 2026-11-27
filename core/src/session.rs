@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::file_access;
+use crate::i18n::{is_english, text, trash_name};
 use crate::path_policy;
 use crate::reliable_save::SaveBaseline;
 use crate::rename;
@@ -88,12 +89,18 @@ pub fn require_session_document(
 ) -> Result<PathBuf, CommandResult<EmptyPayload>> {
   let current = lock_mutex(&state.current_document);
   let Some(ref session) = *current else {
-    return Err(CommandResult::failure("NO_DOCUMENT", "当前没有已打开的文档。"));
+    return Err(CommandResult::failure(
+      "NO_DOCUMENT",
+      text("当前没有已打开的文档。", "No document is open."),
+    ));
   };
 
   let claimed = PathBuf::from(claimed_path.trim());
   if claimed_path.trim().is_empty() || !path_policy::paths_equal(session, &claimed) {
-    return Err(CommandResult::failure("SESSION_MISMATCH", "文档会话不匹配，请重新打开文件。"));
+    return Err(CommandResult::failure(
+      "SESSION_MISMATCH",
+      text("文档会话不匹配，请重新打开文件。", "Document session mismatch. Reopen the file."),
+    ));
   }
 
   Ok(session.clone())
@@ -141,9 +148,10 @@ pub fn open_link_session(
       clear_close_flags_if_idle(state);
       CommandResult::success(DocumentPayload { document })
     }
-    CommandResult::Ok { data: LinkInspectData::External { .. }, .. } => {
-      CommandResult::failure("UNSUPPORTED_LINK", "请使用外链确认流程打开 HTTP(S) 链接。")
-    }
+    CommandResult::Ok { data: LinkInspectData::External { .. }, .. } => CommandResult::failure(
+      "UNSUPPORTED_LINK",
+      text("请使用外链确认流程打开 HTTP(S) 链接。", "Open HTTP(S) links through the external link prompt."),
+    ),
     CommandResult::Err { code, message, .. } => CommandResult::failure(code, message),
   }
 }
@@ -162,25 +170,39 @@ pub fn save_document_session(
 
   let mut baseline = lock_mutex(&state.save_baseline);
   let Some(baseline) = baseline.as_mut() else {
-    return CommandResult::failure("NO_DOCUMENT", "当前没有已打开的文档。");
+    return CommandResult::failure("NO_DOCUMENT", text("当前没有已打开的文档。", "No document is open."));
   };
   // The editor owns dirty state: input received while saving must not lose
   // close protection when an older revision finishes writing.
   baseline.save(session.to_string_lossy().as_ref(), content, conflict_token)
 }
 
-const RENAME_BUSY: &str = "无法重命名：文件或文件夹可能正被其他程序使用，或没有写入权限。";
+fn rename_busy() -> &'static str {
+  text(
+    "无法重命名：文件或文件夹可能正被其他程序使用，或没有写入权限。",
+    "Can't rename: the file or folder may be in use by another program, or you don't have write permission.",
+  )
+}
 
 fn rename_failure<T>(error: &io::Error) -> CommandResult<T> {
   match error.kind() {
-    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", "文件或文件夹不存在或已被移动。"),
-    io::ErrorKind::AlreadyExists => CommandResult::failure("TARGET_EXISTS", "已存在同名的文件或文件夹。"),
-    io::ErrorKind::PermissionDenied => CommandResult::failure("RENAME_FAILED", RENAME_BUSY),
+    io::ErrorKind::NotFound => CommandResult::failure(
+      "NOT_FOUND",
+      text("文件或文件夹不存在或已被移动。", "The file or folder doesn't exist or has been moved."),
+    ),
+    io::ErrorKind::AlreadyExists => CommandResult::failure(
+      "TARGET_EXISTS",
+      text("已存在同名的文件或文件夹。", "A file or folder with that name already exists."),
+    ),
+    io::ErrorKind::PermissionDenied => CommandResult::failure("RENAME_FAILED", rename_busy()),
     // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION have no stable ErrorKind.
     _ if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) => {
-      CommandResult::failure("RENAME_FAILED", RENAME_BUSY)
+      CommandResult::failure("RENAME_FAILED", rename_busy())
     }
-    _ => CommandResult::failure("RENAME_FAILED", format!("无法重命名：{error}")),
+    _ => CommandResult::failure(
+      "RENAME_FAILED",
+      if is_english() { format!("Can't rename: {error}") } else { format!("无法重命名：{error}") },
+    ),
   }
 }
 
@@ -207,10 +229,13 @@ pub fn rename_entry_session(
   let _operation = lock_mutex(&state.document_operation);
   let trimmed = path.trim();
   if trimmed.is_empty() {
-    return CommandResult::failure("INVALID_ARGUMENT", "路径无效。");
+    return CommandResult::failure("INVALID_ARGUMENT", text("路径无效。", "Invalid path."));
   }
   if Path::new(trimmed).file_name().is_none() {
-    return CommandResult::failure("INVALID_ARGUMENT", "不能重命名磁盘根目录。");
+    return CommandResult::failure(
+      "INVALID_ARGUMENT",
+      text("不能重命名磁盘根目录。", "Can't rename the root of a drive."),
+    );
   }
   // The entry itself is never followed: renaming a symlink or junction renames
   // the link, not the folder or file it points to.
@@ -231,13 +256,22 @@ pub fn rename_entry_session(
   let is_dir = metadata.is_dir();
   let supported = is_dir || (metadata.is_file() && file_access::is_markdown_path(&source));
   if !supported {
-    return CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能重命名 .md、.markdown 文件或文件夹。");
+    return CommandResult::failure(
+      "UNSUPPORTED_FILE_TYPE",
+      text(
+        "只能重命名 .md、.markdown 文件或文件夹。",
+        "Only .md and .markdown files or folders can be renamed.",
+      ),
+    );
   }
   if let Err(message) = rename::validate_new_name(new_name, !is_dir) {
     return CommandResult::failure("INVALID_NAME", message);
   }
   let (Some(parent), Some(old_name)) = (source.parent(), source.file_name()) else {
-    return CommandResult::failure("INVALID_ARGUMENT", "不能重命名磁盘根目录。");
+    return CommandResult::failure(
+      "INVALID_ARGUMENT",
+      text("不能重命名磁盘根目录。", "Can't rename the root of a drive."),
+    );
   };
   if old_name == std::ffi::OsStr::new(new_name) {
     return CommandResult::success(RenamePayload {
@@ -288,25 +322,45 @@ pub fn rename_entry_session(
   })
 }
 
-const MOVE_BUSY: &str = "无法移动：文件或文件夹可能正被其他程序使用，或没有写入权限。";
-const OTHER_DRIVE: &str = "暂不支持移动到其他磁盘。";
-const TARGET_TAKEN: &str = "目标文件夹里已有同名的文件或文件夹。";
+fn move_busy() -> &'static str {
+  text(
+    "无法移动：文件或文件夹可能正被其他程序使用，或没有写入权限。",
+    "Can't move: the file or folder may be in use by another program, or you don't have write permission.",
+  )
+}
+
+fn other_drive() -> &'static str {
+  text("暂不支持移动到其他磁盘。", "Moving to another drive isn't supported yet.")
+}
+
+fn target_taken() -> &'static str {
+  text(
+    "目标文件夹里已有同名的文件或文件夹。",
+    "The destination folder already has a file or folder with that name.",
+  )
+}
 
 fn move_failure<T>(error: &io::Error) -> CommandResult<T> {
   // ERROR_NOT_SAME_DEVICE on Windows, EXDEV elsewhere: the move would be a copy.
-  let other_drive = if cfg!(windows) { 17 } else { 18 };
-  if error.raw_os_error() == Some(other_drive) {
-    return CommandResult::failure("OTHER_DRIVE", OTHER_DRIVE);
+  let other_drive_code = if cfg!(windows) { 17 } else { 18 };
+  if error.raw_os_error() == Some(other_drive_code) {
+    return CommandResult::failure("OTHER_DRIVE", other_drive());
   }
   match error.kind() {
-    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", "文件或文件夹不存在或已被移动。"),
-    io::ErrorKind::AlreadyExists => CommandResult::failure("TARGET_EXISTS", TARGET_TAKEN),
-    io::ErrorKind::PermissionDenied => CommandResult::failure("MOVE_FAILED", MOVE_BUSY),
+    io::ErrorKind::NotFound => CommandResult::failure(
+      "NOT_FOUND",
+      text("文件或文件夹不存在或已被移动。", "The file or folder doesn't exist or has been moved."),
+    ),
+    io::ErrorKind::AlreadyExists => CommandResult::failure("TARGET_EXISTS", target_taken()),
+    io::ErrorKind::PermissionDenied => CommandResult::failure("MOVE_FAILED", move_busy()),
     // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION have no stable ErrorKind.
     _ if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) => {
-      CommandResult::failure("MOVE_FAILED", MOVE_BUSY)
+      CommandResult::failure("MOVE_FAILED", move_busy())
     }
-    _ => CommandResult::failure("MOVE_FAILED", format!("无法移动：{error}")),
+    _ => CommandResult::failure(
+      "MOVE_FAILED",
+      if is_english() { format!("Can't move: {error}") } else { format!("无法移动：{error}") },
+    ),
   }
 }
 
@@ -341,10 +395,13 @@ struct MovePlan {
 fn move_plan<T>(path: &str, directory: &str) -> Result<MovePlan, CommandResult<T>> {
   let trimmed = path.trim();
   if trimmed.is_empty() || !Path::new(trimmed).is_absolute() {
-    return Err(CommandResult::failure("INVALID_ARGUMENT", "路径无效。"));
+    return Err(CommandResult::failure("INVALID_ARGUMENT", text("路径无效。", "Invalid path.")));
   }
   if Path::new(trimmed).file_name().is_none() {
-    return Err(CommandResult::failure("INVALID_ARGUMENT", "不能移动磁盘根目录。"));
+    return Err(CommandResult::failure(
+      "INVALID_ARGUMENT",
+      text("不能移动磁盘根目录。", "Can't move the root of a drive."),
+    ));
   }
   // As for a rename, the entry itself is never followed: a link moves as the link.
   let (source, own) = rename::resolve_entry(Path::new(trimmed)).map_err(|error| move_failure(&error))?;
@@ -352,37 +409,60 @@ fn move_plan<T>(path: &str, directory: &str) -> Result<MovePlan, CommandResult<T
   let metadata = if is_link { fs::metadata(&source).map_err(|error| move_failure(&error))? } else { own };
   let is_dir = metadata.is_dir();
   if !is_dir && !(metadata.is_file() && file_access::is_markdown_path(&source)) {
-    return Err(CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能移动 .md、.markdown 文件或文件夹。"));
+    return Err(CommandResult::failure(
+      "UNSUPPORTED_FILE_TYPE",
+      text("只能移动 .md、.markdown 文件或文件夹。", "Only .md and .markdown files or folders can be moved."),
+    ));
   }
   let folder = directory.trim();
   if folder.is_empty() || !Path::new(folder).is_absolute() {
-    return Err(CommandResult::failure("INVALID_ARGUMENT", "目标文件夹无效。"));
+    return Err(CommandResult::failure(
+      "INVALID_ARGUMENT",
+      text("目标文件夹无效。", "Invalid destination folder."),
+    ));
   }
   let destination = match fs::canonicalize(folder) {
     Ok(destination) => destination,
     Err(error) if error.kind() == io::ErrorKind::NotFound => {
-      return Err(CommandResult::failure("NOT_FOUND", "目标文件夹不存在或已被移动。"));
+      return Err(CommandResult::failure(
+        "NOT_FOUND",
+        text("目标文件夹不存在或已被移动。", "The destination folder doesn't exist or has been moved."),
+      ));
     }
     Err(error) => return Err(move_failure(&error)),
   };
   if !destination.is_dir() {
-    return Err(CommandResult::failure("NOT_A_DIRECTORY", "目标不是文件夹。"));
+    return Err(CommandResult::failure(
+      "NOT_A_DIRECTORY",
+      text("目标不是文件夹。", "The destination isn't a folder."),
+    ));
   }
   // A linked folder moves as the link, so only a real folder can contain the target.
   if is_dir && !is_link && path_policy::is_path_inside_directory(&destination, &source) {
-    return Err(CommandResult::failure("INVALID_TARGET", "不能把文件夹移到它自己或它的子文件夹里。"));
+    return Err(CommandResult::failure(
+      "INVALID_TARGET",
+      text(
+        "不能把文件夹移到它自己或它的子文件夹里。",
+        "Can't move a folder into itself or one of its subfolders.",
+      ),
+    ));
   }
   if !same_volume(&source, &destination) {
-    return Err(CommandResult::failure("OTHER_DRIVE", OTHER_DRIVE));
+    return Err(CommandResult::failure("OTHER_DRIVE", other_drive()));
   }
   let name = match source.file_name() {
     Some(name) => name.to_owned(),
-    None => return Err(CommandResult::failure("INVALID_ARGUMENT", "不能移动磁盘根目录。")),
+    None => {
+      return Err(CommandResult::failure(
+        "INVALID_ARGUMENT",
+        text("不能移动磁盘根目录。", "Can't move the root of a drive."),
+      ))
+    }
   };
   let target = destination.join(&name);
   let same_folder = source.parent().is_some_and(|parent| path_policy::paths_equal(parent, &destination));
   if !same_folder && fs::symlink_metadata(&target).is_ok() {
-    return Err(CommandResult::failure("TARGET_EXISTS", TARGET_TAKEN));
+    return Err(CommandResult::failure("TARGET_EXISTS", target_taken()));
   }
   Ok(MovePlan { source, name: name.to_string_lossy().into_owned(), is_dir, is_link, target, same_folder })
 }
@@ -465,15 +545,43 @@ pub enum DiskDelete {
   Failed(i32),
 }
 
-const DELETE_BUSY: &str = "无法删除：文件或文件夹可能正被其他程序使用，或没有权限";
-const NOT_RECYCLABLE: &str = "这个位置不支持回收站，或者内容太大，回收站放不下。";
-const DELETE_MISSING: &str = "文件或文件夹不存在或已被移动。";
+fn delete_busy(code: Option<u32>) -> String {
+  match (is_english(), code) {
+    (false, None) => "无法删除：文件或文件夹可能正被其他程序使用，或没有权限。".to_string(),
+    (false, Some(code)) => {
+      format!("无法删除：文件或文件夹可能正被其他程序使用，或没有权限（错误 0x{code:08X}）。")
+    }
+    (true, None) => {
+      "Can't delete: the file or folder may be in use by another program, or you don't have permission."
+        .to_string()
+    }
+    (true, Some(code)) => format!(
+      "Can't delete: the file or folder may be in use by another program, or you don't have permission \
+       (error 0x{code:08X})."
+    ),
+  }
+}
+
+fn not_recyclable() -> String {
+  if is_english() {
+    format!("This location doesn't support the {0}, or the item is too large to fit in it.", trash_name())
+  } else {
+    "这个位置不支持回收站，或者内容太大，回收站放不下。".to_string()
+  }
+}
+
+fn delete_missing() -> &'static str {
+  text("文件或文件夹不存在或已被移动。", "The file or folder doesn't exist or has been moved.")
+}
 
 fn delete_io_failure<T>(error: &io::Error) -> CommandResult<T> {
   match error.kind() {
-    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", DELETE_MISSING),
-    io::ErrorKind::PermissionDenied => CommandResult::failure("DELETE_FAILED", format!("{DELETE_BUSY}。")),
-    _ => CommandResult::failure("DELETE_FAILED", format!("无法删除：{error}")),
+    io::ErrorKind::NotFound => CommandResult::failure("NOT_FOUND", delete_missing()),
+    io::ErrorKind::PermissionDenied => CommandResult::failure("DELETE_FAILED", delete_busy(None)),
+    _ => CommandResult::failure(
+      "DELETE_FAILED",
+      if is_english() { format!("Can't delete: {error}") } else { format!("无法删除：{error}") },
+    ),
   }
 }
 
@@ -481,9 +589,9 @@ fn delete_code_failure<T>(code: i32) -> CommandResult<T> {
   let code = code as u32;
   // HRESULT_FROM_WIN32 of ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND.
   if matches!(code, 0x8007_0002 | 0x8007_0003) {
-    return CommandResult::failure("NOT_FOUND", DELETE_MISSING);
+    return CommandResult::failure("NOT_FOUND", delete_missing());
   }
-  CommandResult::failure("DELETE_FAILED", format!("{DELETE_BUSY}（错误 0x{code:08X}）。"))
+  CommandResult::failure("DELETE_FAILED", delete_busy(Some(code)))
 }
 
 /// Checks an entry the file tree asks to delete, without following it. Returns
@@ -491,21 +599,33 @@ fn delete_code_failure<T>(code: i32) -> CommandResult<T> {
 fn delete_target<T>(path: &str) -> Result<(PathBuf, bool), CommandResult<T>> {
   let trimmed = path.trim();
   if trimmed.is_empty() || !Path::new(trimmed).is_absolute() {
-    return Err(CommandResult::failure("INVALID_ARGUMENT", "路径无效。"));
+    return Err(CommandResult::failure("INVALID_ARGUMENT", text("路径无效。", "Invalid path.")));
   }
   if Path::new(trimmed).file_name().is_none() {
-    return Err(CommandResult::failure("INVALID_ARGUMENT", "不能删除磁盘根目录。"));
+    return Err(CommandResult::failure(
+      "INVALID_ARGUMENT",
+      text("不能删除磁盘根目录。", "Can't delete the root of a drive."),
+    ));
   }
   let resolved = rename::resolve_entry(Path::new(trimmed));
   let (source, own) = resolved.map_err(|error| delete_io_failure(&error))?;
   // The shell can reach through a link into the folder it points to, so a link
   // is refused rather than handed over.
   if own.file_type().is_symlink() {
-    return Err(CommandResult::failure("UNSUPPORTED_LINK", "暂不支持删除符号链接或目录联接。"));
+    return Err(CommandResult::failure(
+      "UNSUPPORTED_LINK",
+      text("暂不支持删除符号链接或目录联接。", "Deleting symbolic links or junctions isn't supported yet."),
+    ));
   }
   let is_dir = own.is_dir();
   if !is_dir && !(own.is_file() && file_access::is_markdown_path(&source)) {
-    return Err(CommandResult::failure("UNSUPPORTED_FILE_TYPE", "只能删除 .md、.markdown 文件或文件夹。"));
+    return Err(CommandResult::failure(
+      "UNSUPPORTED_FILE_TYPE",
+      text(
+        "只能删除 .md、.markdown 文件或文件夹。",
+        "Only .md and .markdown files or folders can be deleted.",
+      ),
+    ));
   }
   Ok((source, is_dir))
 }
@@ -558,7 +678,7 @@ pub fn delete_entry_session(
   let closes = current.as_deref().is_some_and(|document| contains_document(document, &source, is_dir));
   match delete(&source, permanent) {
     DiskDelete::Deleted => {}
-    DiskDelete::NotRecyclable => return CommandResult::failure("RECYCLE_UNAVAILABLE", NOT_RECYCLABLE),
+    DiskDelete::NotRecyclable => return CommandResult::failure("RECYCLE_UNAVAILABLE", not_recyclable()),
     // A shell operation can report an error after the entry is already gone.
     DiskDelete::Failed(code) if fs::symlink_metadata(&source).is_ok() => return delete_code_failure(code),
     DiskDelete::Failed(_) => {}
@@ -1256,6 +1376,17 @@ mod tests {
     let session = open_session(&state, path.to_str().unwrap(), "body");
     let refused = delete_entry_session(&state, &session, false, |_, _| DiskDelete::NotRecyclable);
     assert_eq!(failure_code(refused), "RECYCLE_UNAVAILABLE");
+    let refused = crate::i18n::with_language(crate::i18n::Language::English, || {
+      delete_entry_session(&state, &session, false, |_, _| DiskDelete::NotRecyclable)
+    });
+    let trash = if cfg!(windows) { "Recycle Bin" } else { "Trash" };
+    assert_eq!(
+      refused.as_err().map(|error| (error.code, error.message)),
+      Some((
+        "RECYCLE_UNAVAILABLE".to_string(),
+        format!("This location doesn't support the {trash}, or the item is too large to fit in it.")
+      ))
+    );
     assert_eq!(fs::read_to_string(&path).unwrap(), "body");
     assert!(lock_mutex(&state.current_document).is_some());
     let mut asked = None;

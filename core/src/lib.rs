@@ -6,6 +6,7 @@
 //! new view cannot bypass it by calling a different entry point.
 
 pub mod file_access;
+pub mod i18n;
 pub mod image_access;
 pub mod launch_args;
 pub mod link_access;

@@ -45,6 +45,7 @@ char* vellora_move_entry(const char* path, const char* directory);
 char* vellora_inspect_delete(const char* path);
 char* vellora_delete_entry(const char* path, int permanent, int (*remove)(const char* path, int permanent));
 char* vellora_version();
+char* vellora_set_language(const char* tag);
 char* vellora_splice_text_n(const uint8_t* content, size_t contentLen, const char* edits);
 void vellora_free(char* pointer);
 }
@@ -314,6 +315,11 @@ void setDiskDeleterForTesting(DiskDeleter deleter) { diskDeleter() = std::move(d
 QString version() {
   const QJsonObject result = consume(vellora_version());
   return result.value("version").toString();
+}
+
+bool setLanguage(const QString& tag) {
+  const QByteArray value = utf8(tag);
+  return consume(vellora_set_language(value.constData())).value("ok").toBool();
 }
 
 }  // namespace bridge

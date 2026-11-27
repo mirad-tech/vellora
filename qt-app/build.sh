@@ -102,6 +102,7 @@ if [[ "$run_tests" == 1 ]]; then
     "theme_regressions:theme-tests:vellora-theme-regressions"
     "rename_regressions:rename-tests:vellora-rename-regressions"
     "file_tree_regressions:file-tree-tests:vellora-file-tree-regressions"
+    "i18n_regressions:i18n-tests:vellora-i18n-regressions"
   )
   # VELLORA_QT_SUITES="regressions theme_regressions" limits the run.
   selected="${VELLORA_QT_SUITES:-}"

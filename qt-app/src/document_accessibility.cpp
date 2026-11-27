@@ -1,5 +1,6 @@
 #include "document_accessibility.h"
 #include "document_view.h"
+#include "ui_text.h"
 
 #include <QAccessibleWidget>
 #include <QAbstractTextDocumentLayout>
@@ -913,7 +914,7 @@ void AccessibleDocumentView::ensureSemantics() const {
             if (!lists.isEmpty() && lists.last().depth == depth) lists.removeLast();
             const auto parent = lists.isEmpty() || !lists.last().item ? 0 : QAccessible::uniqueId(lists.last().item);
             auto* list = acquire("list/b" + QString::number(block.blockNumber()), QAccessible::List, parent,
-                                 block.position(), block.position(), ordered ? QStringLiteral("有序列表") : QStringLiteral("无序列表"));
+                                 block.position(), block.position(), ordered ? ui::tr("有序列表") : ui::tr("无序列表"));
             list->orderedList = ordered; list->listNumber = number;
             lists.append({depth, segment, quoteDepth, number - 1, ordered, list, nullptr});
           }
