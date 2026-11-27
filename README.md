@@ -16,19 +16,19 @@ Windows Markdown 阅读与编辑器。
 
 适用于 **Windows 10 / 11 x64（64 位）**。普通用户下载安装包即可，无需安装开发工具或自行编译。
 
-[直接下载安装包：Vellora-Setup-0.1.8.exe](https://github.com/mirad-tech/vellora/releases/download/v0.1.8/Vellora-Setup-0.1.8.exe) · [便携版：Vellora-0.1.8-portable-x64.zip](https://github.com/mirad-tech/vellora/releases/download/v0.1.8/Vellora-0.1.8-portable-x64.zip) · [打开版本发布页](https://github.com/mirad-tech/vellora/releases/tag/v0.1.8)
+[打开最新版本发布页](https://github.com/mirad-tech/vellora/releases/latest)
 
 ### 1. 下载安装包
 
-1. 打开上方的 **版本发布页**。
+1. 打开上方的 **最新版本发布页**。
 2. 在页面下方找到 **Assets（资源）**，如果已折叠，点击展开。
-3. 点击 **`Vellora-Setup-0.1.8.exe`**，等待下载完成。也可以使用上方的直达下载链接。
+3. 点击 **`Vellora-Setup-版本号.exe`**（例如 `Vellora-Setup-0.1.8.exe`），等待下载完成。
 4. 不要选择 `Source code (zip)` 或 `Source code (tar.gz)`：它们是源码，不是可直接安装的软件。
 
 ### 2. 安装 Vellora
 
 1. 如果 Vellora 正在运行，先保存文档并关闭窗口。
-2. 双击下载的 `Vellora-Setup-0.1.8.exe`。已安装 0.1.0～0.1.8 时会在原位置升级。
+2. 双击下载的安装包。已安装旧版本时会在原位置升级。
 3. 按安装向导继续，阅读许可条款并确认同意后，选择安装位置。默认安装到当前用户的 `%LOCALAPPDATA%\Programs\Vellora`，通常保留默认位置即可。
 4. 在 **Markdown 文件关联** 页面按需选择：
    - **不勾选**：保持当前文件关联不变，之后仍可在 Vellora 内通过“打开”选择文档。
@@ -38,7 +38,7 @@ Windows Markdown 阅读与编辑器。
 
 ### 便携版
 
-不想安装、没有安装权限，或想放在 U 盘里使用时，可以下载 `Vellora-0.1.8-portable-x64.zip`：
+不想安装、没有安装权限，或想放在 U 盘里使用时，可以下载 `Vellora-版本号-portable-x64.zip`：
 
 1. 把整个压缩包解压到任意文件夹，例如 `D:\Tools\Vellora` 或 U 盘。
 2. 双击里面的 `vellora.exe`。不需要安装，也不需要管理员权限；不要只拷出 `vellora.exe`，它需要同一文件夹里的其他文件。
@@ -57,25 +57,15 @@ Windows Markdown 阅读与编辑器。
 
 ### 安全提示与下载校验
 
-当前 0.1.8 安装包和便携版**尚未进行数字签名**，Windows 可能显示“Windows 已保护你的电脑”或未知发布者提示。这不等于已经通过安全认证。请只从本仓库的 Release 下载，并在确认来源、文件名及下方校验值一致且愿意继续后，才选择 **更多信息 → 仍要运行**（如果系统提供该选项）。
+安装包和便携版**尚未进行数字签名**，Windows 可能显示“Windows 已保护你的电脑”或未知发布者提示。这不等于已经通过安全认证。请只从本仓库的 Release 下载，并在确认来源、文件名及发布页上的校验值一致且愿意继续后，才选择 **更多信息 → 仍要运行**（如果系统提供该选项）。
 
 不要关闭杀毒软件或 SmartScreen。如果文件校验不一致、出现明确的恶意软件警报，或设备受组织策略限制，请停止安装，不要强行绕过。
 
-SHA256：
-
-```text
-Vellora-Setup-0.1.8.exe
-EC24B40297D07933FA6B1FBFCA2BC6963A04E15A53C407A0744E392FCAAF33F3
-
-Vellora-0.1.8-portable-x64.zip
-F5D4A7244EC92719148B09AECC1B14632157F2BE4AB29D7A04373EF083D6F436
-```
-
-可选校验方法：在下载文件所在文件夹打开 PowerShell，运行下方命令，将输出的 Hash 与上方值比较：
+可选校验方法：在下载文件所在文件夹打开 PowerShell，运行下方命令，将输出的 Hash 与发布页“下载校验”中的值比较：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Vellora-Setup-0.1.8.exe
-Get-FileHash -Algorithm SHA256 .\Vellora-0.1.8-portable-x64.zip
+Get-FileHash -Algorithm SHA256 .\Vellora-Setup-*.exe
+Get-FileHash -Algorithm SHA256 .\Vellora-*-portable-x64.zip
 ```
 
 ## 构建
