@@ -1,6 +1,6 @@
 # Build-only Qt distribution. Never runs Setup or changes installed applications.
 param(
-  [string]$Version = '0.1.7',
+  [string]$Version = '0.1.8',
   [string]$QtRoot = $env:QT_ROOT,
   [string]$BuildRoot,
   [string]$CargoTargetDir,

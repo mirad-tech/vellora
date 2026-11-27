@@ -30,7 +30,7 @@ HEADERS += \
 include($$PWD/bridge.pri)
 
 RC_ICONS = $$PWD/../installer/assets/vellora.ico
-VERSION = 0.1.7
+VERSION = 0.1.8
 QMAKE_TARGET_PRODUCT = "Vellora"
 QMAKE_TARGET_DESCRIPTION = "Vellora"
 QMAKE_TARGET_COMPANY = "Vellora Contributors"
