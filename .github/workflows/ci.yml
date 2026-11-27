@@ -1,23 +1,55 @@
 name: CI
 
 on:
-  # Docs-only changes (Markdown) skip CI.
+  # Markdown-only pushes to main don't start CI. Pull requests always start it
+  # so the required checks report, but a Markdown-only PR skips the real work
+  # (the `changes` job below) and the skipped checks count as passed.
   push:
     branches:
       - main
     paths-ignore:
       - '**/*.md'
   pull_request:
-    paths-ignore:
-      - '**/*.md'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Checkout repository
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Anything besides Markdown?
+        id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(git diff --name-only "$BASE...$HEAD")
+          echo "$files"
+          if echo "$files" | grep -qv '\.md$'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "Markdown-only change: build and test jobs are skipped."
+          fi
+
   rust:
     name: Rust (fmt, clippy, tests)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -42,6 +74,8 @@ jobs:
 
   qt:
     name: Qt 6.8.3 + Rust Full Regressions
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -127,6 +161,9 @@ jobs:
   linux:
     name: Linux ${{ matrix.arch }} (Qt 6.8.3 + Rust, AppImage)
     # The oldest supported Ubuntu runner sets the AppImage's minimum glibc.
+    # A skipped matrix job reports under an unexpanded name, so the required
+    # checks would never pass; skip the steps instead.
+    needs: changes
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -144,24 +181,29 @@ jobs:
             qt_arch: linux_gcc_arm64
     steps:
       - name: Checkout repository
+        if: needs.changes.outputs.code == 'true'
         uses: actions/checkout@v4
 
       - name: Install Python 3.12
+        if: needs.changes.outputs.code == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install Rust toolchain
+        if: needs.changes.outputs.code == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
       - name: Cache Cargo artifacts
+        if: needs.changes.outputs.code == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           key: linux-${{ matrix.arch }}
 
       - name: Install system packages
+        if: needs.changes.outputs.code == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -171,6 +213,7 @@ jobs:
             libxcb-xkb1 libdbus-1-3 fonts-noto-core fonts-noto-cjk fonts-dejavu-core file
 
       - name: Install Qt 6.8.3 (${{ matrix.qt_arch }})
+        if: needs.changes.outputs.code == 'true'
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
@@ -181,29 +224,34 @@ jobs:
           cache: 'true'
 
       - name: Rust formatting and Clippy
+        if: needs.changes.outputs.code == 'true'
         run: |
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Release packaging rules
+        if: needs.changes.outputs.code == 'true'
         run: |
           python installer/tests/test_release_policy.py
           python installer/tests/test_association_policy.py
           python tools/check_translations.py
 
       - name: Build and run Rust + Qt regression suites
+        if: needs.changes.outputs.code == 'true'
         env:
           QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
           QT_QPA_PLATFORM: offscreen
         run: ./qt-app/build.sh --test
 
       - name: Package AppImage
+        if: needs.changes.outputs.code == 'true'
         env:
           QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
           VELLORA_ARCH: ${{ matrix.arch }}
         run: SKIP_BUILD=0 ./installer/linux/package-appimage.sh "$GITHUB_WORKSPACE/dist"
 
       - name: Upload AppImage
+        if: needs.changes.outputs.code == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: vellora-linux-${{ matrix.arch }}-appimage
