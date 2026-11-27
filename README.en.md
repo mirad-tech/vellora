@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-A Markdown reader and editor for Windows.
+A Markdown reader and editor for Windows and Linux.
 
 ## Features
 
@@ -16,7 +16,7 @@ A Markdown reader and editor for Windows.
 
 ## Download and install
 
-For **Windows 10 / 11 x64 (64-bit)**. Most users only need the installer; no developer tools or building required.
+The Windows version is for **Windows 10 / 11 x64 (64-bit)**; for Linux, see [Linux version](#linux-version). Most users only need the installer; no developer tools or building required.
 
 [Open the latest release](https://github.com/mirad-tech/vellora/releases/latest)
 
@@ -63,12 +63,28 @@ The installer and portable version are **not digitally signed yet**, so Windows 
 
 Do not turn off your antivirus or SmartScreen. If the checksum does not match, you get a clear malware alert, or your device is restricted by organization policy, stop and do not force the installation.
 
-Optional check: open PowerShell in the folder containing the download, run the commands below, and compare the output Hash with the values under the release page's checksum section:
+Optional check: open PowerShell in the folder containing the download, run the commands below, and compare the output Hash with the values in the release page's checksum section (titled "下载校验"):
 
 ```powershell
 Get-FileHash -Algorithm SHA256 .\Vellora-Setup-*.exe
 Get-FileHash -Algorithm SHA256 .\Vellora-*-portable-x64.zip
 ```
+
+### Linux version
+
+On the latest release page, under **Assets**, download the AppImage for your machine:
+
+- `Vellora-<version>-x86_64.AppImage`: x86_64 PCs, needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, or later).
+- `Vellora-<version>-aarch64.AppImage`: ARM64 machines, needs glibc 2.39 or newer (Ubuntu 24.04, Debian 13, or later).
+
+Make it executable, then run it, for example:
+
+```sh
+chmod +x Vellora-*-x86_64.AppImage
+./Vellora-*-x86_64.AppImage
+```
+
+To verify, run `sha256sum Vellora-*.AppImage` and compare the output with the release page's checksum section.
 
 ## Building
 
@@ -109,7 +125,7 @@ Build an AppImage (downloads linuxdeploy and its Qt plugin automatically; no FUS
 ./installer/linux/package-appimage.sh            # output in target/appimage/
 ```
 
-An AppImage only runs on distributions whose glibc is at least as new as the build machine's. CI builds on Ubuntu 22.04 with Qt 6.8.3 and uploads the x86_64 AppImage as a build artifact.
+An AppImage only runs on distributions whose glibc is at least as new as the build machine's. CI builds with Qt 6.8.3, x86_64 on Ubuntu 22.04 and aarch64 on Ubuntu 24.04, and uploads both AppImages as build artifacts.
 
 ## License
 

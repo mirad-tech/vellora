@@ -2,7 +2,7 @@
 
 中文 | [English](README.en.md)
 
-Windows Markdown 阅读与编辑器。
+Markdown 阅读与编辑器，支持 Windows 和 Linux。
 
 ## 功能
 
@@ -16,7 +16,7 @@ Windows Markdown 阅读与编辑器。
 
 ## 下载与安装
 
-适用于 **Windows 10 / 11 x64（64 位）**。普通用户下载安装包即可，无需安装开发工具或自行编译。
+Windows 版适用于 **Windows 10 / 11 x64（64 位）**，Linux 版见下方 [Linux](#linux-版)。普通用户下载安装包即可，无需安装开发工具或自行编译。
 
 [打开最新版本发布页](https://github.com/mirad-tech/vellora/releases/latest)
 
@@ -70,6 +70,22 @@ Get-FileHash -Algorithm SHA256 .\Vellora-Setup-*.exe
 Get-FileHash -Algorithm SHA256 .\Vellora-*-portable-x64.zip
 ```
 
+### Linux 版
+
+在最新版本发布页的 **Assets（资源）** 中按电脑架构下载 AppImage：
+
+- `Vellora-版本号-x86_64.AppImage`：x86_64 电脑，需要 glibc 2.35 及以上（如 Ubuntu 22.04、Debian 12 及更新版本）。
+- `Vellora-版本号-aarch64.AppImage`：ARM64 电脑，需要 glibc 2.39 及以上（如 Ubuntu 24.04、Debian 13 及更新版本）。
+
+下载后加上可执行权限再运行，例如：
+
+```sh
+chmod +x Vellora-*-x86_64.AppImage
+./Vellora-*-x86_64.AppImage
+```
+
+校验方法：运行 `sha256sum Vellora-*.AppImage`，将输出与发布页“下载校验”中的值比较。
+
 ## 构建
 
 界面使用 Qt Widgets，Markdown 与文件处理使用 Rust，通过静态桥接连接。
@@ -109,7 +125,7 @@ sudo update-desktop-database; sudo update-mime-database /usr/local/share/mime
 ./installer/linux/package-appimage.sh            # 产物在 target/appimage/
 ```
 
-AppImage 只能在 glibc 不低于构建机的发行版上运行；CI 在 Ubuntu 22.04 上用 Qt 6.8.3 构建，并上传 x86_64 AppImage 作为构建产物。
+AppImage 只能在 glibc 不低于构建机的发行版上运行；CI 用 Qt 6.8.3 构建，x86_64 在 Ubuntu 22.04 上、aarch64 在 Ubuntu 24.04 上，并上传两个 AppImage 作为构建产物。
 
 ## 许可证
 
