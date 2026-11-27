@@ -30,6 +30,10 @@ class I18nRegressions : public QObject {
   QStringList dialogButtons_;
   QString shotPrefix_;
   int shotCount_ = 0;
+  // Screenshot names of the dialogs labelsFitAtDefaultAndNarrowSizes opens, in order.
+  const QStringList dialogShots_{
+      QStringLiteral("dialog-replace-all"), QStringLiteral("dialog-delete"),
+      QStringLiteral("dialog-unsaved-quit"), QStringLiteral("dialog-delete-unsaved")};
 
   static void write(const QString& path, const QByteArray& bytes) {
     if (!QDir().mkpath(QFileInfo(path).absolutePath())) qFatal("fixture folder");
@@ -207,7 +211,9 @@ class I18nRegressions : public QObject {
           if (answers_.contains(button->text())) target = button;
         }
         dialogButtons_ << labels.join(QLatin1Char('|'));
-        shot(dialog->window(), QStringLiteral("dialog-%1").arg(++shotCount_));
+        const int index = shotCount_++;
+        shot(dialog->window(),
+             dialogShots_.value(index, QStringLiteral("dialog-%1").arg(index + 1)));
         if (target)
           target->click();
         else
