@@ -68,6 +68,54 @@ jobs:
         shell: pwsh
         run: ./tools/check.ps1 -Full
 
+  windows-installer:
+    name: Windows installer (test build)
+    # Builds Setup and the portable zip from this commit so a pull request can be
+    # tried on a real machine; also compiles the NSIS script. Not a release.
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: installer
+
+      - name: Install Qt 6.8.3 MSVC 2022 x64
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtimageformats'
+          cache: 'true'
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          $nsis = 'C:\Program Files (x86)\NSIS\makensis.exe'
+          if (!(Test-Path -LiteralPath $nsis)) { choco install nsis -y --no-progress }
+          if (!(Test-Path -LiteralPath $nsis)) { throw 'makensis.exe not found' }
+          "MAKENSIS=$nsis" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build Setup and portable zip
+        shell: pwsh
+        run: ./installer/package-qt.ps1 -QtRoot $env:QT_ROOT_DIR -MakeNsis $env:MAKENSIS -OutputDir "$env:GITHUB_WORKSPACE\dist" -RunTests $false
+
+      - name: Upload Setup and portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: vellora-windows-installer
+          path: |
+            dist/Vellora-Setup-*.exe
+            dist/Vellora-*-portable-x64.zip
+          if-no-files-found: error
+
   linux:
     name: Linux ${{ matrix.arch }} (Qt 6.8.3 + Rust, AppImage)
     # The oldest supported Ubuntu runner sets the AppImage's minimum glibc.
